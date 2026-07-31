@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+repository = "https://github.com/ngodn/lwfa"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# The compositor hot path runs per-frame per-surface. Silent precision or
+# allocation surprises there are expensive, so surface them at build time.
+float_cmp = "warn"

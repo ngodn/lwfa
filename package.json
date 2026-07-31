@@ -1,0 +1,24 @@
+{
+  "name": "lwfa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "literally work from anywhere: a Wayland compositor with a browser-native shell",
+  "packageManager": "pnpm@11.1.1",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "scripts": {
+    "fixtures": "cargo run -q -p lwfa-spring --bin gen-fixtures",
+    "test": "pnpm run fixtures && vitest run",
+    "test:watch": "vitest",
+    "test:rust": "cargo test --workspace",
+    "test:all": "pnpm run test:rust && pnpm run test",
+    "typecheck": "tsc --build --force"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

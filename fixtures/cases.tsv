@@ -1,0 +1,37 @@
+# Shared spring parity case matrix.
+#
+# Read by BOTH crates/lwfa-spring/src/bin/gen-fixtures.rs and
+# packages/spring/test/parity.test.ts. Neither implementation owns this file:
+# it is the contract they are both tested against. TSV rather than JSON so the
+# Rust side can stay dependency-free.
+#
+# Columns:
+#   name          stable id, used in test failure output
+#   stiffness     spring constant
+#   damping       opposing force
+#   mass          mass of the moving object
+#   velocity      initial velocity, units per SECOND
+#   from          origin value
+#   to            target value
+#   t_max_ms      how far to sample
+#   step_ms       sampling interval
+#
+# Coverage intent: all three damping branches, both sides of the critical
+# boundary, granular vs pixel scale (different rest thresholds), inherited
+# velocity in both directions, negative displacement, and the overdamped
+# sinh/cosh saturation cap.
+
+name	stiffness	damping	mass	velocity	from	to	t_max_ms	step_ms
+underdamped-default	100	10	1	0	0	100	2000	8
+critically-damped	100	20	1	0	0	100	2000	8
+overdamped	100	40	1	0	0	100	3000	8
+underdamped-inherited-velocity	100	10	1	500	0	100	2000	8
+underdamped-opposing-velocity	100	10	1	-500	0	100	2000	8
+negative-displacement	100	10	1	0	300	50	2000	8
+granular-opacity-fade	100	15	1	0	0	1	2000	8
+granular-scale-with-velocity	180	12	1	2	1	1.2	2000	8
+stiff-window-slide	700	35	1	0	0	1920	1500	4
+heavy-mass	100	10	4	0	0	100	4000	8
+near-critical-underdamped	100	19.999	1	0	0	100	2500	8
+near-critical-overdamped	100	20.001	1	0	0	100	2500	8
+overdamped-saturation-cap	100	80	1	0	0	100	20000	500

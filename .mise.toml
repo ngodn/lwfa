@@ -1,0 +1,7 @@
+[tools]
+rust = "1.95.0"
+node = "24.15.0"
+
+[env]
+# Keeps cargo output out of the way of the pnpm workspace.
+CARGO_TERM_COLOR = "always"

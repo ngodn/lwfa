@@ -1,0 +1,21 @@
+[package]
+name = "lwfa-spring"
+version = "0.1.0"
+description = "Motion-compatible spring integrator shared by the lwfa engine and shell"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Intentionally zero dependencies. This runs per-frame per-surface inside the
+# compositor, and it is one half of a cross-language parity contract, so the
+# fewer moving parts the better. The fixture generator writes TSV by hand rather
+# than pulling in serde for the same reason.
+[dependencies]
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "gen-fixtures"
+path = "src/bin/gen-fixtures.rs"

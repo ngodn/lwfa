@@ -1,0 +1,18 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+*.tsbuildinfo
+
+# Generated parity fixtures.
+#
+# Deliberately NOT committed. They are derived from crates/lwfa-spring, and a
+# committed copy would let the Rust implementation drift while the test kept
+# passing against a stale snapshot. `pnpm test` regenerates them first.
+/fixtures/rust.*.tsv
+
+# Editors
+.idea/
+.vscode/
+*.swp
