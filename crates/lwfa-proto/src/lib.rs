@@ -226,6 +226,18 @@ pub enum ToEngine {
     /// Launch a program. The engine sets `WAYLAND_DISPLAY` to its own socket.
     #[serde(rename_all = "camelCase")]
     Spawn { command: String },
+
+    /// Which windows the shell wants pixels for.
+    ///
+    /// Total, like `SetLayout`: windows not listed stop streaming. A shell that
+    /// composites locally (the native backend) asks for none; a browser asks
+    /// for the ones its viewport can actually show.
+    ///
+    /// This is what bounds the encoder budget. Only columns intersecting the
+    /// viewport need streaming, so cost scales with viewport width rather than
+    /// with how many windows are open. See docs/architecture.md section 2.3.
+    #[serde(rename_all = "camelCase")]
+    SetStreams { windows: Vec<WindowId> },
 }
 
 #[cfg(test)]
@@ -325,5 +337,199 @@ mod tests {
         // have its instruction silently dropped.
         let err = serde_json::from_str::<ToEngine>(r#"{"type":"teleportWindow","id":1}"#);
         assert!(err.is_err());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Binary frame transport
+//
+// Window pixels do not go through the JSON messages above. They travel as
+// WebSocket *binary* frames with the fixed-size header below, on the same
+// socket: text frames are control, binary frames are pixels.
+//
+// One socket rather than two because the ordering between "this window now
+// exists" and "here are its pixels" matters, and two sockets would need
+// resequencing to get it.
+// ---------------------------------------------------------------------------
+
+/// Identifies an lwfa binary frame. Guards against a stray binary message being
+/// interpreted as pixel data.
+pub const FRAME_MAGIC: [u8; 4] = *b"LWFA";
+
+/// Bumped when the header layout changes. Independent of [`PROTOCOL_VERSION`]
+/// so the pixel format can evolve without a control-plane break.
+pub const FRAME_VERSION: u8 = 0;
+
+/// Bytes before the payload.
+pub const FRAME_HEADER_LEN: usize = 24;
+
+/// How a frame's payload is encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[repr(u8)]
+pub enum FrameFormat {
+    /// Baseline JPEG.
+    ///
+    /// A stopgap, not the destination. It has no alpha channel and
+    /// re-compresses every frame whole, where hardware H.264 would send only
+    /// what changed. It is here because it proves the architecture end to end
+    /// with no driver integration, and swapping it out later touches this
+    /// field and nothing else.
+    Jpeg = 0,
+}
+
+impl FrameFormat {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Jpeg),
+            _ => None,
+        }
+    }
+}
+
+/// Fixed-size header on every binary frame. Little-endian.
+///
+/// Layout:
+/// ```text
+/// 0..4    magic "LWFA"
+/// 4       version
+/// 5       format
+/// 6..8    reserved (zero)
+/// 8..16   window id       u64
+/// 16..20  width           u32
+/// 20..24  height          u32
+/// 24..    payload
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameHeader {
+    pub window: WindowId,
+    pub width: u32,
+    pub height: u32,
+    pub format: FrameFormat,
+}
+
+impl FrameHeader {
+    /// Serialise the header into a buffer sized for the payload that follows.
+    pub fn encode_with_payload(&self, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(FRAME_HEADER_LEN + payload.len());
+        out.extend_from_slice(&FRAME_MAGIC);
+        out.push(FRAME_VERSION);
+        out.push(self.format as u8);
+        out.extend_from_slice(&[0, 0]); // reserved
+        out.extend_from_slice(&self.window.0.to_le_bytes());
+        out.extend_from_slice(&self.width.to_le_bytes());
+        out.extend_from_slice(&self.height.to_le_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// Parse a header and return it alongside the payload.
+    ///
+    /// Returns `None` rather than a partial result on anything unexpected, so a
+    /// malformed frame is dropped rather than rendered as garbage.
+    pub fn decode(bytes: &[u8]) -> Option<(Self, &[u8])> {
+        if bytes.len() < FRAME_HEADER_LEN {
+            return None;
+        }
+        if bytes[0..4] != FRAME_MAGIC || bytes[4] != FRAME_VERSION {
+            return None;
+        }
+        let format = FrameFormat::from_u8(bytes[5])?;
+        let window = WindowId(u64::from_le_bytes(bytes[8..16].try_into().ok()?));
+        let width = u32::from_le_bytes(bytes[16..20].try_into().ok()?);
+        let height = u32::from_le_bytes(bytes[20..24].try_into().ok()?);
+        // A zero-sized frame is meaningless and would divide by zero downstream.
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some((
+            Self {
+                window,
+                width,
+                height,
+                format,
+            },
+            &bytes[FRAME_HEADER_LEN..],
+        ))
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    fn header() -> FrameHeader {
+        FrameHeader {
+            window: WindowId(7),
+            width: 1261,
+            height: 1390,
+            format: FrameFormat::Jpeg,
+        }
+    }
+
+    #[test]
+    fn header_roundtrips_with_its_payload() {
+        let payload = b"\xff\xd8\xff\xe0 pretend jpeg";
+        let bytes = header().encode_with_payload(payload);
+        assert_eq!(bytes.len(), FRAME_HEADER_LEN + payload.len());
+
+        let (decoded, rest) = FrameHeader::decode(&bytes).expect("should decode");
+        assert_eq!(decoded, header());
+        assert_eq!(rest, payload);
+    }
+
+    #[test]
+    fn header_is_exactly_the_documented_size() {
+        // The TypeScript side slices at this offset, so it is part of the wire
+        // contract rather than an implementation detail.
+        assert_eq!(header().encode_with_payload(&[]).len(), FRAME_HEADER_LEN);
+    }
+
+    #[test]
+    fn rejects_a_foreign_binary_message() {
+        assert!(FrameHeader::decode(b"this is not a frame at all, honestly").is_none());
+    }
+
+    #[test]
+    fn rejects_a_future_version() {
+        let mut bytes = header().encode_with_payload(b"x");
+        bytes[4] = FRAME_VERSION + 1;
+        assert!(FrameHeader::decode(&bytes).is_none());
+    }
+
+    #[test]
+    fn rejects_an_unknown_format() {
+        let mut bytes = header().encode_with_payload(b"x");
+        bytes[5] = 99;
+        assert!(FrameHeader::decode(&bytes).is_none());
+    }
+
+    #[test]
+    fn rejects_a_truncated_header() {
+        let bytes = header().encode_with_payload(b"payload");
+        for len in 0..FRAME_HEADER_LEN {
+            assert!(
+                FrameHeader::decode(&bytes[..len]).is_none(),
+                "{len} bytes should not decode"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_zero_dimensions() {
+        // Would divide by zero when scaling in the browser.
+        let bytes = FrameHeader {
+            width: 0,
+            ..header()
+        }
+        .encode_with_payload(b"x");
+        assert!(FrameHeader::decode(&bytes).is_none());
+    }
+
+    #[test]
+    fn accepts_an_empty_payload() {
+        let bytes = header().encode_with_payload(&[]);
+        let (_, payload) = FrameHeader::decode(&bytes).expect("should decode");
+        assert!(payload.is_empty());
     }
 }

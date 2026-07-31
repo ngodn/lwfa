@@ -76,6 +76,7 @@ impl XdgShellHandler for Lwfa {
         }
         self.layout.forget(id);
         self.forget_reported(id);
+        self.capture.forget(id);
 
         if self.focused() == Some(id) {
             // Focus something else rather than leaving the seat pointing at a

@@ -23,6 +23,8 @@
 
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::thread;
 use std::time::Duration;
@@ -49,11 +51,28 @@ pub enum ShellEvent {
     Disconnected,
 }
 
+/// Something queued for the shell: a control message or a frame of pixels.
+enum Outgoing {
+    Control(Box<ToShell>),
+    /// Already-encoded binary frame, header included.
+    Frame(Vec<u8>),
+}
+
 /// Handle the compositor uses to talk to whatever shell is connected.
 pub struct ShellLink {
-    outgoing: Sender<ToShell>,
+    outgoing: Sender<Outgoing>,
     connected: bool,
+    /// Frames queued but not yet written, so the compositor can stop capturing
+    /// when the shell cannot keep up.
+    in_flight: Arc<AtomicUsize>,
 }
+
+/// How many encoded frames may be queued before capture backs off.
+///
+/// Without this, a shell on a slow link makes the queue grow without bound and
+/// the compositor spends all its time encoding frames nobody will see. Dropping
+/// frames is the correct response to a slow consumer; buffering them is not.
+const MAX_FRAMES_IN_FLIGHT: usize = 4;
 
 impl ShellLink {
     /// Start listening. Returns the link plus a calloop event source to insert.
@@ -63,16 +82,19 @@ impl ShellLink {
     ) -> std::io::Result<(Self, std::net::SocketAddr)> {
         let listener = TcpListener::bind(addr)?;
         let local = listener.local_addr()?;
-        let (outgoing_tx, outgoing_rx) = channel::<ToShell>();
+        let (outgoing_tx, outgoing_rx) = channel::<Outgoing>();
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let thread_in_flight = Arc::clone(&in_flight);
 
         thread::Builder::new()
             .name("lwfa-shell".into())
-            .spawn(move || accept_loop(listener, events, outgoing_rx))?;
+            .spawn(move || accept_loop(listener, events, outgoing_rx, thread_in_flight))?;
 
         Ok((
             Self {
                 outgoing: outgoing_tx,
                 connected: false,
+                in_flight,
             },
             local,
         ))
@@ -86,17 +108,41 @@ impl ShellLink {
     /// silently drops when nothing is connected, which is the normal state.
     pub fn send(&self, message: ToShell) {
         if self.connected {
-            let _ = self.outgoing.send(message);
+            let _ = self.outgoing.send(Outgoing::Control(Box::new(message)));
+        }
+    }
+
+    /// True when the write queue has room for another frame.
+    ///
+    /// Checked *before* capturing rather than after encoding, so a shell that
+    /// cannot keep up costs no GPU read-back at all.
+    pub fn can_accept_frame(&self) -> bool {
+        self.connected && self.in_flight.load(Ordering::Relaxed) < MAX_FRAMES_IN_FLIGHT
+    }
+
+    /// Queue an encoded frame.
+    pub fn send_frame(&self, bytes: Vec<u8>) {
+        if !self.connected {
+            return;
+        }
+        self.in_flight.fetch_add(1, Ordering::Relaxed);
+        if self.outgoing.send(Outgoing::Frame(bytes)).is_err() {
+            self.in_flight.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }
 
-fn accept_loop(listener: TcpListener, events: LoopSender<ShellEvent>, outgoing: Receiver<ToShell>) {
+fn accept_loop(
+    listener: TcpListener,
+    events: LoopSender<ShellEvent>,
+    outgoing: Receiver<Outgoing>,
+    in_flight: Arc<AtomicUsize>,
+) {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 tracing::info!("shell connected from {:?}", stream.peer_addr().ok());
-                serve(stream, &events, &outgoing);
+                serve(stream, &events, &outgoing, &in_flight);
                 tracing::info!("shell disconnected");
                 let _ = events.send(ShellEvent::Disconnected);
             }
@@ -107,7 +153,12 @@ fn accept_loop(listener: TcpListener, events: LoopSender<ShellEvent>, outgoing: 
     }
 }
 
-fn serve(stream: TcpStream, events: &LoopSender<ShellEvent>, outgoing: &Receiver<ToShell>) {
+fn serve(
+    stream: TcpStream,
+    events: &LoopSender<ShellEvent>,
+    outgoing: &Receiver<Outgoing>,
+    in_flight: &AtomicUsize,
+) {
     // Nagle would add up to 40ms to a small layout message, which is a visible
     // hitch on something the user just triggered.
     let _ = stream.set_nodelay(true);
@@ -128,7 +179,11 @@ fn serve(stream: TcpStream, events: &LoopSender<ShellEvent>, outgoing: &Receiver
     // Drain anything queued while no shell was connected, so a reconnecting
     // shell does not receive a backlog addressed to its predecessor. The
     // `Hello` the engine sends next carries the full current state anyway.
-    while outgoing.try_recv().is_ok() {}
+    while let Ok(stale) = outgoing.try_recv() {
+        if matches!(stale, Outgoing::Frame(_)) {
+            in_flight.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
 
     if events.send(ShellEvent::Connected).is_err() {
         return;
@@ -169,15 +224,21 @@ fn serve(stream: TcpStream, events: &LoopSender<ShellEvent>, outgoing: &Receiver
 
         loop {
             match outgoing.try_recv() {
-                Ok(message) => {
-                    let json = match serde_json::to_string(&message) {
-                        Ok(json) => json,
-                        Err(err) => {
-                            tracing::error!("could not serialize {message:?}: {err}");
-                            continue;
+                Ok(outbound) => {
+                    let frame = match outbound {
+                        Outgoing::Control(message) => match serde_json::to_string(&message) {
+                            Ok(json) => tungstenite::Message::Text(json.into()),
+                            Err(err) => {
+                                tracing::error!("could not serialize {message:?}: {err}");
+                                continue;
+                            }
+                        },
+                        Outgoing::Frame(bytes) => {
+                            in_flight.fetch_sub(1, Ordering::Relaxed);
+                            tungstenite::Message::Binary(bytes.into())
                         }
                     };
-                    if let Err(err) = socket.send(tungstenite::Message::Text(json.into())) {
+                    if let Err(err) = socket.send(frame) {
                         match err {
                             tungstenite::Error::Io(ref io)
                                 if io.kind() == ErrorKind::WouldBlock => {}

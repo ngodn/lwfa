@@ -215,3 +215,82 @@ button:disabled {
     flex-basis: 100%;
   }
 }
+
+/*
+ * Composited window surfaces.
+ *
+ * The scene below is the engine's output in engine coordinates, scaled to fit
+ * whatever box this page has. Each window is positioned inside it by transform,
+ * so the browser composites them and CSS applies to live application windows.
+ * That is the property whole-screen streaming cannot give you.
+ */
+
+.scene {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+}
+
+.surface {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  background: #11131a;
+  /* Applied to a live application window, not a screenshot of one. */
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  /* Only transform and opacity animate here; both are composited, so several
+     windows moving at once do not trigger layout on a tablet that is already
+     busy decoding frames. */
+  transition: border-color 120ms ease;
+}
+
+.surface.focused {
+  border-color: var(--accent);
+}
+
+.surface canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The backing store is the frame's native size; this scales it to the layout
+     box the shell chose. */
+  object-fit: fill;
+}
+
+.surface .waiting,
+.surface .surface-label {
+  position: absolute;
+  font-size: 0.7rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.surface .waiting {
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.surface .surface-label {
+  left: 0.5rem;
+  bottom: 0.4rem;
+  max-width: calc(100% - 1rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.toggle {
+  float: right;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+}

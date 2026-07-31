@@ -94,6 +94,11 @@ export type ToEngine =
   | { type: "focusWindow"; id: WindowId }
   | { type: "closeWindow"; id: WindowId }
   | { type: "spawn"; command: string }
+  /**
+   * Which windows the shell wants pixels for. Total: anything not listed stops
+   * streaming. A shell compositing natively asks for none.
+   */
+  | { type: "setStreams"; windows: WindowId[] }
 
 /** Motion's defaults, matching `SpringSpec::default` on the Rust side. */
 export const DEFAULT_SPRING: SpringSpec = { stiffness: 100, damping: 10, mass: 1 }
@@ -359,6 +364,19 @@ export function decodeToEngine(text: string): ToEngine {
       noExtraKeys(o, ["type", "command"], where)
       return { type: "spawn", command: str(o, "command", where) }
     }
+    case "setStreams": {
+      const where = `${at}.setStreams`
+      noExtraKeys(o, ["type", "windows"], where)
+      return {
+        type: "setStreams",
+        windows: array(o, "windows", where).map((w, i) => {
+          if (typeof w !== "number" || !Number.isInteger(w)) {
+            throw new ProtocolError(`${where}.windows[${i}]: expected an integer window id`)
+          }
+          return w
+        }),
+      }
+    }
     default:
       throw new ProtocolError(`${at}: unknown message type ${JSON.stringify(t)}`)
   }
@@ -380,4 +398,71 @@ function parse(text: string, at: string): unknown {
  */
 export function encode(message: ToShell | ToEngine): string {
   return JSON.stringify(message)
+}
+
+// ---------------------------------------------------------------------------
+// Binary frame transport
+//
+// Window pixels do not travel as JSON. They arrive as WebSocket *binary*
+// frames with the fixed header below, on the same socket: text is control,
+// binary is pixels. Mirrors the Rust side in `crates/lwfa-proto`.
+// ---------------------------------------------------------------------------
+
+/** Identifies an lwfa binary frame. ASCII "LWFA". */
+export const FRAME_MAGIC = [0x4c, 0x57, 0x46, 0x41] as const
+
+/** Bumped when the header layout changes. Independent of PROTOCOL_VERSION. */
+export const FRAME_VERSION = 0
+
+/** Bytes before the payload. */
+export const FRAME_HEADER_LEN = 24
+
+export const FrameFormat = {
+  Jpeg: 0,
+} as const
+export type FrameFormat = (typeof FrameFormat)[keyof typeof FrameFormat]
+
+export interface FrameHeader {
+  window: WindowId
+  width: number
+  height: number
+  format: FrameFormat
+}
+
+export interface DecodedFrame {
+  header: FrameHeader
+  payload: Uint8Array
+}
+
+/**
+ * Parse a binary frame.
+ *
+ * Returns null rather than throwing or partially decoding, so a malformed or
+ * foreign binary message is dropped instead of being drawn as garbage.
+ */
+export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
+  if (buffer.byteLength < FRAME_HEADER_LEN) return null
+  const bytes = new Uint8Array(buffer)
+
+  for (let i = 0; i < FRAME_MAGIC.length; i++) {
+    if (bytes[i] !== FRAME_MAGIC[i]) return null
+  }
+  if (bytes[4] !== FRAME_VERSION) return null
+  if (bytes[5] !== FrameFormat.Jpeg) return null
+
+  const view = new DataView(buffer)
+  // Window ids are u64 on the wire. Reading as BigInt and narrowing keeps this
+  // honest: ids beyond 2^53 would silently collide if read as a float, and
+  // that would show pixels in the wrong window.
+  const id = view.getBigUint64(8, true)
+  if (id > BigInt(Number.MAX_SAFE_INTEGER)) return null
+
+  const width = view.getUint32(16, true)
+  const height = view.getUint32(20, true)
+  if (width === 0 || height === 0) return null
+
+  return {
+    header: { window: Number(id), width, height, format: FrameFormat.Jpeg },
+    payload: bytes.subarray(FRAME_HEADER_LEN),
+  }
 }

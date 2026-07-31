@@ -20,6 +20,11 @@ use smithay::utils::{Rectangle, Transform};
 
 use crate::state::{CalloopData, Lwfa};
 
+/// Where to write per-window capture PNGs, if the debug dump is enabled.
+fn capture_dump_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("LWFA_CAPTURE_DUMP").map(std::path::PathBuf::from)
+}
+
 /// Background behind the strip. Slightly lighter than black so the gaps between
 /// columns are visible and the strip reads as a strip.
 const BACKDROP: [f32; 4] = [0.06, 0.06, 0.08, 1.0];
@@ -153,6 +158,33 @@ pub fn init_winit(
                             |_, _| Some(output.clone()),
                         )
                     });
+
+                    // Per-surface capture for any remote shell. Does
+                    // nothing unless a shell has asked for streams.
+                    {
+                        let (renderer, _fb) = match backend.bind() {
+                            Ok(bound) => bound,
+                            Err(err) => {
+                                tracing::error!("stream capture: could not bind: {err}");
+                                return;
+                            }
+                        };
+                        state.stream_frames(renderer);
+                    }
+
+                    // Debug: dump one PNG per window so capture can be
+                    // verified against what is actually on screen. Off unless
+                    // LWFA_CAPTURE_DUMP names a directory.
+                    if let Some(dir) = capture_dump_dir() {
+                        let (renderer, _fb) = match backend.bind() {
+                            Ok(bound) => bound,
+                            Err(err) => {
+                                tracing::error!("capture dump: could not bind: {err}");
+                                return;
+                            }
+                        };
+                        state.dump_captures(renderer, &dir);
+                    }
 
                     state.space.refresh();
                     state.popups.cleanup();

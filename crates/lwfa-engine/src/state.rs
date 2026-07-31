@@ -27,6 +27,13 @@ use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
 use smithay::wayland::socket::ListeningSocketSource;
 
+use crate::capture::SurfaceCapture;
+
+/// JPEG quality for streamed frames.
+///
+/// 70 keeps a 1280x720 window around 100KB, which is comfortable on a LAN.
+/// This knob disappears when hardware H.264 replaces JPEG; see `capture.rs`.
+const JPEG_QUALITY: u8 = 70;
 use crate::layout::{self, Layout};
 use crate::shell::ShellLink;
 
@@ -42,6 +49,13 @@ pub struct Lwfa {
     pub layout: Layout,
     /// The shell connection, if any. `None` until the listener binds.
     pub shell: Option<ShellLink>,
+    /// Per-surface capture. Only does work when something asks it to.
+    pub capture: SurfaceCapture,
+    /// Windows the shell has asked for pixels of.
+    ///
+    /// Empty is the normal case for a local shell, which composites natively
+    /// and needs no streams at all.
+    pub streaming: std::collections::HashSet<WindowId>,
     pub loop_signal: LoopSignal,
 
     focused: Option<WindowId>,
@@ -95,6 +109,8 @@ impl Lwfa {
             // Real size arrives from the backend once the output exists.
             layout: Layout::new((0, 0).into()),
             shell: None,
+            capture: SurfaceCapture::default(),
+            streaming: std::collections::HashSet::new(),
             space: Space::default(),
             loop_signal,
             focused: None,
@@ -343,6 +359,104 @@ impl Lwfa {
             self.apply_layout();
         }
         animating
+    }
+
+    /// Capture every visible window and write it out as a PNG.
+    ///
+    /// Debug only, driven by `LWFA_CAPTURE_DUMP`. This is how per-surface
+    /// capture gets verified against what is actually on screen: if the
+    /// channel order or the stride were wrong, it would be obvious here rather
+    /// than showing up as garbled video three layers later.
+    pub fn dump_captures(
+        &mut self,
+        renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+        dir: &std::path::Path,
+    ) {
+        if std::fs::create_dir_all(dir).is_err() {
+            return;
+        }
+        for (window, _) in self.layout.placements() {
+            let Some(id) = self.layout.id_of(&window) else {
+                continue;
+            };
+            let size = window.geometry().size.to_physical(1);
+            let Some(frame) = self.capture.capture(renderer, id, &window, size) else {
+                continue; // unchanged since last capture
+            };
+            let Some(png) = frame.to_png() else { continue };
+            let path = dir.join(format!("window-{}.png", id.0));
+            if let Err(err) = std::fs::write(&path, png) {
+                tracing::warn!("could not write {}: {err}", path.display());
+            } else {
+                tracing::info!(
+                    "captured {id} -> {} ({}x{})",
+                    path.display(),
+                    frame.width,
+                    frame.height
+                );
+            }
+        }
+    }
+
+    /// Capture the streaming windows and queue them for the shell.
+    ///
+    /// Three things keep this from dominating the frame:
+    ///
+    /// 1. Only windows the shell asked for are considered at all, which under
+    ///    scrollable tiling means roughly "what fits in the viewport".
+    /// 2. `SurfaceCapture` skips anything that has not committed, so idle
+    ///    windows cost nothing.
+    /// 3. Backpressure. If the socket is behind, frames are not captured in the
+    ///    first place, so a slow link costs no GPU read-back rather than
+    ///    building an unbounded queue.
+    pub fn stream_frames(&mut self, renderer: &mut smithay::backend::renderer::gles::GlesRenderer) {
+        if self.streaming.is_empty() {
+            return;
+        }
+        let Some(shell) = self.shell.as_ref() else {
+            return;
+        };
+        if !shell.can_accept_frame() {
+            return;
+        }
+
+        let targets: Vec<(WindowId, Window)> = self
+            .layout
+            .placements()
+            .into_iter()
+            .filter_map(|(window, _)| {
+                let id = self.layout.id_of(&window)?;
+                self.streaming.contains(&id).then_some((id, window))
+            })
+            .collect();
+
+        for (id, window) in targets {
+            // Re-checked per window: one large window can fill the queue.
+            let Some(shell) = self.shell.as_ref() else {
+                return;
+            };
+            if !shell.can_accept_frame() {
+                return;
+            }
+
+            let size = window.geometry().size.to_physical(1);
+            let Some(frame) = self.capture.capture(renderer, id, &window, size) else {
+                continue;
+            };
+            let Some(jpeg) = frame.to_jpeg(JPEG_QUALITY) else {
+                continue;
+            };
+
+            let header = lwfa_proto::FrameHeader {
+                window: id,
+                width: frame.width,
+                height: frame.height,
+                format: lwfa_proto::FrameFormat::Jpeg,
+            };
+            if let Some(shell) = self.shell.as_ref() {
+                shell.send_frame(header.encode_with_payload(&jpeg));
+            }
+        }
     }
 
     pub fn surface_under(

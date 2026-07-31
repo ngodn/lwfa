@@ -14,6 +14,7 @@
 //! Everything else modified with Alt is forwarded to the shell, which decides
 //! what it means. Focus order is layout policy, and policy lives in the shell.
 
+mod capture;
 mod handlers;
 mod input;
 mod layout;
@@ -139,6 +140,11 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 if let Some(toplevel) = state.layout.window(id).and_then(|w| w.toplevel()) {
                     toplevel.send_close();
                 }
+            }
+            ToEngine::SetStreams { windows } => {
+                // Total, like SetLayout: anything not listed stops streaming.
+                state.streaming = windows.into_iter().collect();
+                tracing::debug!("streaming {} window(s)", state.streaming.len());
             }
             ToEngine::Spawn { command } => {
                 // NOTE: arbitrary command execution, reachable by anything that

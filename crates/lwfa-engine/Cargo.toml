@@ -23,6 +23,12 @@ smithay = { version = "0.7.0", default-features = false, features = [
 # Blocking WebSocket server for the shell protocol, run on its own thread and
 # bridged into calloop. No async runtime: one socket does not justify it.
 tungstenite = "0.30.0"
+
+# Only the two codecs lwfa actually uses. PNG for the debug capture dump
+# (lossless, so a wrong-channel-order bug is visible rather than smoothed away)
+# and JPEG for the wire. Hardware H.264 replaces JPEG on the wire later; see
+# crates/lwfa-engine/src/capture.rs.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 serde_json = "1.0.151"
 
 tracing = "0.1"

@@ -173,6 +173,13 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
                 command: "alacritty".into(),
             },
         ),
+        (
+            "set-streams",
+            ToEngine::SetStreams {
+                windows: vec![WindowId(1), WindowId(2)],
+            },
+        ),
+        ("set-streams-none", ToEngine::SetStreams { windows: vec![] }),
     ];
 
     (to_shell, to_engine)

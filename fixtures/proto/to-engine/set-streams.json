@@ -1,0 +1,7 @@
+{
+  "type": "setStreams",
+  "windows": [
+    1,
+    2
+  ]
+}

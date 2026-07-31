@@ -8,6 +8,8 @@
 import {
   PROTOCOL_VERSION,
   ProtocolError,
+  type DecodedFrame,
+  decodeFrame,
   decodeToShell,
   encode,
   type ToEngine,
@@ -18,6 +20,8 @@ export type Status = "connecting" | "connected" | "disconnected" | "incompatible
 
 export interface ConnectionHandlers {
   onMessage: (message: ToShell) => void
+  /** A window's pixels. Binary frames, not JSON. */
+  onFrame: (frame: DecodedFrame) => void
   onStatus: (status: Status, detail?: string) => void
 }
 
@@ -51,11 +55,22 @@ export class Connection {
       // mismatch means an open socket we must not drive.
     }
 
+    // Binary frames arrive as ArrayBuffer rather than Blob, which avoids an
+    // async round trip per frame on the hot path.
+    socket.binaryType = "arraybuffer"
+
     socket.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        const frame = decodeFrame(event.data)
+        if (!frame) {
+          console.warn("dropping an undecodable binary frame")
+          return
+        }
+        this.#handlers.onFrame(frame)
+        return
+      }
       if (typeof event.data !== "string") {
-        // v0 is JSON text only. Binary frames are reserved for per-surface
-        // video in milestone 4 and are not expected here.
-        console.warn("ignoring a non-text frame from the engine")
+        console.warn("ignoring an unexpected message type from the engine")
         return
       }
 

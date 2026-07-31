@@ -315,8 +315,26 @@ non-NVIDIA smoke test.
    against the engine, but it does not yet draw chrome over the native output.
    That needs a `wlr-layer-shell` client hosting a webview, which is a separate
    piece of work; see section 10.
-4. **Per-surface encode plus remote backend.** Same shell in a browser on
-   another machine. This is where the protocol design gets tested for real.
+4. **Per-surface encode plus remote backend.** ⚠️ Architecture done and
+   verified; the codec is a stopgap.
+
+   Done: per-surface GPU capture with damage tracking
+   (`crates/lwfa-engine/src/capture.rs`), a binary frame transport on the same
+   WebSocket as control, backpressure so a slow client costs no read-back, and
+   browser-side DOM compositing (`packages/shell/src/WindowSurface.tsx`).
+   Verified in a real browser: two windows composited as separate elements with
+   decoded pixels, positioned by the strip, with `border-radius` applied to
+   live application windows.
+
+   **Not done: hardware encode.** Frames are whole-image JPEG, not H.264. That
+   means no inter-frame compression, no alpha channel, and none of the NVENC
+   budget reasoning in section 2.1 is exercised yet. It is a stopgap chosen to
+   prove the architecture without driver integration; swapping it out touches
+   `FrameFormat` and the two encode/decode call sites.
+
+   **Not done: WebCodecs.** The browser decodes JPEG via `createImageBitmap`
+   rather than `VideoDecoder`, so the Safari 26 requirement in section 6 is not
+   yet load-bearing. It becomes so when H.264 lands.
 5. **Appearance vocabulary** in both backends, with a visual diff test comparing
    a local screenshot against a remote screenshot of the same state.
 6. **iPad.** WebCodecs, gesture arbitration, responsive breakpoints, on-screen

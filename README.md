@@ -20,13 +20,14 @@ structural. It records the decisions and, more importantly, why.
 
 ## Status
 
-Milestone 3 of 7. See the build order in the architecture doc.
+Milestone 4 of 7, partially. See the build order in the architecture doc.
 
 - [x] **1. Spring parity harness** — `crates/lwfa-spring`, `packages/spring`
 - [x] **2. Smithay compositor, nested backend** — `crates/lwfa-engine`
 - [x] **3. Shell protocol v0** — `crates/lwfa-proto`, `packages/proto`, `packages/shell`
       (the layer-shell chrome path is *not* done; see the architecture doc)
-- [ ] 4. Per-surface encode and the remote backend
+- [~] **4. Per-surface streaming and the remote backend** — architecture done and
+      verified in a browser; frames are JPEG, not hardware H.264 (see architecture doc)
 - [ ] 5. Appearance vocabulary in both backends
 - [ ] 6. iPad: WebCodecs, gestures, responsive breakpoints
 - [ ] 7. Clipboard, audio, multi-monitor, DPI, reconnect, auth, packaging
@@ -98,6 +99,19 @@ pnpm test             # regenerates fixtures, then runs vitest
 pnpm run typecheck
 cargo clippy --workspace --all-targets
 ```
+
+End-to-end checks against a running engine. These drive the real shell code as
+a headless client rather than mocking the protocol:
+
+```sh
+cargo run -p lwfa-engine &
+node --experimental-strip-types scripts/e2e-shell.mjs    # protocol + layout
+node --experimental-strip-types scripts/e2e-stream.mjs   # per-surface streaming
+```
+
+`LWFA_CAPTURE_DUMP=/some/dir` makes the engine write a PNG per window each
+frame, which is how per-surface capture gets checked against what is actually
+on screen.
 
 `pnpm test` regenerates `fixtures/rust.*.tsv` from the Rust implementation
 before running. Those files are gitignored on purpose: a committed copy would

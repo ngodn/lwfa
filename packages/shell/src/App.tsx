@@ -11,8 +11,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { ToShell, WindowId, WindowInfo } from "@lwfa/proto"
+import type { DecodedFrame, ToShell, WindowId, WindowInfo } from "@lwfa/proto"
 import { Connection, type Status } from "./connection.js"
+import { WindowSurface } from "./WindowSurface.js"
 import {
   DEFAULT_CONFIG,
   EMPTY,
@@ -45,6 +46,8 @@ export function App(): React.ReactElement {
   const [output, setOutput] = useState<Output>({ width: 0, height: 0 })
   const [windows, setWindows] = useState<Map<WindowId, WindowInfo>>(new Map())
   const [strip, setStrip] = useState<StripState>(EMPTY)
+  const [frames, setFrames] = useState<Map<WindowId, ImageBitmap>>(new Map())
+  const [streaming, setStreaming] = useState(true)
 
   const connection = useRef<Connection | null>(null)
   // Refs so the message handler, which is created once, always reads current
@@ -53,6 +56,9 @@ export function App(): React.ReactElement {
   const outputRef = useRef(output)
   stripRef.current = strip
   outputRef.current = output
+
+  const streamingRef = useRef(streaming)
+  streamingRef.current = streaming
 
   /** Push the current strip to the engine as a target plus a spring. */
   const push = useCallback((next: StripState, out: Output, animate = true) => {
@@ -66,6 +72,16 @@ export function App(): React.ReactElement {
     if (focused !== null) {
       connection.current?.send({ type: "focusWindow", id: focused })
     }
+
+    // Ask for pixels only for columns the viewport can actually show. This is
+    // what keeps the encoder budget bounded by viewport width rather than by
+    // how many windows are open. See docs/architecture.md section 2.3.
+    connection.current?.send({
+      type: "setStreams",
+      windows: streamingRef.current
+        ? windows.filter((w) => w.rect.x + w.rect.width > 0 && w.rect.x < out.width).map((w) => w.id)
+        : [],
+    })
   }, [])
 
   const update = useCallback(
@@ -128,6 +144,12 @@ export function App(): React.ReactElement {
             next.delete(message.id)
             return next
           })
+          setFrames((prev) => {
+            const next = new Map(prev)
+            prev.get(message.id)?.close()
+            next.delete(message.id)
+            return next
+          })
           update((state, out) => removeWindow(state, message.id, out, DEFAULT_CONFIG))
           break
 
@@ -154,8 +176,30 @@ export function App(): React.ReactElement {
       }
     }
 
+    const handleFrame = async (frame: DecodedFrame) => {
+      // createImageBitmap decodes off the main thread, so a large window does
+      // not stall the UI while it is being decoded.
+      const blob = new Blob([frame.payload as BlobPart], { type: "image/jpeg" })
+      let bitmap: ImageBitmap
+      try {
+        bitmap = await createImageBitmap(blob)
+      } catch (err) {
+        console.warn("could not decode a frame:", err)
+        return
+      }
+      setFrames((prev) => {
+        const next = new Map(prev)
+        // Bitmaps hold GPU memory and are not garbage collected promptly, so
+        // the one being replaced is closed explicitly.
+        prev.get(frame.header.window)?.close()
+        next.set(frame.header.window, bitmap)
+        return next
+      })
+    }
+
     const conn = new Connection(ENGINE_URL, {
       onMessage: handleMessage,
+      onFrame: handleFrame,
       onStatus: (s, detail) => {
         setStatus(s)
         setStatusDetail(detail)
@@ -239,26 +283,66 @@ export function App(): React.ReactElement {
         {strip.columns.length === 0 ? <p className="empty">No windows yet.</p> : null}
       </section>
 
-      {/* A to-scale preview of where the engine has been told to put things.
-          Useful for spotting a layout bug without switching workspaces. */}
+      {/* The actual remote desktop: one DOM element per window, composited
+          by the browser. This is what whole-screen streaming cannot do. */}
       <section>
-        <h2>Preview</h2>
-        <div className="viewport" style={{ aspectRatio: `${output.width || 16} / ${output.height || 9}` }}>
-          {placed.map((w, index) => (
-            <div
-              key={w.id}
-              className={`preview-window${index === strip.focus ? " focused" : ""}`}
-              style={{
-                left: `${(w.rect.x / (output.width || 1)) * 100}%`,
-                top: `${(w.rect.y / (output.height || 1)) * 100}%`,
-                width: `${(w.rect.width / (output.width || 1)) * 100}%`,
-                height: `${(w.rect.height / (output.height || 1)) * 100}%`,
+        <h2>
+          Windows{" "}
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={streaming}
+              onChange={(e) => {
+                setStreaming(e.target.checked)
+                // Re-push so the engine hears about it immediately.
+                setTimeout(() => push(stripRef.current, outputRef.current, false), 0)
               }}
-            >
-              w{w.id}
-            </div>
-          ))}
+            />
+            stream pixels
+          </label>
+        </h2>
+        <div
+          className="viewport"
+          style={{
+            aspectRatio: `${output.width || 16} / ${output.height || 9}`,
+            // The engine's output is scaled to fit this box. Windows are
+            // positioned in engine coordinates inside it, so one CSS variable
+            // rescales the whole composited scene.
+            ["--scale" as string]: output.width ? `${1 / output.width}` : "0",
+          }}
+        >
+          <div
+            className="scene"
+            style={{
+              width: `${output.width}px`,
+              height: `${output.height}px`,
+              transform: `scale(var(--fit))`,
+            }}
+            ref={(el) => {
+              if (!el?.parentElement || !output.width) return
+              const fit = el.parentElement.clientWidth / output.width
+              el.style.setProperty("--fit", String(fit))
+            }}
+          >
+            {placed.map((w, index) => (
+              <WindowSurface
+                key={w.id}
+                id={w.id}
+                rect={w.rect}
+                z={w.z}
+                focused={index === strip.focus}
+                label={windows.get(w.id)?.title ?? windows.get(w.id)?.appId ?? `w${w.id}`}
+                frame={frames.get(w.id) ?? null}
+                onFocus={() => update((s, o) => focusWindow(s, w.id, o, DEFAULT_CONFIG))}
+              />
+            ))}
+          </div>
         </div>
+        {!streaming ? (
+          <p className="empty">
+            Streaming off. The engine is not capturing, so no pixels are being sent.
+          </p>
+        ) : null}
       </section>
     </main>
   )
