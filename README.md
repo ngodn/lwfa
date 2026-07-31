@@ -68,3 +68,14 @@ of the architecture doc explains the contract.
 
 **When you change one implementation, change the other.** The test will tell you
 if you forgot.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+One thing to keep in mind while working: [niri](https://github.com/niri-wm/niri)
+is GPL-3.0, and lwfa follows its layout model (architecture doc, section 2.3).
+Reading niri as a reference is fine and encouraged. **Porting its code is not**,
+because that would force lwfa to GPL-3.0. If that ever looks worth doing, it is
+a deliberate relicensing decision to make first, not a consequence to discover
+afterwards.
