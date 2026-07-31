@@ -5,6 +5,10 @@
 //! be dragged or resized by its own titlebar has nothing to be granted. That
 //! removes the interactive move and resize grabs entirely, which is most of
 //! what a floating compositor spends its xdg-shell code on.
+//!
+//! Since milestone 3 this module also reports window lifecycle to the shell. It
+//! decides nothing about placement; it registers the window, tells the shell,
+//! and waits for a layout to come back.
 
 use smithay::delegate_xdg_shell;
 use smithay::desktop::{
@@ -19,7 +23,9 @@ use smithay::wayland::shell::xdg::{
     XdgToplevelSurfaceData,
 };
 
+use crate::layout::Mode;
 use crate::state::Lwfa;
+use lwfa_proto::ToShell;
 
 impl XdgShellHandler for Lwfa {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
@@ -28,33 +34,60 @@ impl XdgShellHandler for Lwfa {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface.clone());
+        let id = self.next_window_id();
+        self.layout.track(id, window.clone());
 
-        // The strip assigns the column size. Setting it before the initial
-        // configure means the client sizes itself correctly on its first
-        // buffer instead of drawing once at its own guess and being corrected.
-        let size = self.strip.push(window.clone());
         surface.with_pending_state(|state| {
-            state.size = Some(size);
             state.states.set(xdg_toplevel::State::Activated);
         });
 
-        self.space.map_element(window, (0, 0), true);
-        self.apply_layout();
-        self.focus_current_window();
+        // Mapped off-screen with no size yet. The window stays invisible until
+        // something places it, so it cannot flash at the origin for a frame
+        // while the shell is deciding.
+        self.space.map_element(window, (0, 0), false);
+
+        match self.layout.mode() {
+            Mode::Shell => {
+                if let Some(info) = self.window_info(id) {
+                    self.send_to_shell(ToShell::WindowOpened { window: info });
+                }
+                // No placement here. The shell replies with a SetLayout.
+                self.set_focus(Some(id), true);
+            }
+            Mode::Safe => {
+                self.set_focus(Some(id), false);
+                self.apply_safe_mode();
+            }
+        }
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        let window = self
-            .space
-            .elements()
-            .find(|w| w.toplevel().is_some_and(|t| t == &surface))
-            .cloned();
+        let Some(id) = self.layout.id_of_surface(surface.wl_surface()).or_else(|| {
+            self.space
+                .elements()
+                .find(|w| w.toplevel().is_some_and(|t| t == &surface))
+                .and_then(|w| self.layout.id_of(w))
+        }) else {
+            return;
+        };
 
-        if let Some(window) = window {
+        if let Some(window) = self.layout.window(id).cloned() {
             self.space.unmap_elem(&window);
-            self.strip.remove(&window);
-            self.apply_layout();
-            self.focus_current_window();
+        }
+        self.layout.forget(id);
+        self.forget_reported(id);
+
+        if self.focused() == Some(id) {
+            // Focus something else rather than leaving the seat pointing at a
+            // window that no longer exists.
+            let next = self.topmost_window_id();
+            self.set_focus(next, true);
+        }
+
+        self.send_to_shell(ToShell::WindowClosed { id });
+
+        if self.layout.mode() == Mode::Safe {
+            self.apply_safe_mode();
         }
     }
 
@@ -79,11 +112,11 @@ impl XdgShellHandler for Lwfa {
         surface.send_repositioned(token);
     }
 
-    /// No-op: the strip owns window position. See the module comment.
+    /// No-op: the shell owns window position. See the module comment.
     fn move_request(&mut self, _surface: ToplevelSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
     }
 
-    /// No-op: the strip owns column width. Client-driven resize arrives later
+    /// No-op: the shell owns column width. Client-driven resize arrives later
     /// as a request to change the column's preset width, not as a free drag.
     fn resize_request(
         &mut self,

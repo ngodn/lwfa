@@ -1,0 +1,13 @@
+{
+  "name": "@lwfa/proto",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The lwfa shell protocol: wire types and a strict decoder, mirroring crates/lwfa-proto",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  }
+}

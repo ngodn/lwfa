@@ -1,0 +1,32 @@
+{
+  "type": "setLayout",
+  "windows": [
+    {
+      "id": 1,
+      "rect": {
+        "x": -23.5,
+        "y": 12.0,
+        "width": 630.0,
+        "height": 1056.0
+      },
+      "z": 0
+    },
+    {
+      "id": 2,
+      "rect": {
+        "x": 619.0,
+        "y": 12.0,
+        "width": 630.0,
+        "height": 1056.0
+      },
+      "z": 1
+    }
+  ],
+  "animate": {
+    "spring": {
+      "stiffness": 220.0,
+      "damping": 26.0,
+      "mass": 1.0
+    }
+  }
+}

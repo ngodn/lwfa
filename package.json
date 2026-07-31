@@ -9,12 +9,12 @@
     "node": ">=24.15.0"
   },
   "scripts": {
-    "fixtures": "cargo run -q -p lwfa-spring --bin gen-fixtures",
+    "fixtures": "cargo run -q -p lwfa-spring --bin gen-fixtures && cargo run -q -p lwfa-proto --bin gen-proto-fixtures",
     "test": "pnpm run fixtures && vitest run",
     "test:watch": "vitest",
     "test:rust": "cargo test --workspace",
-    "test:all": "pnpm run test:rust && pnpm run test",
-    "typecheck": "tsc --build --force"
+    "test:all": "pnpm test && pnpm run test:rust",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

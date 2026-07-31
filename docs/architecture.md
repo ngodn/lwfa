@@ -306,10 +306,15 @@ non-NVIDIA smoke test.
    grabs. Under scrollable tiling windows do not float, so `move_request` and
    `resize_request` are no-ops. That removes most of what a floating
    compositor's xdg-shell code does.
-3. **Shell protocol v0** plus the layer-shell chrome path. React shell owns the
-   scrollable strip (section 2.3) and dictates geometry, engine obeys. Local
-   path end to end. The strip's scroll offset is the first thing driven by a
-   spring, so milestone 1 gets exercised here.
+3. **Shell protocol v0.** ✅ Done. `crates/lwfa-proto`, `packages/proto`,
+   `packages/shell`, and the WebSocket link in `crates/lwfa-engine/src/shell.rs`.
+   The scrollable strip now lives in TypeScript and dictates geometry; the
+   engine reconciles and integrates the springs.
+
+   **Not done: the layer-shell chrome path.** The shell runs in a browser
+   against the engine, but it does not yet draw chrome over the native output.
+   That needs a `wlr-layer-shell` client hosting a webview, which is a separate
+   piece of work; see section 10.
 4. **Per-surface encode plus remote backend.** Same shell in a browser on
    another machine. This is where the protocol design gets tested for real.
 5. **Appearance vocabulary** in both backends, with a visual diff test comparing

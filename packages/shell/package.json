@@ -1,0 +1,23 @@
+{
+  "name": "@lwfa/shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The lwfa shell: owns layout policy, drives the engine over the shell protocol",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@lwfa/proto": "workspace:*",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.1",
+    "@vitejs/plugin-react": "5.0.4",
+    "vite": "7.1.12"
+  }
+}

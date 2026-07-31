@@ -2,10 +2,16 @@
 //!
 //! Smithay's protocol modules each keep a state struct here and call back into
 //! a handler trait implemented on this type. See `handlers/`.
+//!
+//! Since milestone 3 this type is also the bridge to the shell: it assigns
+//! stable [`WindowId`]s, reports lifecycle over the shell protocol, and applies
+//! the layout that comes back. It holds no layout policy of its own beyond
+//! safe mode. See `layout.rs`.
 
 use std::ffi::OsString;
 use std::sync::Arc;
 
+use lwfa_proto::{Modifiers, PROTOCOL_VERSION, ToShell, WindowId, WindowInfo};
 use smithay::desktop::{PopupManager, Space, Window, WindowSurfaceType};
 use smithay::input::{Seat, SeatState};
 use smithay::reexports::calloop::generic::Generic;
@@ -21,19 +27,31 @@ use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
 use smithay::wayland::socket::ListeningSocketSource;
 
-use crate::layout::Strip;
+use crate::layout::{self, Layout};
+use crate::shell::ShellLink;
 
 pub struct Lwfa {
     pub start_time: std::time::Instant,
     pub socket_name: OsString,
     pub display_handle: DisplayHandle,
 
-    /// Smithay's 2D plane. The strip decides positions; the space just holds
-    /// what was decided so rendering and hit-testing can use it.
+    /// Smithay's 2D plane. The layout decides positions; the space holds what
+    /// was decided so rendering and hit-testing can use it.
     pub space: Space<Window>,
-    /// The scrollable strip. This is lwfa's actual layout state.
-    pub strip: Strip,
+    /// Reconciles shell-declared layout. Holds no policy.
+    pub layout: Layout,
+    /// The shell connection, if any. `None` until the listener binds.
+    pub shell: Option<ShellLink>,
     pub loop_signal: LoopSignal,
+
+    focused: Option<WindowId>,
+    next_window_id: u64,
+    /// Last `WindowInfo` reported to the shell, per window.
+    ///
+    /// Clients set their title and app id after mapping and change them later,
+    /// so the engine has to notice and report. Diffing against this is what
+    /// stops a `WindowChanged` being sent on every single commit.
+    reported: std::collections::HashMap<WindowId, WindowInfo>,
 
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
@@ -75,9 +93,13 @@ impl Lwfa {
             start_time: std::time::Instant::now(),
             display_handle: dh,
             // Real size arrives from the backend once the output exists.
-            strip: Strip::new((0, 0).into()),
+            layout: Layout::new((0, 0).into()),
+            shell: None,
             space: Space::default(),
             loop_signal,
+            focused: None,
+            next_window_id: 1,
+            reported: std::collections::HashMap::new(),
             socket_name,
             compositor_state,
             xdg_shell_state,
@@ -130,22 +152,193 @@ impl Lwfa {
         socket_name
     }
 
-    /// Push the strip's computed geometry into the space.
+    // ---------------------------------------------------------------------
+    // Window registry
+    // ---------------------------------------------------------------------
+
+    pub fn next_window_id(&mut self) -> WindowId {
+        let id = WindowId(self.next_window_id);
+        self.next_window_id += 1;
+        id
+    }
+
+    pub fn focused(&self) -> Option<WindowId> {
+        self.focused
+    }
+
+    /// Read the current title and app id straight off the toplevel.
     ///
-    /// The strip is the single source of truth for where windows go. This is
-    /// the only place that is translated into `Space` mappings, which keeps the
-    /// layout testable without a compositor and mirrors how the shell will
-    /// later dictate geometry over the shell protocol.
-    pub fn apply_layout(&mut self) {
-        for (window, location) in self.strip.positions() {
-            self.space.map_element(window, location, false);
+    /// Clients set these after mapping and change them later, so this is read
+    /// on demand rather than cached and left stale.
+    pub fn window_info(&self, id: WindowId) -> Option<WindowInfo> {
+        let window = self.layout.window(id)?;
+        let toplevel = window.toplevel()?;
+        let (app_id, title) =
+            smithay::wayland::compositor::with_states(toplevel.wl_surface(), |states| {
+                let data = states
+                    .data_map
+                    .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+                    .map(|d| d.lock().unwrap());
+                match data {
+                    Some(d) => (d.app_id.clone(), d.title.clone()),
+                    None => (None, None),
+                }
+            });
+        Some(WindowInfo { id, app_id, title })
+    }
+
+    /// Report a title or app id change, but only when something actually
+    /// changed. Called on every commit, which is far more often than a client
+    /// renames itself.
+    pub fn report_window_changes(&mut self, id: WindowId) {
+        let Some(info) = self.window_info(id) else {
+            return;
+        };
+        if self.reported.get(&id) == Some(&info) {
+            return;
+        }
+        self.reported.insert(id, info.clone());
+        self.send_to_shell(ToShell::WindowChanged { window: info });
+    }
+
+    pub fn forget_reported(&mut self, id: WindowId) {
+        self.reported.remove(&id);
+    }
+
+    pub fn send_to_shell(&self, message: ToShell) {
+        if let Some(shell) = &self.shell {
+            shell.send(message);
         }
     }
 
-    /// Advance the scroll animation. Returns true while a redraw is still
-    /// needed.
+    /// Full current state, sent on every shell connection.
+    pub fn hello(&self) -> ToShell {
+        let size = self.layout.output_size();
+        let mut windows: Vec<WindowInfo> = self
+            .layout
+            .placements()
+            .iter()
+            .filter_map(|(w, _)| self.layout.id_of(w))
+            .filter_map(|id| self.window_info(id))
+            .collect();
+
+        // placements() only returns visible windows, and on a fresh connection
+        // nothing is placed yet, so walk the registry for the rest.
+        for id in self.all_window_ids() {
+            if !windows.iter().any(|w| w.id == id) {
+                if let Some(info) = self.window_info(id) {
+                    windows.push(info);
+                }
+            }
+        }
+        windows.sort_by_key(|w| w.id);
+
+        ToShell::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            output: lwfa_proto::Output {
+                width: size.w,
+                height: size.h,
+                scale: 1.0,
+            },
+            windows,
+            focused: self.focused,
+        }
+    }
+
+    fn all_window_ids(&self) -> Vec<WindowId> {
+        self.layout.all_ids()
+    }
+
+    /// Something reasonable to focus after the focused window closes.
+    pub fn topmost_window_id(&self) -> Option<WindowId> {
+        self.layout
+            .topmost()
+            .or_else(|| self.layout.all_ids().last().copied())
+    }
+
+    pub fn forward_key_binding(&self, key: String, modifiers: Modifiers) {
+        self.send_to_shell(ToShell::KeyBinding { key, modifiers });
+    }
+
+    // ---------------------------------------------------------------------
+    // Focus
+    // ---------------------------------------------------------------------
+
+    /// Set keyboard focus, telling the shell only when it did not ask for this.
+    ///
+    /// `notify_shell` is false when the shell initiated the change, so a focus
+    /// command does not echo back and start a loop.
+    pub fn set_focus(&mut self, id: Option<WindowId>, notify_shell: bool) {
+        self.focused = id;
+
+        let target = id
+            .and_then(|id| self.layout.window(id))
+            .and_then(|w| w.toplevel())
+            .map(|t| t.wl_surface().clone());
+
+        // Activated state drives the client's own focus styling.
+        for (window, _) in self.layout.placements() {
+            let is_focused = window
+                .toplevel()
+                .map(|t| Some(t.wl_surface()) == target.as_ref())
+                .unwrap_or(false);
+            window.set_activated(is_focused);
+            if let Some(toplevel) = window.toplevel() {
+                toplevel.send_pending_configure();
+            }
+        }
+
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            keyboard.set_focus(self, target, serial);
+        }
+
+        if notify_shell {
+            self.send_to_shell(ToShell::FocusChanged { id });
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Layout
+    // ---------------------------------------------------------------------
+
+    /// Recompute placements and push them into the scene.
+    pub fn apply_layout(&mut self) {
+        for (window, location) in self.layout.placements() {
+            self.space.map_element(window, location, false);
+        }
+        // Windows the shell left out are unmapped rather than moved off-screen,
+        // so they stop being rendered and stop consuming a frame callback.
+        for window in self.layout.hidden() {
+            self.space.unmap_elem(&window);
+        }
+    }
+
+    /// Place windows when no shell is connected. See `layout::Mode::Safe`.
+    pub fn apply_safe_mode(&mut self) {
+        let focused = self
+            .focused
+            .or_else(|| self.all_window_ids().first().copied());
+        if self.focused != focused {
+            self.set_focus(focused, true);
+        }
+        let configures = self.layout.apply_safe_mode(focused);
+        self.send_configures(configures);
+        self.apply_layout();
+    }
+
+    pub fn send_configures(&mut self, configures: Vec<layout::PendingConfigure>) {
+        for configure in configures {
+            if let Some(toplevel) = configure.window.toplevel() {
+                toplevel.with_pending_state(|state| state.size = Some(configure.size));
+                toplevel.send_pending_configure();
+            }
+        }
+    }
+
+    /// Advance animations. Returns true while a redraw is still needed.
     pub fn tick_animations(&mut self) -> bool {
-        let animating = self.strip.tick();
+        let animating = self.layout.tick(std::time::Instant::now());
         if animating {
             self.apply_layout();
         }

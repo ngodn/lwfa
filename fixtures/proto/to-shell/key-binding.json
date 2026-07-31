@@ -1,0 +1,10 @@
+{
+  "type": "keyBinding",
+  "key": "l",
+  "modifiers": {
+    "alt": true,
+    "ctrl": false,
+    "shift": false,
+    "logo": false
+  }
+}

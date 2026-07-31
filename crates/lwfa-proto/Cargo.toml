@@ -1,0 +1,19 @@
+[package]
+name = "lwfa-proto"
+version = "0.1.0"
+description = "The lwfa shell protocol: wire types shared by the engine and the shell"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "gen-proto-fixtures"
+path = "src/bin/gen-proto-fixtures.rs"

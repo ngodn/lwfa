@@ -1,9 +1,21 @@
 //! Input handling and keybinds.
 //!
-//! Binds use Alt rather than Super on purpose. In the nested backend the host
-//! compositor (Hyprland here) sees keys first and has Super bound heavily, so
-//! Super combinations would never reach us. The TTY backend will move these to
-//! Super.
+//! # Which binds live here
+//!
+//! Only ones that are not layout policy. Quit and spawn are engine concerns;
+//! "focus the column to the left" is not, so it goes to the shell as a
+//! [`ToShell::KeyBinding`] and the shell decides what it means. Keeping a
+//! second opinion about focus order in Rust would be the same
+//! two-implementations-drifting problem the spring parity work exists to avoid.
+//!
+//! When no shell is connected the engine falls back to cycling windows, so the
+//! compositor is still usable enough to start one. See `layout::Mode::Safe`.
+//!
+//! # Why Alt and not Super
+//!
+//! In the nested backend the host compositor sees keys first and has Super
+//! bound heavily, so Super combinations never reach us. The TTY backend will
+//! move these to Super.
 
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
@@ -14,83 +26,109 @@ use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
 
+use crate::layout::Mode;
 use crate::state::Lwfa;
+use lwfa_proto::Modifiers;
 
 /// A keybind resolved into something to do. Returned out of the keyboard filter
 /// so the action runs outside the borrow the filter holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Quit,
     SpawnTerminal,
-    FocusLeft,
-    FocusRight,
-    CloseWindow,
+    /// Not handled here. Handed to the shell, which owns layout policy.
+    Forward {
+        key: String,
+        modifiers: Modifiers,
+    },
+}
+
+/// xkb keysym to the name the protocol uses.
+///
+/// A small table rather than `xkb_keysym_get_name`, because only the keys the
+/// shell can bind need to cross the wire, and an explicit list means an
+/// unexpected keysym is dropped rather than sent as something unnameable.
+fn keysym_name(raw: u32) -> Option<&'static str> {
+    Some(match raw {
+        keysyms::KEY_h | keysyms::KEY_H => "h",
+        keysyms::KEY_j | keysyms::KEY_J => "j",
+        keysyms::KEY_k | keysyms::KEY_K => "k",
+        keysyms::KEY_l | keysyms::KEY_L => "l",
+        keysyms::KEY_w | keysyms::KEY_W => "w",
+        keysyms::KEY_Left => "Left",
+        keysyms::KEY_Right => "Right",
+        keysyms::KEY_Up => "Up",
+        keysyms::KEY_Down => "Down",
+        keysyms::KEY_1 => "1",
+        keysyms::KEY_2 => "2",
+        keysyms::KEY_3 => "3",
+        keysyms::KEY_4 => "4",
+        _ => return None,
+    })
 }
 
 impl Lwfa {
-    /// Give keyboard focus to the strip's focused column.
-    pub fn focus_current_window(&mut self) {
-        let serial = SERIAL_COUNTER.next_serial();
-        let target = self
-            .strip
-            .focused_window()
-            .and_then(|w| w.toplevel())
-            .map(|t| t.wl_surface().clone());
-
-        // Activated state drives the client's own focus styling, so it has to
-        // track the strip rather than the pointer.
-        for column in self.strip.columns() {
-            let is_focused = column
-                .window
-                .toplevel()
-                .map(|t| Some(t.wl_surface()) == target.as_ref())
-                .unwrap_or(false);
-            column.window.set_activated(is_focused);
-            if let Some(toplevel) = column.window.toplevel() {
-                toplevel.send_pending_configure();
-            }
-        }
-
-        if let Some(window) = self.strip.focused_window().cloned() {
-            self.space.raise_element(&window, false);
-        }
-
-        if let Some(keyboard) = self.seat.get_keyboard() {
-            keyboard.set_focus(self, target, serial);
-        }
-    }
-
     fn run_action(&mut self, action: Action) {
         match action {
             Action::Quit => self.loop_signal.stop(),
             Action::SpawnTerminal => self.spawn_terminal(),
-            Action::FocusLeft => {
-                self.strip.focus_left();
-                self.focus_current_window();
-            }
-            Action::FocusRight => {
-                self.strip.focus_right();
-                self.focus_current_window();
-            }
-            Action::CloseWindow => {
-                if let Some(toplevel) = self.strip.focused_window().and_then(|w| w.toplevel()) {
-                    toplevel.send_close();
+            Action::Forward { key, modifiers } => {
+                if self.layout.mode() == Mode::Shell {
+                    self.forward_key_binding(key, modifiers);
+                } else {
+                    self.safe_mode_binding(&key);
                 }
             }
         }
     }
 
-    pub fn spawn_terminal(&self) {
-        let terminal = std::env::var("LWFA_TERMINAL").unwrap_or_else(|_| "alacritty".to_string());
-        match std::process::Command::new(&terminal)
+    /// Minimal window cycling for when no shell is connected.
+    ///
+    /// Enough to reach a browser and start the shell, and no more. This is not
+    /// a layout engine; see `layout::Mode::Safe`.
+    fn safe_mode_binding(&mut self, key: &str) {
+        let ids = self.layout.all_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let current = self
+            .focused()
+            .and_then(|id| ids.iter().position(|x| *x == id))
+            .unwrap_or(0);
+
+        let next = match key {
+            "h" | "Left" => current.checked_sub(1).unwrap_or(ids.len() - 1),
+            "l" | "Right" => (current + 1) % ids.len(),
+            "w" => {
+                if let Some(toplevel) = self
+                    .focused()
+                    .and_then(|id| self.layout.window(id))
+                    .and_then(|w| w.toplevel())
+                {
+                    toplevel.send_close();
+                }
+                return;
+            }
+            _ => return,
+        };
+
+        self.set_focus(Some(ids[next]), true);
+        self.apply_safe_mode();
+    }
+
+    pub fn spawn(&self, command: &str) {
+        match std::process::Command::new(command)
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .spawn()
         {
-            Ok(_) => tracing::info!("spawned {terminal}"),
-            Err(err) => {
-                tracing::error!("failed to spawn {terminal}: {err}. Set LWFA_TERMINAL to override.")
-            }
+            Ok(_) => tracing::info!("spawned {command}"),
+            Err(err) => tracing::error!("failed to spawn {command}: {err}"),
         }
+    }
+
+    pub fn spawn_terminal(&self) {
+        let terminal = std::env::var("LWFA_TERMINAL").unwrap_or_else(|_| "alacritty".to_string());
+        self.spawn(&terminal);
     }
 
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
@@ -116,15 +154,25 @@ impl Lwfa {
                         if !pressed || !modifiers.alt {
                             return FilterResult::Forward;
                         }
-                        let action = match handle.modified_sym().raw() {
-                            keysyms::KEY_q | keysyms::KEY_Q => Action::Quit,
-                            keysyms::KEY_Return => Action::SpawnTerminal,
-                            keysyms::KEY_h | keysyms::KEY_Left => Action::FocusLeft,
-                            keysyms::KEY_l | keysyms::KEY_Right => Action::FocusRight,
-                            keysyms::KEY_w | keysyms::KEY_W => Action::CloseWindow,
-                            _ => return FilterResult::Forward,
-                        };
-                        FilterResult::Intercept(action)
+                        let raw = handle.modified_sym().raw();
+                        match raw {
+                            keysyms::KEY_q | keysyms::KEY_Q => {
+                                FilterResult::Intercept(Action::Quit)
+                            }
+                            keysyms::KEY_Return => FilterResult::Intercept(Action::SpawnTerminal),
+                            _ => match keysym_name(raw) {
+                                Some(key) => FilterResult::Intercept(Action::Forward {
+                                    key: key.to_string(),
+                                    modifiers: Modifiers {
+                                        alt: modifiers.alt,
+                                        ctrl: modifiers.ctrl,
+                                        shift: modifiers.shift,
+                                        logo: modifiers.logo,
+                                    },
+                                }),
+                                None => FilterResult::Forward,
+                            },
+                        }
                     },
                 );
 
@@ -167,20 +215,21 @@ impl Lwfa {
                 let button_state = event.state();
 
                 if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-                    // Click to focus. The strip owns focus, so this moves the
-                    // strip's focus rather than just handing the surface a
-                    // keyboard focus the strip disagrees with.
                     let clicked = self
                         .space
                         .element_under(pointer.current_location())
-                        .map(|(w, _)| w.clone());
+                        .map(|(w, _)| w.clone())
+                        .and_then(|w| self.layout.id_of(&w));
 
-                    if let Some(window) = clicked {
-                        if self.strip.focus_window(&window) {
-                            self.focus_current_window();
+                    match clicked {
+                        // Click to focus. The shell is told, because it did not
+                        // initiate this and its own focus state would go stale.
+                        Some(id) => self.set_focus(Some(id), true),
+                        None => {
+                            if let Some(keyboard) = self.seat.get_keyboard() {
+                                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+                            }
                         }
-                    } else if let Some(keyboard) = self.seat.get_keyboard() {
-                        keyboard.set_focus(self, Option::<WlSurface>::None, serial);
                     }
                 }
 

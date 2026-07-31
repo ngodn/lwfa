@@ -1,292 +1,497 @@
-//! The scrollable strip.
+//! Layout reconciliation.
 //!
-//! Windows live in columns on an infinite horizontal strip, and the output is a
-//! viewport onto it. See docs/architecture.md section 2.3 for why this layout
-//! model rather than dynamic tiling.
+//! The scrollable strip used to live here. It now lives in the shell
+//! (`packages/shell`), which is the point of milestone 3: the shell owns
+//! *policy*, the engine owns *mechanism*. What is left is the mechanism.
 //!
-//! The property that matters most: **adding or removing a column never resizes
-//! the others.** Native apps do not reflow, and every resize is an
-//! `xdg_shell configure` they handle badly, so a layout that mostly leaves
-//! windows alone is the right fit.
+//! This module takes a declarative target from the shell and reconciles the
+//! scene toward it, integrating springs for position. It has no opinion about
+//! where windows should go.
 //!
-//! Scrolling is spring-driven via `lwfa-spring`. That is deliberate this early:
-//! it proves the shared integrator is load-bearing rather than decorative, and
-//! the scroll offset is the exact quantity a touch swipe will drive later.
+//! # Safe mode
+//!
+//! When no shell is connected there is still a compositor with windows in it,
+//! so something has to place them. [`Mode::Safe`] shows the focused window
+//! full-screen and nothing else.
+//!
+//! It is deliberately *not* a second strip implementation. Duplicating layout
+//! policy in Rust is exactly the two-implementations-drifting problem the
+//! spring parity work exists to avoid, and the duplicate would rot because
+//! nobody would use it. Safe mode is a legible fallback that makes the
+//! machine usable enough to start a shell, and it should stay that dumb.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
+use lwfa_proto::{SpringSpec, WindowId, WindowLayout};
 use lwfa_spring::{Spring, SpringOptions};
 use smithay::desktop::Window;
 use smithay::utils::{Logical, Point, Size};
 
-/// Gap between columns, and between a column and the output edge.
-const GAP: i32 = 12;
-
-/// Columns default to half the viewport, so more than one is visible and the
-/// strip is legible as a strip. Preset widths (1/3, 1/2, 2/3) come later.
-const DEFAULT_WIDTH_FRACTION: f64 = 0.5;
-
-/// Roughly Motion's `visualDuration(0.35, bounce: 0.1)`: quick, with just
-/// enough overshoot to read as physical rather than mechanical.
-fn scroll_spring(velocity: f64) -> SpringOptions {
-    SpringOptions {
-        velocity,
-        ..SpringOptions::from_visual_duration(0.35, 0.1)
-    }
+/// Who is deciding where windows go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// No shell connected. Focused window full-screen. See the module comment.
+    Safe,
+    /// A shell is driving.
+    Shell,
 }
 
-pub struct Column {
-    pub window: Window,
-    pub width: i32,
-}
-
-struct ScrollAnimation {
-    spring: Spring,
+/// A single animated scalar.
+///
+/// Position animates, size does not. See `WindowLayout` in `lwfa-proto` for
+/// why: animating size means a `configure` every frame, and native apps do not
+/// reflow.
+#[derive(Debug, Clone, Copy)]
+struct Animated {
+    current: f64,
+    target: f64,
+    spring: Option<Spring>,
     started: Instant,
 }
 
-/// The strip. Owns column order and the scroll offset; owns no rendering.
-pub struct Strip {
-    columns: Vec<Column>,
-    focus: usize,
-    /// How far the viewport has scrolled right along the strip, in logical px.
-    view_offset: f64,
-    scroll: Option<ScrollAnimation>,
+impl Animated {
+    fn new(value: f64) -> Self {
+        Self {
+            current: value,
+            target: value,
+            spring: None,
+            started: Instant::now(),
+        }
+    }
+
+    fn snap_to(&mut self, target: f64) {
+        self.current = target;
+        self.target = target;
+        self.spring = None;
+    }
+
+    /// Start (or redirect) a spring toward `target`.
+    ///
+    /// Any in-flight spring's current velocity is carried into the new one, so
+    /// redirecting mid-flight stays C1 continuous rather than visibly
+    /// restarting. `lwfa-spring` has a test pinning that property.
+    ///
+    /// `now` is passed in rather than read here so every window in a frame is
+    /// sampled at exactly the same instant. Reading the clock per window would
+    /// let two windows animating together drift apart by however long the loop
+    /// over them takes, and would make this untestable without sleeping.
+    fn animate_to(&mut self, target: f64, spec: SpringSpec, now: Instant) {
+        if self.target == target && self.spring.is_some() {
+            return; // already heading there; do not restart the clock
+        }
+        let velocity = self.velocity(now);
+        if (target - self.current).abs() < f64::EPSILON && velocity == 0.0 {
+            self.snap_to(target);
+            return;
+        }
+        self.target = target;
+        self.spring = Some(Spring::new(
+            SpringOptions {
+                stiffness: spec.stiffness,
+                damping: spec.damping,
+                mass: spec.mass,
+                velocity,
+                ..SpringOptions::default()
+            },
+            self.current,
+            target,
+        ));
+        self.started = now;
+    }
+
+    fn velocity(&self, now: Instant) -> f64 {
+        match &self.spring {
+            Some(spring) => spring.velocity_at(elapsed_ms(self.started, now)),
+            None => 0.0,
+        }
+    }
+
+    /// Advance. Returns true while still animating.
+    fn tick(&mut self, now: Instant) -> bool {
+        let Some(spring) = &self.spring else {
+            return false;
+        };
+        let state = spring.state_at(elapsed_ms(self.started, now));
+        self.current = state.value;
+        if state.done {
+            self.spring = None;
+            false
+        } else {
+            true
+        }
+    }
+}
+
+struct Tracked {
+    window: Window,
+    x: Animated,
+    y: Animated,
+    /// Last size sent as a `configure`, so an unchanged layout does not
+    /// re-configure every window on every message.
+    size: Option<Size<i32, Logical>>,
+    z: i32,
+    /// False when the shell omitted this window from the last `SetLayout`.
+    visible: bool,
+}
+
+/// Reconciles shell-declared layout into positions the compositor can apply.
+pub struct Layout {
+    tracked: HashMap<WindowId, Tracked>,
+    mode: Mode,
     output_size: Size<i32, Logical>,
 }
 
-impl Strip {
+/// A size the engine should send to a client as a `configure`.
+pub struct PendingConfigure {
+    pub window: Window,
+    pub size: Size<i32, Logical>,
+}
+
+impl Layout {
     pub fn new(output_size: Size<i32, Logical>) -> Self {
         Self {
-            columns: Vec::new(),
-            focus: 0,
-            view_offset: 0.0,
-            scroll: None,
+            tracked: HashMap::new(),
+            mode: Mode::Safe,
             output_size,
         }
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
     }
 
     pub fn set_output_size(&mut self, size: Size<i32, Logical>) {
         self.output_size = size;
     }
 
-    fn default_column_width(&self) -> i32 {
-        ((self.output_size.w as f64 * DEFAULT_WIDTH_FRACTION) as i32).max(240)
+    pub fn output_size(&self) -> Size<i32, Logical> {
+        self.output_size
     }
 
-    /// Height available to a column: full output minus the top and bottom gap.
-    pub fn column_height(&self) -> i32 {
-        (self.output_size.h - GAP * 2).max(1)
+    pub fn track(&mut self, id: WindowId, window: Window) {
+        self.tracked.insert(
+            id,
+            Tracked {
+                window,
+                x: Animated::new(0.0),
+                y: Animated::new(0.0),
+                size: None,
+                z: 0,
+                // Hidden until something places it, so a window cannot flash at
+                // the origin for one frame before the shell responds.
+                visible: false,
+            },
+        );
     }
 
-    /// Append a column and focus it.
-    ///
-    /// Appending rather than inserting next to the focus keeps milestone 2
-    /// simple. niri inserts adjacent to the focused column; that is a later
-    /// refinement and does not change the model.
-    pub fn push(&mut self, window: Window) -> Size<i32, Logical> {
-        let width = self.default_column_width();
-        self.columns.push(Column { window, width });
-        self.focus = self.columns.len() - 1;
-        self.scroll_focus_into_view();
-        (width, self.column_height()).into()
+    pub fn forget(&mut self, id: WindowId) {
+        self.tracked.remove(&id);
     }
 
-    pub fn remove(&mut self, window: &Window) -> bool {
-        let Some(i) = self.columns.iter().position(|c| &c.window == window) else {
-            return false;
-        };
-        self.columns.remove(i);
-        if self.columns.is_empty() {
-            self.focus = 0;
-        } else {
-            // Keep the focus on the neighbour that slid into this slot, or the
-            // new last column if we removed the tail.
-            self.focus = self.focus.min(self.columns.len() - 1);
-        }
-        self.scroll_focus_into_view();
-        true
+    pub fn window(&self, id: WindowId) -> Option<&Window> {
+        self.tracked.get(&id).map(|t| &t.window)
     }
 
-    pub fn focused_window(&self) -> Option<&Window> {
-        self.columns.get(self.focus).map(|c| &c.window)
-    }
-
-    /// Move focus to the column holding `window`. Returns false if it is not in
-    /// the strip, so click-to-focus can ignore stray surfaces.
-    pub fn focus_window(&mut self, window: &Window) -> bool {
-        let Some(i) = self.columns.iter().position(|c| &c.window == window) else {
-            return false;
-        };
-        if i != self.focus {
-            self.focus = i;
-            self.scroll_focus_into_view();
-        }
-        true
-    }
-
-    pub fn focus_left(&mut self) {
-        if self.focus > 0 {
-            self.focus -= 1;
-            self.scroll_focus_into_view();
-        }
-    }
-
-    pub fn focus_right(&mut self) {
-        if self.focus + 1 < self.columns.len() {
-            self.focus += 1;
-            self.scroll_focus_into_view();
-        }
-    }
-
-    /// Absolute x of column `i` in strip coordinates, before the view offset.
-    fn column_x(&self, i: usize) -> i32 {
-        GAP + self
-            .columns
+    pub fn id_of(&self, window: &Window) -> Option<WindowId> {
+        self.tracked
             .iter()
-            .take(i)
-            .map(|c| c.width + GAP)
-            .sum::<i32>()
+            .find(|(_, t)| &t.window == window)
+            .map(|(id, _)| *id)
     }
 
-    /// Where the viewport should sit for the focused column to be fully
-    /// visible, scrolling the minimum distance to get there.
-    fn target_offset_for_focus(&self) -> f64 {
-        let Some(column) = self.columns.get(self.focus) else {
-            return 0.0;
-        };
-
-        let left = self.column_x(self.focus) as f64 - GAP as f64;
-        let right = self.column_x(self.focus) as f64 + column.width as f64 + GAP as f64;
-        let viewport = self.output_size.w as f64;
-
-        if right - left >= viewport {
-            // Column is wider than the viewport: pin its left edge, since
-            // there is no offset that shows all of it.
-            left
-        } else if left < self.view_offset {
-            left
-        } else if right > self.view_offset + viewport {
-            right - viewport
-        } else {
-            // Already fully visible. Don't move.
-            self.view_offset
-        }
-    }
-
-    fn scroll_focus_into_view(&mut self) {
-        let target = self.target_offset_for_focus();
-        self.animate_to(target);
-    }
-
-    /// Start a spring from the current offset to `target`.
+    /// Look up by surface rather than by `Window`.
     ///
-    /// Any in-flight animation's current velocity is carried into the new
-    /// spring, so redirecting mid-scroll stays C1 continuous instead of
-    /// visibly restarting. This is the same mechanism a released touch flick
-    /// will use.
-    fn animate_to(&mut self, target: f64) {
-        let velocity = self.scroll_velocity();
-        if (target - self.view_offset).abs() < f64::EPSILON && velocity == 0.0 {
-            self.scroll = None;
-            return;
-        }
-        self.scroll = Some(ScrollAnimation {
-            spring: Spring::new(scroll_spring(velocity), self.view_offset, target),
-            started: Instant::now(),
-        });
-    }
-
-    fn scroll_velocity(&self) -> f64 {
-        match &self.scroll {
-            Some(anim) => anim.spring.velocity_at(elapsed_ms(anim.started)),
-            None => 0.0,
-        }
-    }
-
-    /// Advance the scroll animation. Returns true while still animating, so the
-    /// caller knows another frame is needed.
-    pub fn tick(&mut self) -> bool {
-        let Some(anim) = &self.scroll else {
-            return false;
-        };
-        let state = anim.spring.state_at(elapsed_ms(anim.started));
-        self.view_offset = state.value;
-        if state.done {
-            self.scroll = None;
-            false
-        } else {
-            true
-        }
-    }
-
-    /// Position of every column in output-local coordinates, in strip order.
-    ///
-    /// Returned rather than applied so the caller owns all `Space` mutation and
-    /// this stays testable without a compositor.
-    pub fn positions(&self) -> Vec<(Window, Point<i32, Logical>)> {
-        self.columns
+    /// Needed on destroy: by the time `toplevel_destroyed` fires the window may
+    /// already be gone from the space, but the surface still identifies it.
+    pub fn id_of_surface(
+        &self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> Option<WindowId> {
+        self.tracked
             .iter()
-            .enumerate()
-            .map(|(i, column)| {
-                let x = self.column_x(i) - self.view_offset.round() as i32;
-                (column.window.clone(), Point::from((x, GAP)))
+            .find(|(_, t)| {
+                t.window
+                    .toplevel()
+                    .is_some_and(|toplevel| toplevel.wl_surface() == surface)
+            })
+            .map(|(id, _)| *id)
+    }
+
+    /// Every tracked window, regardless of visibility, in ascending id order.
+    pub fn all_ids(&self) -> Vec<WindowId> {
+        let mut ids: Vec<WindowId> = self.tracked.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    /// The visible window with the highest z, if any.
+    pub fn topmost(&self) -> Option<WindowId> {
+        self.tracked
+            .iter()
+            .filter(|(_, t)| t.visible)
+            .max_by_key(|(id, t)| (t.z, id.0))
+            .map(|(id, _)| *id)
+    }
+
+    /// Apply a layout from the shell.
+    ///
+    /// Total rather than incremental: windows absent from `windows` are hidden.
+    /// A dropped message therefore cannot leave engine and shell disagreeing.
+    ///
+    /// Returns the configures the caller should send. Sizes are applied
+    /// immediately; only position animates.
+    pub fn apply(
+        &mut self,
+        windows: &[WindowLayout],
+        animate: Option<SpringSpec>,
+        now: Instant,
+    ) -> Vec<PendingConfigure> {
+        for tracked in self.tracked.values_mut() {
+            tracked.visible = false;
+        }
+
+        let mut configures = Vec::new();
+
+        for layout in windows {
+            let Some(tracked) = self.tracked.get_mut(&layout.id) else {
+                // A window the shell knows about but the engine has already
+                // dropped. Races with a close; not worth warning about.
+                continue;
+            };
+
+            tracked.visible = true;
+            tracked.z = layout.z;
+
+            match animate {
+                Some(spec) => {
+                    tracked.x.animate_to(layout.rect.x, spec, now);
+                    tracked.y.animate_to(layout.rect.y, spec, now);
+                }
+                None => {
+                    tracked.x.snap_to(layout.rect.x);
+                    tracked.y.snap_to(layout.rect.y);
+                }
+            }
+
+            let size: Size<i32, Logical> = (
+                (layout.rect.width.round() as i32).max(1),
+                (layout.rect.height.round() as i32).max(1),
+            )
+                .into();
+            if tracked.size != Some(size) {
+                tracked.size = Some(size);
+                configures.push(PendingConfigure {
+                    window: tracked.window.clone(),
+                    size,
+                });
+            }
+        }
+
+        configures
+    }
+
+    /// Place the focused window full-screen and hide everything else.
+    ///
+    /// See the module comment: this is a fallback, not a layout engine.
+    pub fn apply_safe_mode(&mut self, focused: Option<WindowId>) -> Vec<PendingConfigure> {
+        let size = self.output_size;
+        let mut configures = Vec::new();
+
+        for (id, tracked) in self.tracked.iter_mut() {
+            let is_focused = Some(*id) == focused;
+            tracked.visible = is_focused;
+            tracked.z = 0;
+            if !is_focused {
+                continue;
+            }
+            tracked.x.snap_to(0.0);
+            tracked.y.snap_to(0.0);
+            if tracked.size != Some(size) {
+                tracked.size = Some(size);
+                configures.push(PendingConfigure {
+                    window: tracked.window.clone(),
+                    size,
+                });
+            }
+        }
+
+        configures
+    }
+
+    /// Advance all animations. Returns true while a redraw is still needed.
+    ///
+    /// One `now` for the whole frame, so windows animating together stay in
+    /// lockstep regardless of how long iterating over them takes.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        let mut animating = false;
+        for tracked in self.tracked.values_mut() {
+            // Not `||`, which would short-circuit and leave the second axis
+            // un-ticked whenever the first was still moving.
+            let x = tracked.x.tick(now);
+            let y = tracked.y.tick(now);
+            animating |= x | y;
+        }
+        animating
+    }
+
+    /// Visible windows with their current positions, in ascending z order.
+    ///
+    /// Rounded here, at the boundary with the scene, so the animation itself
+    /// stays in floating point and does not accumulate rounding error.
+    pub fn placements(&self) -> Vec<(Window, Point<i32, Logical>)> {
+        let mut visible: Vec<&Tracked> = self.tracked.values().filter(|t| t.visible).collect();
+        visible.sort_by_key(|t| t.z);
+        visible
+            .iter()
+            .map(|t| {
+                (
+                    t.window.clone(),
+                    Point::from((t.x.current.round() as i32, t.y.current.round() as i32)),
+                )
             })
             .collect()
     }
 
-    pub fn columns(&self) -> impl Iterator<Item = &Column> {
-        self.columns.iter()
+    /// Windows the shell left out of the current layout.
+    pub fn hidden(&self) -> Vec<Window> {
+        self.tracked
+            .values()
+            .filter(|t| !t.visible)
+            .map(|t| t.window.clone())
+            .collect()
     }
 }
 
-fn elapsed_ms(since: Instant) -> f64 {
-    since.elapsed().as_secs_f64() * 1000.0
+fn elapsed_ms(since: Instant, now: Instant) -> f64 {
+    now.saturating_duration_since(since).as_secs_f64() * 1000.0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
-    /// The strip's geometry is pure arithmetic, so it can be tested without a
-    /// Wayland surface. Only the parts that don't need a `Window` are covered
-    /// here; column bookkeeping is exercised through the compositor.
-    fn strip(width: i32) -> Strip {
-        Strip::new((width, 1080).into())
+    // `Tracked` needs a real `Window`, which needs a Wayland surface, so these
+    // cover `Animated` directly. End-to-end placement is covered by the
+    // integration check in scripts/dev-nested.sh.
+
+    fn spec() -> SpringSpec {
+        SpringSpec {
+            stiffness: 220.0,
+            damping: 26.0,
+            mass: 1.0,
+        }
+    }
+
+    /// A fixed instant plus offsets, so tests are deterministic and do not
+    /// sleep. This is the payoff for passing `now` in rather than reading the
+    /// clock inside `Animated`.
+    fn at(base: Instant, ms: u64) -> Instant {
+        base + Duration::from_millis(ms)
     }
 
     #[test]
-    fn empty_strip_targets_origin() {
-        let s = strip(1920);
-        assert_eq!(s.target_offset_for_focus(), 0.0);
-        assert_eq!(s.columns().count(), 0);
-        assert!(s.positions().is_empty());
+    fn snapping_lands_exactly_and_stops() {
+        let now = Instant::now();
+        let mut a = Animated::new(0.0);
+        a.snap_to(619.0);
+        assert_eq!(a.current, 619.0);
+        assert!(!a.tick(now), "a snapped value should not be animating");
     }
 
     #[test]
-    fn column_width_defaults_to_half_the_viewport() {
-        assert_eq!(strip(1920).default_column_width(), 960);
-        assert_eq!(strip(2560).default_column_width(), 1280);
+    fn animating_starts_where_it_was() {
+        let now = Instant::now();
+        let mut a = Animated::new(100.0);
+        a.animate_to(500.0, spec(), now);
+        a.tick(now);
+        assert_eq!(a.current, 100.0);
     }
 
     #[test]
-    fn column_width_has_a_floor_on_narrow_viewports() {
-        // A phone-width viewport must not produce unusably narrow columns. The
-        // strip clamps, and the shell is expected to switch to one-column-per-
-        // viewport at that size rather than relying on this.
-        assert_eq!(strip(320).default_column_width(), 240);
+    fn animating_to_the_current_value_does_not_start_a_spring() {
+        let now = Instant::now();
+        let mut a = Animated::new(42.0);
+        a.animate_to(42.0, spec(), now);
+        assert!(!a.tick(now));
+        assert_eq!(a.current, 42.0);
     }
 
     #[test]
-    fn column_height_leaves_a_gap_top_and_bottom() {
-        assert_eq!(strip(1920).column_height(), 1080 - GAP * 2);
+    fn redirecting_to_the_same_target_does_not_restart_the_clock() {
+        // The shell re-sends its whole layout on every change. If an unchanged
+        // window restarted its spring each time, a window would freeze in place
+        // whenever anything else on screen moved.
+        let now = Instant::now();
+        let mut a = Animated::new(0.0);
+        a.animate_to(500.0, spec(), now);
+        let started = a.started;
+        a.animate_to(500.0, spec(), at(now, 100));
+        assert_eq!(a.started, started, "clock should not have restarted");
     }
 
     #[test]
-    fn column_x_accumulates_widths_and_gaps() {
-        let mut s = strip(1920);
-        // Bypass push() so this test needs no real Window.
-        s.columns = Vec::new();
-        assert_eq!(s.column_x(0), GAP);
+    fn redirecting_elsewhere_carries_velocity() {
+        // The property the scroll depends on: redirecting mid-flight stays C1
+        // continuous instead of visibly restarting from a standstill.
+        let now = Instant::now();
+        let mut a = Animated::new(0.0);
+        a.animate_to(500.0, spec(), now);
+
+        // 80ms in, the spring is moving fast.
+        let mid = at(now, 80);
+        a.tick(mid);
+        let velocity = a.velocity(mid);
+        assert!(velocity > 1.0, "spring should be moving, got {velocity}");
+        let position = a.current;
+
+        a.animate_to(-100.0, spec(), mid);
+        let redirected = a.spring.expect("redirect should have created a spring");
+        assert!(
+            (redirected.velocity_at(0.0) - velocity).abs() < 1e-9,
+            "velocity should carry: {velocity} vs {}",
+            redirected.velocity_at(0.0)
+        );
+        assert!(
+            (redirected.value_at(0.0) - position).abs() < 1e-9,
+            "position should carry: {position} vs {}",
+            redirected.value_at(0.0)
+        );
+    }
+
+    #[test]
+    fn a_spring_eventually_settles_on_its_target() {
+        let now = Instant::now();
+        let mut a = Animated::new(0.0);
+        a.animate_to(500.0, spec(), now);
+
+        let settle = a
+            .spring
+            .expect("spring")
+            .settle_time_ms(20_000.0, 4.0)
+            .ceil() as u64;
+        assert!(!a.tick(at(now, settle)), "should have stopped animating");
+        assert_eq!(a.current, 500.0, "should land exactly on the target");
+    }
+
+    #[test]
+    fn a_frame_samples_every_window_at_the_same_instant() {
+        // Two values animating together must stay in lockstep. Reading the
+        // clock per value would let them drift by however long the loop takes.
+        let now = Instant::now();
+        let mut a = Animated::new(0.0);
+        let mut b = Animated::new(0.0);
+        a.animate_to(500.0, spec(), now);
+        b.animate_to(500.0, spec(), now);
+
+        let frame = at(now, 50);
+        a.tick(frame);
+        b.tick(frame);
+        assert_eq!(a.current, b.current);
     }
 }

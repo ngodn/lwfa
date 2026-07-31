@@ -7,7 +7,8 @@ machine's physical display and in a browser on any other device, with layout
 that responds to the viewport it's being viewed on.
 
 - **Engine**: Rust, [Smithay](https://smithay.github.io/), wgpu. Wayland
-  protocol, DRM/KMS, per-surface encode, native local compositing.
+  protocol, DRM/KMS, per-surface encode, native local compositing. Owns
+  mechanism, not policy.
 - **Shell**: TypeScript, React 19, [Motion](https://motion.dev/),
   [PreTeXt.js](https://pretextjs.dev/). Runs unchanged against either backend.
 - **Layout**: scrollable tiling, following [niri](https://github.com/niri-wm/niri).
@@ -19,11 +20,12 @@ structural. It records the decisions and, more importantly, why.
 
 ## Status
 
-Milestone 1 of 7. See the build order in the architecture doc.
+Milestone 3 of 7. See the build order in the architecture doc.
 
 - [x] **1. Spring parity harness** — `crates/lwfa-spring`, `packages/spring`
 - [x] **2. Smithay compositor, nested backend** — `crates/lwfa-engine`
-- [ ] 3. Shell protocol v0 and the layer-shell chrome path
+- [x] **3. Shell protocol v0** — `crates/lwfa-proto`, `packages/proto`, `packages/shell`
+      (the layer-shell chrome path is *not* done; see the architecture doc)
 - [ ] 4. Per-surface encode and the remote backend
 - [ ] 5. Appearance vocabulary in both backends
 - [ ] 6. iPad: WebCodecs, gestures, responsive breakpoints
@@ -50,22 +52,42 @@ ordinary window. Your session is never at risk.
 cargo run -p lwfa-engine
 ```
 
-| Bind | Action |
-|---|---|
-| `Alt+Return` | spawn a terminal |
-| `Alt+H` / `Alt+Left` | focus the column to the left |
-| `Alt+L` / `Alt+Right` | focus the column to the right |
-| `Alt+W` | close the focused window |
-| `Alt+Q` | quit |
+Then start the shell, which is what actually lays windows out:
 
-Alt rather than Super, because the host compositor sees keys first and usually
-has Super bound. The TTY backend will move these to Super.
+```sh
+pnpm --filter @lwfa/shell dev     # http://localhost:5173
+```
+
+Until a shell connects the engine runs in **safe mode**: focused window
+full-screen, and that is all. Safe mode is deliberately not a layout engine, so
+that layout policy exists in exactly one place. See `crates/lwfa-engine/src/layout.rs`.
+
+| Bind | Handled by | Action |
+|---|---|---|
+| `Alt+Return` | engine | spawn a terminal |
+| `Alt+Q` | engine | quit |
+| `Alt+H` / `Alt+Left` | shell | focus the column to the left |
+| `Alt+L` / `Alt+Right` | shell | focus the column to the right |
+| `Alt+W` | shell | close the focused window |
+
+Focus order is layout policy, so the engine forwards those keys to the shell
+rather than acting on them. Alt rather than Super, because the host compositor
+sees keys first and usually has Super bound. The TTY backend will move these to
+Super.
 
 Environment:
 
 - `LWFA_TERMINAL` — which terminal to spawn (default `alacritty`)
 - `LWFA_NO_AUTOSTART` — set to skip opening a terminal on launch
+- `LWFA_SHELL_ADDR` — where to listen for a shell (default `127.0.0.1:9843`)
 - `RUST_LOG=debug` — Smithay is chatty at `info`; `warn` is usually the useful level
+
+> The shell socket has **no authentication** and can spawn processes, so it is
+> bound to localhost. Do not expose it off the machine until milestone 7.
+
+On Hyprland, `scripts/dev-nested.sh` launches the engine pinned to a specific
+workspace (default 2, override with `LWFA_DEV_WORKSPACE`) so it never lands on
+whatever you are using.
 
 ## Tests
 

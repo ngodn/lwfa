@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 lwfa-spring = { path = "../lwfa-spring" }
+lwfa-proto = { path = "../lwfa-proto" }
 
 # Feature set matches Smithay's own `smallvil` example at the v0.7.0 tag, which
 # is the minimum for a nested compositor. `backend_winit` brings the GL
@@ -18,6 +19,11 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "wayland_frontend",
     "desktop",
 ] }
+
+# Blocking WebSocket server for the shell protocol, run on its own thread and
+# bridged into calloop. No async runtime: one socket does not justify it.
+tungstenite = "0.30.0"
+serde_json = "1.0.151"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

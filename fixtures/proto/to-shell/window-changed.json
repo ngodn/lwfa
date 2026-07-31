@@ -1,0 +1,8 @@
+{
+  "type": "windowChanged",
+  "window": {
+    "id": 7,
+    "appId": "firefox",
+    "title": "lwfa — not an em dash test, just unicode"
+  }
+}

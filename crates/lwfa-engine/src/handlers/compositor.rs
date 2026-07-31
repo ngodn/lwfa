@@ -41,6 +41,12 @@ impl CompositorHandler for Lwfa {
         }
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
+
+        // Titles change over a window's life, so this is checked per commit
+        // and diffed rather than assumed fixed at map time.
+        if let Some(id) = self.layout.id_of_surface(surface) {
+            self.report_window_changes(id);
+        }
     }
 }
 

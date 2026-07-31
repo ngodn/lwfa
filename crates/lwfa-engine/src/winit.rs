@@ -54,7 +54,7 @@ pub fn init_winit(
     output.set_preferred(mode);
 
     data.state.space.map_output(&output, (0, 0));
-    data.state.strip.set_output_size(mode.size.to_logical(1));
+    data.state.layout.set_output_size(mode.size.to_logical(1));
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
@@ -86,10 +86,20 @@ pub fn init_winit(
                         None,
                         None,
                     );
-                    // The strip is a viewport onto the columns, so a resize
-                    // changes what is visible without resizing any column.
-                    // That is the whole point of the layout model.
-                    state.strip.set_output_size(size.to_logical(1));
+                    // Tell the shell and let it re-lay-out. The engine does
+                    // not reflow on its own: that would be layout policy.
+                    let logical = size.to_logical(1);
+                    state.layout.set_output_size(logical);
+                    state.send_to_shell(lwfa_proto::ToShell::OutputChanged {
+                        output: lwfa_proto::Output {
+                            width: logical.w,
+                            height: logical.h,
+                            scale: 1.0,
+                        },
+                    });
+                    if state.layout.mode() == crate::layout::Mode::Safe {
+                        state.apply_safe_mode();
+                    }
                     state.apply_layout();
                 }
 

@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "protocolVersion": 0,
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "scale": 1.0
+  },
+  "windows": [],
+  "focused": null
+}

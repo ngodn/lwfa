@@ -1,0 +1,22 @@
+{
+  "type": "hello",
+  "protocolVersion": 0,
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "scale": 1.0
+  },
+  "windows": [
+    {
+      "id": 1,
+      "appId": "Alacritty",
+      "title": "~/development/lwfa"
+    },
+    {
+      "id": 2,
+      "appId": null,
+      "title": null
+    }
+  ],
+  "focused": 1
+}
