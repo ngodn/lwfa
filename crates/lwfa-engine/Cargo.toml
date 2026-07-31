@@ -1,0 +1,26 @@
+[package]
+name = "lwfa-engine"
+version = "0.1.0"
+description = "The lwfa compositor: Wayland protocol, layout, and rendering"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lwfa-spring = { path = "../lwfa-spring" }
+
+# Feature set matches Smithay's own `smallvil` example at the v0.7.0 tag, which
+# is the minimum for a nested compositor. `backend_winit` brings the GL
+# renderer with it. DRM/KMS and libinput arrive with the TTY backend later.
+smithay = { version = "0.7.0", default-features = false, features = [
+    "backend_winit",
+    "wayland_frontend",
+    "desktop",
+] }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true

@@ -298,7 +298,14 @@ non-NVIDIA smoke test.
 1. **Spring parity harness.** ✅ Done. Small, and it de-risks the thing most
    likely to silently go wrong later.
 2. **Smithay compositor** on the nested backend, able to open a terminal.
-   Hardcoded layout, no shell.
+   ✅ Done. `crates/lwfa-engine`. Scrollable strip driven by keybinds, with the
+   scroll offset animated by `lwfa-spring`, so milestone 1 is load-bearing
+   rather than decorative. No shell protocol yet.
+
+   Two things it deliberately does *not* have: interactive move and resize
+   grabs. Under scrollable tiling windows do not float, so `move_request` and
+   `resize_request` are no-ops. That removes most of what a floating
+   compositor's xdg-shell code does.
 3. **Shell protocol v0** plus the layer-shell chrome path. React shell owns the
    scrollable strip (section 2.3) and dictates geometry, engine obeys. Local
    path end to end. The strip's scroll offset is the first thing driven by a

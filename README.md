@@ -22,7 +22,7 @@ structural. It records the decisions and, more importantly, why.
 Milestone 1 of 7. See the build order in the architecture doc.
 
 - [x] **1. Spring parity harness** — `crates/lwfa-spring`, `packages/spring`
-- [ ] 2. Smithay compositor, nested backend
+- [x] **2. Smithay compositor, nested backend** — `crates/lwfa-engine`
 - [ ] 3. Shell protocol v0 and the layer-shell chrome path
 - [ ] 4. Per-surface encode and the remote backend
 - [ ] 5. Appearance vocabulary in both backends
@@ -40,6 +40,32 @@ Pinned in `.mise.toml` and `rust-toolchain.toml`:
 mise install
 pnpm install
 ```
+
+## Running
+
+lwfa runs nested inside whatever compositor you are already using, as an
+ordinary window. Your session is never at risk.
+
+```sh
+cargo run -p lwfa-engine
+```
+
+| Bind | Action |
+|---|---|
+| `Alt+Return` | spawn a terminal |
+| `Alt+H` / `Alt+Left` | focus the column to the left |
+| `Alt+L` / `Alt+Right` | focus the column to the right |
+| `Alt+W` | close the focused window |
+| `Alt+Q` | quit |
+
+Alt rather than Super, because the host compositor sees keys first and usually
+has Super bound. The TTY backend will move these to Super.
+
+Environment:
+
+- `LWFA_TERMINAL` — which terminal to spawn (default `alacritty`)
+- `LWFA_NO_AUTOSTART` — set to skip opening a terminal on launch
+- `RUST_LOG=debug` — Smithay is chatty at `info`; `warn` is usually the useful level
 
 ## Tests
 

@@ -356,6 +356,61 @@ mod tests {
     }
 
     #[test]
+    fn supplied_velocity_is_the_initial_rate_of_change() {
+        // Motion stores velocity negated and per-millisecond, so it is not
+        // obvious that the public units/second value comes back out as the
+        // actual initial slope. It does, and the strip layout depends on it.
+        for velocity in [0.0, 500.0, -500.0, 2400.0] {
+            let s = Spring::new(
+                SpringOptions {
+                    velocity,
+                    ..Default::default()
+                },
+                0.0,
+                100.0,
+            );
+            close(s.velocity_at(0.0), velocity);
+
+            // Cross-check against a finite difference of the position curve,
+            // so this tests the solution rather than restating the formula.
+            let h = 1e-6;
+            let slope_per_ms = (s.value_at(h) - s.value_at(0.0)) / h;
+            let eps = 1e-3 * velocity.abs().max(1.0);
+            assert!(
+                (slope_per_ms * 1000.0 - velocity).abs() <= eps,
+                "finite-difference slope {} should approximate {velocity}",
+                slope_per_ms * 1000.0
+            );
+        }
+    }
+
+    #[test]
+    fn interrupting_a_spring_preserves_position_and_velocity() {
+        // This is the property the scrollable strip relies on: redirecting a
+        // scroll mid-flight must stay C1 continuous, or the animation visibly
+        // restarts. It is also how a released touch flick will hand its
+        // momentum to the settle animation.
+        let first = Spring::new(SpringOptions::default(), 0.0, 100.0);
+
+        for t in [1.0, 50.0, 200.0, 400.0] {
+            let position = first.value_at(t);
+            let velocity = first.velocity_at(t);
+
+            let second = Spring::new(
+                SpringOptions {
+                    velocity,
+                    ..Default::default()
+                },
+                position,
+                300.0,
+            );
+
+            close(second.value_at(0.0), position);
+            close(second.velocity_at(0.0), velocity);
+        }
+    }
+
+    #[test]
     fn converges_on_target() {
         for opts in [
             SpringOptions::default(),

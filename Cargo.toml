@@ -9,7 +9,11 @@ license = "MIT"
 repository = "https://github.com/ngodn/lwfa"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`, because a compositor genuinely needs unsafe at the FFI
+# and GPU boundaries. Deny makes each one an explicit, justified opt-out at the
+# call site rather than a blanket allowance. Pure crates like lwfa-spring keep
+# `#![forbid(unsafe_code)]` at the top of the crate instead.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 # The compositor hot path runs per-frame per-surface. Silent precision or
