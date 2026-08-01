@@ -340,3 +340,84 @@ button:disabled {
 .stack li.focused .pick {
   border-color: var(--accent);
 }
+
+/* Password prompt.
+   Centred and deliberately plain: it is the first thing seen on a tablet, and
+   the only job is one field and one button. */
+.login {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.login form {
+  width: min(22rem, 100%);
+  display: grid;
+  gap: 0.6rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+
+.login h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: 0.04em;
+}
+
+.login-sub {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.login label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.login input {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem;
+  /* 16px is the threshold below which iOS zooms the page on focus, which then
+     leaves the layout scrolled sideways. */
+  font-size: 16px;
+  min-height: 3rem;
+}
+
+.login input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.login button {
+  min-height: 3rem;
+  border-color: var(--accent);
+}
+
+.login-error {
+  margin: 0;
+  color: var(--bad);
+  font-size: 0.85rem;
+}
+
+.login-hint {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.signout {
+  margin-left: 0.6rem;
+  min-height: 0;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.75rem;
+}

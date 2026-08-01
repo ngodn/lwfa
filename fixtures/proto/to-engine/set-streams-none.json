@@ -1,4 +1,5 @@
 {
   "type": "setStreams",
-  "windows": []
+  "windows": [],
+  "h264": true
 }

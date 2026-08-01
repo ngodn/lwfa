@@ -222,7 +222,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                     toplevel.send_close();
                 }
             }
-            ToEngine::SetStreams { windows } => {
+            ToEngine::SetStreams { windows, h264 } => {
                 // Total, like SetLayout: anything not listed stops streaming.
                 let next: std::collections::HashSet<_> = windows.into_iter().collect();
                 // Force a fresh, self-contained frame for every window named
@@ -239,6 +239,9 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 // only costs one capture per window.
                 for id in &next {
                     state.capture.invalidate(*id);
+                }
+                if let Some(worker) = state.encoders.as_ref() {
+                    worker.set_client_supports_h264(h264);
                 }
                 if let Some(worker) = state.encoders.as_ref() {
                     worker.request_keyframes();

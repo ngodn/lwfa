@@ -29,6 +29,8 @@ export type Status =
   | "incompatible"
   /** A newer shell took over. This one has stopped on purpose. */
   | "replaced"
+  /** The engine refused the password. Retrying is pointless until it changes. */
+  | "unauthorized"
 
 export interface ConnectionHandlers {
   onMessage: (message: ToShell) => void
@@ -48,6 +50,17 @@ export class Connection {
   #retryMs = RECONNECT_MIN_MS
   #timer: ReturnType<typeof setTimeout> | null = null
   #closed = false
+  /**
+   * Whether this connection ever completed a handshake.
+   *
+   * A rejected password and an unreachable engine look identical to a browser:
+   * both surface as a generic close with code 1006, because the HTTP status of
+   * a failed WebSocket upgrade is deliberately not exposed to script. What
+   * *does* distinguish them is whether `hello` ever arrived — the engine sends
+   * it immediately on a successful handshake, so a close without one means the
+   * upgrade never completed.
+   */
+  #everGreeted = false
 
   constructor(url: string, handlers: ConnectionHandlers) {
     this.#url = url
@@ -99,6 +112,7 @@ export class Connection {
       }
 
       if (message.type === "hello") {
+        this.#everGreeted = true
         if (message.protocolVersion !== PROTOCOL_VERSION) {
           const detail = `engine speaks protocol ${message.protocolVersion}, shell speaks ${PROTOCOL_VERSION}`
           console.error(detail)
@@ -123,6 +137,15 @@ export class Connection {
         // would then displace this one back, forever. Stop instead.
         this.#closed = true
         this.#handlers.onStatus("replaced")
+        return
+      }
+
+      if (!this.#everGreeted) {
+        // Never got past the handshake. Almost always a rejected password;
+        // retrying on a loop would just hammer the engine, so stop and let the
+        // user correct it.
+        this.#closed = true
+        this.#handlers.onStatus("unauthorized")
         return
       }
 

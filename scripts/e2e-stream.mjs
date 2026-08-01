@@ -71,7 +71,7 @@ const send = (m) => socket.send(encode(m))
 function push(streams = true) {
   const windows = layout(strip, output, DEFAULT_CONFIG)
   send({ type: "setLayout", windows, animate: null })
-  send({ type: "setStreams", windows: streams ? windows.map((w) => w.id) : [] })
+  send({ type: "setStreams", windows: streams ? windows.map((w) => w.id) : [], h264: true })
 }
 
 socket.addEventListener("message", (event) => {

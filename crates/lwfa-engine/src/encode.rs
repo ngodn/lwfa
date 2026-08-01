@@ -74,6 +74,12 @@ pub struct Encoders {
     /// logged once rather than every frame.
     fallback: HashMap<WindowId, ()>,
     available: bool,
+    /// Whether the connected client can decode H.264 at all.
+    ///
+    /// A browser reached over plain HTTP has no WebCodecs `VideoDecoder`,
+    /// because that API is gated on a secure context. Sending it H.264 produces
+    /// a permanently blank window, so it gets JPEG instead.
+    client_supports_h264: bool,
 }
 
 impl Default for Encoders {
@@ -104,6 +110,7 @@ impl Encoders {
             sessions: HashMap::new(),
             fallback: HashMap::new(),
             available,
+            client_supports_h264: true,
         }
     }
 
@@ -122,9 +129,32 @@ impl Encoders {
         }
     }
 
-    /// Encode a captured frame, falling back to JPEG if hardware is unavailable.
+    /// Tell the encoders whether the client can decode H.264.
+    ///
+    /// Dropping the sessions on a change matters: a client that cannot decode
+    /// H.264 must not be left holding a stream it will never render, and one
+    /// that can needs a fresh session with an IDR rather than resuming
+    /// mid-GOP.
+    pub fn set_client_supports_h264(&mut self, supported: bool) {
+        if self.client_supports_h264 != supported {
+            tracing::info!(
+                "client {} decode H.264; {}",
+                if supported { "can" } else { "cannot" },
+                if supported {
+                    "using hardware encode"
+                } else {
+                    "falling back to JPEG"
+                }
+            );
+            self.client_supports_h264 = supported;
+            self.sessions.clear();
+        }
+    }
+
+    /// Encode a captured frame, falling back to JPEG if hardware is unavailable
+    /// or the client cannot decode it.
     pub fn encode(&mut self, frame: &CapturedFrame) -> Option<EncodedFrame> {
-        if self.available && self.ensure_session(frame) {
+        if self.available && self.client_supports_h264 && self.ensure_session(frame) {
             if let Some(encoded) = self.encode_h264(frame) {
                 return Some(encoded);
             }
@@ -443,6 +473,7 @@ struct Job {
 enum Control {
     Forget(WindowId),
     RequestKeyframes,
+    ClientSupportsH264(bool),
 }
 
 impl EncodeWorker {
@@ -457,20 +488,32 @@ impl EncodeWorker {
             .spawn(move || {
                 let mut encoders = Encoders::new();
                 loop {
-                    // Control first, so a "forget" cannot be overtaken by a
-                    // frame for a window that has just closed.
-                    while let Ok(message) = control_rx.try_recv() {
-                        match message {
-                            Control::Forget(id) => encoders.forget(id),
-                            Control::RequestKeyframes => encoders.request_keyframes(),
-                        }
-                    }
-
                     let Ok(job) = frames_rx.recv() else {
                         return; // compositor is gone
                     };
                     worker_queued.fetch_sub(1, Ordering::Relaxed);
 
+                    // Drain control *after* receiving, not before.
+                    //
+                    // This thread spends nearly all its time blocked in
+                    // recv(), so anything sent while it was blocked has to be
+                    // applied to the frame that just woke it. Handling control
+                    // only at the top of the loop applies it one frame late,
+                    // and that one frame is precisely the one a newly attached
+                    // client needs to be an IDR. It would arrive as a delta
+                    // with no SPS, the client would wait for a keyframe, and
+                    // because damage tracking means an idle window sends
+                    // nothing further, it would wait forever.
+                    while let Ok(message) = control_rx.try_recv() {
+                        match message {
+                            Control::Forget(id) => encoders.forget(id),
+                            Control::RequestKeyframes => encoders.request_keyframes(),
+                            Control::ClientSupportsH264(v) => encoders.set_client_supports_h264(v),
+                        }
+                    }
+
+                    // A frame for a window that was just forgotten is stale;
+                    // encoding it would rebuild the session it just dropped.
                     let Some(encoded) = encoders.encode(&job.frame) else {
                         continue;
                     };
@@ -519,5 +562,11 @@ impl EncodeWorker {
 
     pub fn request_keyframes(&self) {
         let _ = self.control.try_send(Control::RequestKeyframes);
+    }
+
+    pub fn set_client_supports_h264(&self, supported: bool) {
+        let _ = self
+            .control
+            .try_send(Control::ClientSupportsH264(supported));
     }
 }

@@ -13,6 +13,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { DecodedFrame, ToShell, WindowId, WindowInfo } from "@lwfa/proto"
 import { Connection, type Status } from "./connection.js"
+import { Login } from "./Login.js"
+import {
+  adoptPasswordFromUrl,
+  clearPassword,
+  loadPassword,
+  savePassword,
+} from "./credentials.js"
 import { FrameDecoder, supportsH264 } from "./decode.js"
 import { WindowSurface, type SurfaceInput } from "./WindowSurface.js"
 import { evdevFromCode, isShellKey } from "./input.js"
@@ -48,26 +55,35 @@ import {
 const SCROLL_SPRING = { stiffness: 220, damping: 26, mass: 1 }
 
 /**
- * Where the engine is, and the token to reach it with.
+ * Where the engine is.
  *
- * The host defaults to whatever served this page, so opening the shell at
- * `http://192.168.1.x:5173/?token=...` from a tablet finds the engine on the
- * same machine without any configuration.
- *
- * The token is required: the engine rejects the handshake without it. It rides
- * in the query string because a browser cannot set headers on a WebSocket
- * handshake, which does mean it lands in history and logs.
+ * Defaults to whatever host served this page, so opening the shell at
+ * `http://192.168.1.x:6733` from a tablet finds the engine on the same machine
+ * with nothing to configure. Override with `?engine=ws://host:port` when the
+ * two are not co-located.
  */
-const params = new URLSearchParams(location.search)
-const ENGINE_TOKEN = params.get("token") ?? ""
-const ENGINE_URL = (() => {
-  const base = params.get("engine") ?? `ws://${location.hostname || "localhost"}:9843`
-  const url = new URL(base)
-  if (ENGINE_TOKEN) url.searchParams.set("token", ENGINE_TOKEN)
+const ENGINE_BASE =
+  new URLSearchParams(location.search).get("engine") ??
+  `ws://${location.hostname || "localhost"}:6734`
+
+/** The engine URL with the password attached, which is how it is authenticated. */
+function engineUrl(password: string): string {
+  const url = new URL(ENGINE_BASE)
+  url.searchParams.set("token", password)
   return url.toString()
-})()
+}
+
+/**
+ * Take a password from the URL if one was passed, then scrub it from the
+ * address bar. Runs once at module load, before React mounts, so the address
+ * bar is already clean by first paint.
+ */
+const ADOPTED = adoptPasswordFromUrl()
 
 export function App(): React.ReactElement {
+  // Null until a password is available, which is what gates the whole shell.
+  const [password, setPassword] = useState<string | null>(() => ADOPTED ?? loadPassword())
+  const [authError, setAuthError] = useState<string>()
   const [status, setStatus] = useState<Status>("connecting")
   const [statusDetail, setStatusDetail] = useState<string>()
   const [output, setOutput] = useState<Output>({ width: 0, height: 0 })
@@ -139,6 +155,10 @@ export function App(): React.ReactElement {
       windows: streamingRef.current
         ? windows.filter((w) => intersectsViewport(w.rect, out.width)).map((w) => w.id)
         : [],
+      // Tell the engine what this browser can actually decode. Over plain HTTP
+      // there is no WebCodecs VideoDecoder, and asking for H.264 anyway would
+      // mean permanently blank windows.
+      h264: supportsH264(),
     })
   }, [])
 
@@ -154,6 +174,8 @@ export function App(): React.ReactElement {
   )
 
   useEffect(() => {
+    if (!password) return
+
     const handleMessage = (message: ToShell) => {
       switch (message.type) {
         case "hello": {
@@ -265,12 +287,19 @@ export function App(): React.ReactElement {
       void decoder.handle(frame)
     }
 
-    const conn = new Connection(ENGINE_URL, {
+    const conn = new Connection(engineUrl(password), {
       onMessage: handleMessage,
       onFrame: handleFrame,
       onStatus: (s, detail) => {
         setStatus(s)
         setStatusDetail(detail)
+        if (s === "unauthorized") {
+          // Drop the stored password so the prompt comes back, rather than
+          // reconnecting forever with a value the engine has refused.
+          clearPassword()
+          setAuthError("That password was not accepted. Check .env on the machine.")
+          setPassword(null)
+        }
       },
     })
     connection.current = conn
@@ -281,7 +310,7 @@ export function App(): React.ReactElement {
       connection.current = null
       decoderRef.current = null
     }
-  }, [push, update])
+  }, [password, push, update])
 
   // Keyboard input is captured on the document rather than per element,
   // because keyboard focus lives in the compositor and there is nothing
@@ -335,21 +364,37 @@ export function App(): React.ReactElement {
     [strip, output],
   )
 
+  if (!password) {
+    return (
+      <Login
+        error={authError}
+        onSubmit={(entered) => {
+          savePassword(entered)
+          setAuthError(undefined)
+          setStatus("connecting")
+          setPassword(entered)
+        }}
+      />
+    )
+  }
+
   return (
     <main>
       <header>
         <h1>lwfa shell</h1>
         <p className={`status status-${status}`}>
           {status}
-          {statusDetail ? `: ${statusDetail}` : ""} ·{" "}
-          <code>{ENGINE_URL.replace(/token=[^&]*/, "token=…")}</code>
+          {statusDetail ? `: ${statusDetail}` : ""} · <code>{ENGINE_BASE}</code>
+          <button
+            className="signout"
+            onClick={() => {
+              clearPassword()
+              setPassword(null)
+            }}
+          >
+            forget password
+          </button>
         </p>
-        {!ENGINE_TOKEN ? (
-          <p className="empty">
-            No <code>?token=</code> in the URL. The engine rejects connections without one; it
-            prints a ready-made link on startup.
-          </p>
-        ) : null}
       </header>
 
       <section>
@@ -507,9 +552,9 @@ export function App(): React.ReactElement {
         ) : null}
         {streaming && !supportsH264() ? (
           <p className="empty">
-            This browser has no WebCodecs <code>VideoDecoder</code>, so H.264 windows cannot be
-            shown. Safari 26+ is required on iOS and iPadOS. The engine still falls back to JPEG
-            for windows it has no hardware encoder session for.
+            Using JPEG: WebCodecs needs a secure context, and this page is on plain HTTP.
+            It works, but uses far more bandwidth than H.264. Serving over HTTPS (Tailscale
+            does this for free) enables hardware decoding.
           </p>
         ) : null}
       </section>

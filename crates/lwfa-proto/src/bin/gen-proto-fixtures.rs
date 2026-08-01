@@ -177,9 +177,23 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
             "set-streams",
             ToEngine::SetStreams {
                 windows: vec![WindowId(1), WindowId(2)],
+                h264: true,
             },
         ),
-        ("set-streams-none", ToEngine::SetStreams { windows: vec![] }),
+        (
+            "set-streams-none",
+            ToEngine::SetStreams {
+                windows: vec![],
+                h264: true,
+            },
+        ),
+        (
+            "set-streams-jpeg-only",
+            ToEngine::SetStreams {
+                windows: vec![WindowId(1)],
+                h264: false,
+            },
+        ),
     ];
 
     (to_shell, to_engine)

@@ -113,7 +113,14 @@ export type ToEngine =
    * Which windows the shell wants pixels for. Total: anything not listed stops
    * streaming. A shell compositing natively asks for none.
    */
-  | { type: "setStreams"; windows: WindowId[] }
+  /**
+   * Which windows to stream, and whether this client can decode H.264.
+   *
+   * `h264: false` is not hypothetical: WebCodecs `VideoDecoder` is only
+   * exposed in a secure context, so a browser reached over plain HTTP on a LAN
+   * address has no H.264 decoder while the same browser on localhost does.
+   */
+  | { type: "setStreams"; windows: WindowId[]; h264: boolean }
   /**
    * Pointer moved within a window. Coordinates are window-relative logical
    * pixels, because during an animation the engine's actual window position
@@ -450,7 +457,7 @@ export function decodeToEngine(text: string): ToEngine {
     }
     case "setStreams": {
       const where = `${at}.setStreams`
-      noExtraKeys(o, ["type", "windows"], where)
+      noExtraKeys(o, ["type", "windows", "h264"], where)
       return {
         type: "setStreams",
         windows: array(o, "windows", where).map((w, i) => {
@@ -459,6 +466,7 @@ export function decodeToEngine(text: string): ToEngine {
           }
           return w
         }),
+        h264: bool(o, "h264", where),
       }
     }
     default:

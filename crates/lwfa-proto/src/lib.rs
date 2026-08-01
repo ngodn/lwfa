@@ -300,7 +300,7 @@ pub enum ToEngine {
     #[serde(rename_all = "camelCase")]
     TouchUp { id: i32 },
 
-    /// Which windows the shell wants pixels for.
+    /// Which windows the shell wants pixels for, and in what form.
     ///
     /// Total, like `SetLayout`: windows not listed stop streaming. A shell that
     /// composites locally (the native backend) asks for none; a browser asks
@@ -309,8 +309,22 @@ pub enum ToEngine {
     /// This is what bounds the encoder budget. Only columns intersecting the
     /// viewport need streaming, so cost scales with viewport width rather than
     /// with how many windows are open. See docs/architecture.md section 2.3.
+    ///
+    /// # Why the codec is the client's call
+    ///
+    /// `h264` false means the client cannot decode H.264 and needs JPEG.
+    ///
+    /// That is not hypothetical. WebCodecs `VideoDecoder` is only exposed in a
+    /// *secure context*, so a browser on `http://192.168.1.x` — exactly how a
+    /// tablet reaches this over a LAN — has no H.264 decoder at all, while the
+    /// same browser on `http://localhost` does. The engine cannot infer this,
+    /// so the client states it.
     #[serde(rename_all = "camelCase")]
-    SetStreams { windows: Vec<WindowId> },
+    SetStreams {
+        windows: Vec<WindowId>,
+        /// Whether the client can decode H.264. False means send JPEG.
+        h264: bool,
+    },
 }
 
 #[cfg(test)]
