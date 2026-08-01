@@ -175,7 +175,7 @@ video streams.
 |---|---|---|
 | Engine | Rust, Smithay, wgpu | Wayland protocol, DRM/KMS, libinput, per-surface encode, local compositing, spring integration |
 | Shell protocol | WebSocket | Window state, appearance vocabulary, animation intents, input events |
-| Shell | TypeScript, React 19, Motion, PreTeXt | Layout policy, chrome, gesture arbitration, responsive breakpoints |
+| Shell | TypeScript, React 19, shadcn/ui, Motion, PreTeXt | Layout policy, chrome, gesture arbitration, responsive breakpoints |
 | Remote backend | TypeScript, WebCodecs | Per-surface decode, appearance vocabulary via CSS, spring integration |
 
 The shell does not know which backend it is talking to. That is the point.
@@ -187,6 +187,73 @@ wlroots and KDE protocol extensions, and it is proven at scale by `cosmic-comp`
 **Motion** (formerly Framer Motion, package `motion`, imported from
 `motion/react`) animates shell chrome. Note: `react-motion` is a different,
 long-dead library.
+
+**shadcn/ui** on Tailwind v4 for the chrome. Not a component library in the
+usual sense: the components are copied into `packages/shell/src/components/ui`
+and owned here, which matters because two of them needed patching for this
+repo's `exactOptionalPropertyTypes`. Fonts are self-hosted rather than from a
+CDN; the machine is frequently not on the internet, and a shell that waits on a
+font before painting is a shell that never paints.
+
+### 4.1 Rendering, and why the shell is split the way it is
+
+A remote desktop is an unusual React application: part of the tree updates many
+times a second forever, and the rest updates when somebody taps a button. Left
+alone, the two contaminate each other, so the split is structural rather than a
+matter of adding `memo` later.
+
+- **Decoded frames are not React state.** They live in a per-window external
+  store (`lib/frames.ts`) that each surface subscribes to by id. A frame for one
+  window wakes exactly one component. Held in a `Map` in a parent's state, every
+  frame from every window would re-render the whole tree including the
+  navigation.
+- **Preferences are an external store too** (`lib/prefs.ts`), for the same
+  reason: they are read almost everywhere and change almost never, and a context
+  would walk every consumer on each change.
+- **The desktop is passed to the chrome as `children`**, so opening a panel
+  cannot re-render a window surface.
+- **Session state and session actions are separate contexts.** Actions never
+  change; state changes constantly. A component that only calls something should
+  not re-render because something else *is* something.
+
+`ImageBitmap`s hold GPU memory and are not collected promptly, so every one that
+is replaced or dropped is closed explicitly. Forgetting that is a leak that only
+shows up after an hour.
+
+### 4.2 The navigation rail
+
+The rail is two clusters with the slack between them: controls used constantly
+while working are anchored to the far end where a thumb rests, and controls
+touched once a week sit at the near end out of accidental reach. That is a
+reachability decision and it survives every edge, every size and every collapse
+tier.
+
+It **measures itself** rather than trusting breakpoints, because "do nine
+buttons fit" is a different question along the bottom of a phone than down its
+side. When they stop fitting, buttons merge into grouped ones rather than
+scrolling or disappearing: nothing becomes unreachable, only differently routed.
+
+Edge, order, visibility, anchoring and size are stored **per device**, not per
+account. A phone wants the bar where a thumb is; the same person on a 27"
+display wants it down the side. Syncing them would make one device's ergonomics
+fight the other's.
+
+### 4.3 Input surfaces are devices, not panels
+
+The on-screen keyboard and gamepad dock across the bottom, full width, rather
+than opening in the side panel. This was got wrong first and is worth recording:
+a keyboard in a 26rem side sheet has nowhere to lay out sixty keys and hides the
+window you are typing into. A two-thumb reach only works along the bottom.
+
+The keyboard **takes space** from the desktop, because typing while the keyboard
+covers the line being edited is the failure it exists to prevent. The gamepad
+**floats** over it: a game wants every pixel and its interesting parts are not
+under your thumbs.
+
+Both send evdev keycodes, never characters. The remote machine holds the xkb
+keymap and does the translation, exactly as it does for a physical keyboard;
+deciding here what layout the far end has would break for anyone whose remote
+machine is not configured like their tablet.
 
 ## 5. The spring parity contract
 
@@ -235,6 +302,10 @@ Notes:
 
 ## 6. Known limits, decided rather than discovered
 
+Some of these have since been resolved; where that happened the entry says so
+rather than being deleted, because the reasoning is still the reason the thing
+is shaped the way it is.
+
 **Responsive windows have a hard ceiling.** `xdg_shell`'s `configure` lets the
 compositor tell a window "you are now 400x800" and the app complies, but native
 apps do not reflow. There is no CSS breakpoint inside GIMP.
@@ -252,22 +323,45 @@ on iOS/iPadOS; `VideoDecoder` specifically has existed in partial form since
 16.4. Below 16.4 needs an MSE or WebRTC fallback. Budget for Safari-specific
 work: background tab throttling, fullscreen behaviour, PWA lifecycle.
 
+In practice the binding constraint has not been Safari's version but the secure
+context requirement: WebCodecs is unavailable over plain HTTP at any version, so
+`SetStreams` carries an `h264` flag and the engine falls back to JPEG per client
+rather than assuming what the browser can decode. Every localhost test passed
+and every LAN test showed blank windows until that was found.
+
 **Touch is clean at the protocol level, messy at the UX level.** `wl_touch`
 exists, with `frame` to batch multi-touch updates and `cancel` for when the
 compositor claims a gesture. Delivering touch is easy. The hard part is that
 Linux apps have never seen a touch event and have 16px hit targets. The gesture
-arbitration layer (what stays a shell gesture vs what becomes a synthetic
-pointer event, scroll-to-wheel, long-press-to-right-click, on-screen keyboard
-via `zwp_virtual_keyboard_manager_v1` / `input-method-unstable-v2`) is probably
-the most product-defining code in the project.
+arbitration layer (what stays a shell gesture and what becomes a synthetic
+pointer event, scroll-to-wheel, long-press-to-right-click) is probably the most
+product-defining code in the project, and is still to be built.
+
+The on-screen keyboard turned out **not** to need
+`zwp_virtual_keyboard_manager_v1` or `input-method-unstable-v2`, which is what
+this section originally expected. Those protocols exist so an unprivileged
+client can inject text; the engine *is* the compositor, so it already owns the
+seat. The keyboard sends evdev keycodes over the shell protocol and the engine
+feeds them to the seat exactly as it does the physical keyboard, which means
+xkb, modifiers and repeat all behave without a second implementation. Those
+protocols become relevant only when something other than lwfa's own shell wants
+to type.
 
 **Latency budget.** Capture → encode → network → decode → present, each stage
 3-15ms. Under 50ms feels responsive, under 30ms feels good, under 16ms is
 game-streaming territory and not worth chasing for v1. Mobile networks will miss
 all of these, so quality/latency adaptation is needed early.
 
-**Security.** This is a remote desktop with full input injection. TLS and real
-authentication before anything is reachable off-localhost. Not a later concern.
+**Security.** This is a remote desktop with full input injection.
+
+Authentication and authorisation now exist (section 10). **TLS still does not.**
+The password and every keystroke after it cross the network in the clear, so the
+socket is only safe on a network you control; anywhere else needs an SSH or
+WireGuard tunnel until TLS lands.
+
+The lack of TLS has a second cost that is easy to miss: WebCodecs requires a
+secure context, so a shell served over plain HTTP has no `VideoDecoder` and
+falls back to JPEG. Encryption and hardware decoding arrive together.
 
 ## 7. Development environment
 
@@ -293,7 +387,71 @@ A VM earns its place later, at packaging: proving lwfa runs on a clean install
 without this machine's config, greetd session integration, and a generic
 non-NVIDIA smoke test.
 
-## 8. Build order
+### 7.1 The nested backend must survive not being looked at
+
+This is the single hardest bug the project has had, and the fix is
+counter-intuitive enough to be worth writing down before somebody reintroduces
+it.
+
+A nested compositor redraws when the host hands it a frame callback, and a host
+stops doing that the moment its window is not visible. For an ordinary nested
+compositor that is correct. It is wrong for lwfa, whose entire premise is that
+the session stays usable from a tablet while nobody is looking at the host
+screen. Two separate faults followed:
+
+1. **Streaming stopped.** Titles, geometry and layout kept working, because
+   those are protocol traffic and owe nothing to rendering, so the shell looked
+   perfectly alive and rendered "waiting for pixels" for every window. The fix
+   is a timer that drives the capture path when the on-screen loop has been
+   quiet, and that also sends frame callbacks: without those the clients would
+   not merely stop streaming, they would stop *running*.
+
+2. **The whole compositor hung.** Asking for the next frame at the end of the
+   current one is the obvious way to keep a render loop going, and it wedges
+   the process the first time the window is never shown. Traced: exactly two
+   redraws happen, 0.24ms apart. The first presents; the second's `submit()`
+   never returns, because the host has not released the first buffer and will
+   not release it for a surface it has never displayed. That blocks the *event
+   loop thread*, so nothing is dispatched at all: no shell events, no protocol
+   traffic, no reply to the host's ping. The host reports "application not
+   responding" and every remote client dies with it.
+
+   The discriminator is timing. A host drives a nested compositor through frame
+   callbacks, so a genuine request cannot arrive sooner than one display
+   interval: 16ms at 60Hz, 5.5ms at 180Hz. Anything faster came from a burst of
+   configures as a window rule placed or full-screened us, and presenting on it
+   is what hangs. `[render].min_present_ms` refuses to present twice within
+   4ms, which is below any real display's interval.
+
+`LWFA_HEARTBEAT=1` logs redraws and ticks per second, because both hangs looked
+identical from outside: a live process with an unresponsive window, and no way
+to tell a spinning loop from an idle one from a blocked syscall.
+
+## 8. Configuration
+
+`configs/defaults.toml`. Settings that were spread across six modules as `const`
+declarations, in one commented place: ports, terminal, Xwayland, encoder limits,
+render timings, layout defaults, and which workspace lwfa's own window should
+take in a host compositor.
+
+Precedence, highest first: environment variables, `.env` (gitignored,
+machine-local, holds `AUTH_PASS`), that file, built-in defaults.
+
+**Loading never fails.** A missing, partial or syntactically broken file falls
+back to defaults with a warning, because a compositor that refuses to start over
+a config typo is one you cannot fix from inside. Unknown keys *are* rejected:
+silently ignoring a typo is the failure mode that wastes an afternoon.
+
+Constants that are facts rather than choices stay in code: the xkb keycode
+offset, the protocol version, the frame header layout. Making those configurable
+would invite someone to set them wrong.
+
+The shell cannot read the file, so `scripts/gen-config.mjs` generates its layout
+defaults from the same source. That generated module is gitignored for the same
+reason as the spring fixtures: a committed copy lets the TOML drift while
+everything keeps building against a stale snapshot.
+
+## 9. Build order
 
 1. **Spring parity harness.** ✅ Done. Small, and it de-risks the thing most
    likely to silently go wrong later.
@@ -314,7 +472,7 @@ non-NVIDIA smoke test.
    **Not done: the layer-shell chrome path.** The shell runs in a browser
    against the engine, but it does not yet draw chrome over the native output.
    That needs a `wlr-layer-shell` client hosting a webview, which is a separate
-   piece of work; see section 10.
+   piece of work.
 4. **Per-surface encode plus remote backend.** ⚠️ Architecture done and
    verified; the codec is a stopgap.
 
@@ -357,16 +515,87 @@ non-NVIDIA smoke test.
    millisecond. Fixing where encoding runs saved two orders of magnitude more,
    and doing zero-copy first would have meant a fight with CUDA/GL interop for
    the smaller win. Worth revisiting only once something else makes 1ms matter.
-5. **Appearance vocabulary** in both backends, with a visual diff test comparing
-   a local screenshot against a remote screenshot of the same state.
-6. **iPad.** WebCodecs, gesture arbitration, responsive breakpoints, on-screen
-   keyboard.
-7. Clipboard, audio, multi-monitor, DPI, reconnect, auth, packaging.
+5. **XWayland.** ✅ Done. `crates/lwfa-engine/src/handlers/xwayland.rs`. X11
+   clients map into the same strip, stream, and take remote input. Steam is
+   X11, so everything under Proton is X11, and so are older GTK2/Qt4 programs
+   and Electron builds without the ozone flags; without this they do not
+   degrade, they fail to start.
 
-Steps 1 and 5 are the ones that would get skipped when moving fast, and they are
+   Interactive move, resize, maximise and fullscreen requests are all refused,
+   exactly as on the Wayland side and for the same reason: the shell owns
+   column width, and a client that could take the strip would be deciding
+   layout.
+
+6. **The shell UI.** ✅ Done. Sections 4.1 to 4.3 for the rendering split, the
+   rail and the input surfaces.
+7. **Accounts and permissions.** ✅ Done. Section 10.
+8. **Appearance vocabulary** in both backends, with a visual diff test comparing
+   a local screenshot against a remote screenshot of the same state.
+9. **iPad.** Gesture arbitration, PWA lifecycle, offline shell. WebCodecs and
+   the on-screen keyboard are done.
+10. Clipboard, audio, multi-monitor, DPI, TLS, packaging.
+
+Steps 1 and 8 are the ones that would get skipped when moving fast, and they are
 exactly the ones that make the two-renderer choice survivable.
 
-## 9. Prior art
+## 10. Accounts and permissions
+
+Implemented. `crates/lwfa-engine/src/accounts.rs`, and the Access panel.
+
+The engine had one shared password, and everyone who knew it could do
+everything: inject keystrokes, spawn processes, close windows. Handing somebody
+a link so they can *watch* should not also let them run commands.
+
+**Accounts live on the machine they authenticate for**, in SQLite at
+`$XDG_STATE_HOME/lwfa/accounts.db`. There is no control plane: nothing to enrol
+with, nothing to be offline from, and a machine that is switched off simply
+cannot be connected to. Passwords are Argon2id with a per-user salt.
+
+An account *is* its password. A browser sends only a token on a bookmarked URL,
+and adding a username field would be another thing to mistype on a tablet for no
+gain, since the password already identifies the row. Login therefore costs one
+Argon2 verification per account, which is the point of Argon2 and is irrelevant
+at household scale.
+
+`AUTH_PASS` means **the owner**: the bootstrap credential, so a fresh install is
+usable before any account exists; the only identity that may administer
+accounts; and the way back in when the last named account locks itself out.
+
+**Enforcement is in the engine**, at the single point every shell message passes
+through, not in each handler. A permission checked in nine places is one that
+will be missing from the tenth. The shell greys out what it cannot use, which is
+a courtesy to the user rather than a control: anyone can open a socket and send
+whatever they like.
+
+**Saved connections are the opposite** and live in the browser. Which machines
+*you* care about is a property of the device in your hand; storing that list on
+a machine would mean that machine being switched off loses you the list of the
+others.
+
+### 10.1 The launcher
+
+`apps.rs` reads freedesktop desktop entries, the same list every other Linux
+launcher shows, so whatever is installed simply appears.
+
+Icons are the interesting part. A `.desktop` file *names* an icon rather than
+pointing at one, so `icons.rs` walks the theme chain: the GTK theme, its
+`Inherits=`, `hicolor`, then `/usr/share/pixmaps`. All four steps are
+load-bearing in practice.
+
+The first implementation searched the tree once per icon name and never
+returned: four themes, two dozen size directories, a dozen contexts each, times
+a hundred names. Indexing the chain once turns that into one pass and a hundred
+hash lookups, 26ms instead of never.
+
+A full icon set is over a megabyte, so the shell caches them in IndexedDB and
+requests only what it lacks; a returning client requests nothing. IndexedDB
+rather than `localStorage` because the latter is synchronous, so reading a
+megabyte of base64 would block the main thread while frames are decoding, and
+its ~5MB origin quota would evict the preferences that matter. Misses are cached
+as tombstones: roughly a sixth of entries name an icon that is not installed,
+and without that the shell would ask again on every reload forever.
+
+## 11. Prior art
 
 | Project | Relevance |
 |---|---|
