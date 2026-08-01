@@ -71,28 +71,7 @@ impl XdgShellHandler for Lwfa {
             return;
         };
 
-        if let Some(window) = self.layout.window(id).cloned() {
-            self.space.unmap_elem(&window);
-        }
-        self.layout.forget(id);
-        self.forget_reported(id);
-        self.capture.forget(id);
-        if let Some(worker) = self.encoders.as_ref() {
-            worker.forget(id);
-        }
-
-        if self.focused() == Some(id) {
-            // Focus something else rather than leaving the seat pointing at a
-            // window that no longer exists.
-            let next = self.topmost_window_id();
-            self.set_focus(next, true);
-        }
-
-        self.send_to_shell(ToShell::WindowClosed { id });
-
-        if self.layout.mode() == Mode::Safe {
-            self.apply_safe_mode();
-        }
+        self.retire_window(id);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

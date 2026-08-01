@@ -90,8 +90,8 @@ pub fn init_winit(
     );
     output.set_preferred(mode);
 
-    data.state.space.map_output(&output, (0, 0));
-    data.state.layout.set_output_size(mode.size.to_logical(1));
+    data.space.map_output(&output, (0, 0));
+    data.layout.set_output_size(mode.size.to_logical(1));
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
@@ -103,7 +103,7 @@ pub fn init_winit(
     // client is spawned.
     #[allow(unsafe_code)]
     unsafe {
-        std::env::set_var("WAYLAND_DISPLAY", &data.state.socket_name);
+        std::env::set_var("WAYLAND_DISPLAY", &data.socket_name);
     }
 
     event_loop.handle().insert_source(winit_source, {
@@ -111,8 +111,8 @@ pub fn init_winit(
         let last_redraw = Rc::clone(&last_redraw);
         let output = output.clone();
         move |event, _, data| {
-            let display = &mut data.display_handle;
-            let state = &mut data.state;
+            let mut display = data.display_handle.clone();
+            let state = &mut *data;
 
             match event {
                 WinitEvent::Resized { size, .. } => {
@@ -237,8 +237,8 @@ pub fn init_winit(
             // Only worth doing for someone actually watching. With no shell
             // connected there is nobody to send frames to, and letting an
             // invisible nested compositor idle is the right behaviour.
-            if stalled && data.state.shell.is_some() {
-                let state = &mut data.state;
+            if stalled && data.shell.is_some() {
+                let state = &mut *data;
                 state.tick_animations();
 
                 {
@@ -262,7 +262,7 @@ pub fn init_winit(
 
                 state.space.refresh();
                 state.popups.cleanup();
-                let _ = data.display_handle.flush_clients();
+                let _ = state.display_handle.clone().flush_clients();
 
                 // Keep asking. The host ignores this while we are hidden, and
                 // honours it as soon as we are visible again, which is what

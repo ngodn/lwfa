@@ -11,13 +11,18 @@ repository.workspace = true
 lwfa-spring = { path = "../lwfa-spring" }
 lwfa-proto = { path = "../lwfa-proto" }
 
-# Feature set matches Smithay's own `smallvil` example at the v0.7.0 tag, which
-# is the minimum for a nested compositor. `backend_winit` brings the GL
-# renderer with it. DRM/KMS and libinput arrive with the TTY backend later.
+# Started from Smithay's own `smallvil` example at the v0.7.0 tag, the minimum
+# for a nested compositor. `backend_winit` brings the GL renderer with it.
+# DRM/KMS and libinput arrive with the TTY backend later.
+#
+# `xwayland` is what lets X11 clients in: Steam, anything under Proton, older
+# GTK2/Qt4 programs, and Electron builds without the ozone flag. It pulls in
+# x11rb and runs a real Xwayland server as a child process.
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_winit",
     "wayland_frontend",
     "desktop",
+    "xwayland",
 ] }
 
 # Blocking WebSocket server for the shell protocol, run on its own thread and

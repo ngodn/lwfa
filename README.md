@@ -30,6 +30,8 @@ Milestone 4 of 7 complete. See the build order in the architecture doc.
       NVENC, decoded with WebCodecs, composited in the browser DOM
 - [x] **Remote input** — pointer, keyboard and touch from the browser into the
       compositor, gated by a shared token. Reachable over the LAN; **no TLS yet**
+- [x] **XWayland** — X11 clients (Steam, Proton, older GTK2/Qt4, non-ozone
+      Electron) map into the same strip, stream, and take remote input
 - [ ] 5. Appearance vocabulary in both backends
 - [ ] 6. iPad: WebCodecs, gestures, responsive breakpoints
 - [ ] 7. Clipboard, audio, multi-monitor, DPI, reconnect, auth, packaging
@@ -95,6 +97,7 @@ Environment:
 
 - `LWFA_TERMINAL` — which terminal to spawn (default `alacritty`)
 - `LWFA_NO_AUTOSTART` — set to skip opening a terminal on launch
+- `LWFA_NO_XWAYLAND` — set to skip starting Xwayland, so X11 clients cannot run
 - `LWFA_SHELL_ADDR` — where the engine listens (default `127.0.0.1:6734`;
   use `0.0.0.0:6734` to reach it from other devices)
 - `SHELL_PORT` — port for the shell page (default `6733`)
@@ -158,6 +161,30 @@ editing the file.
 >
 > `AUTH_PASS` in `.env` keeps the password stable across restarts. Without it a
 > fresh one is generated each run and any bookmarked URL stops working.
+
+### X11 clients
+
+Xwayland starts with the engine and gets its own display, so `DISPLAY` inside
+lwfa is *not* the host's. Clients spawned by the engine inherit the right one
+automatically; to launch one by hand, take the display number the engine logs:
+
+```
+xwayland ready on DISPLAY=:1
+```
+
+```sh
+WAYLAND_DISPLAY= DISPLAY=:1 xterm     # forced onto X11
+```
+
+Unsetting `WAYLAND_DISPLAY` is what forces a dual-backend program down the X11
+path; most will pick Wayland if both are offered, which is what you usually
+want. Clearing `DISPLAY` instead is how you force the opposite.
+
+X11 windows land in the strip like any other, with `WM_CLASS` standing in for
+the app id. Interactive move and resize are refused, as they are for Wayland,
+and so are maximise and fullscreen: the shell owns column width. Override-
+redirect windows (menus, tooltips) render on the local display but are not yet
+composited into a remote shell, which is the same gap Wayland popups have.
 
 On Hyprland, `scripts/dev-nested.sh` launches the engine pinned to a specific
 workspace (default 2, override with `LWFA_DEV_WORKSPACE`) so it never lands on

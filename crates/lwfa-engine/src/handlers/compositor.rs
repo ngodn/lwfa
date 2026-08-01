@@ -5,7 +5,9 @@ use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     CompositorClientState, CompositorHandler, CompositorState, get_parent, is_sync_subsurface,
 };
+use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::xwayland::XWaylandClientData;
 use smithay::{delegate_compositor, delegate_shm};
 
 use super::xdg_shell;
@@ -17,6 +19,12 @@ impl CompositorHandler for Lwfa {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
+        // Xwayland is not one of our clients. Smithay creates it during
+        // `XWayland::spawn` and attaches `XWaylandClientData`, so it never
+        // passes through the listener that installs `ClientState`.
+        if let Some(xwayland) = client.get_data::<XWaylandClientData>() {
+            return &xwayland.compositor_state;
+        }
         &client
             .get_data::<ClientState>()
             .expect("client was inserted with ClientState")
@@ -31,10 +39,14 @@ impl CompositorHandler for Lwfa {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
+            // Matched through `wl_surface()` rather than `toplevel()` so that
+            // X11 windows are found too: an X11 window has a `wl_surface` once
+            // Xwayland has associated one, and without this it would never
+            // commit its buffer and would stay blank forever.
             if let Some(window) = self
                 .space
                 .elements()
-                .find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == &root))
+                .find(|w| w.wl_surface().as_deref() == Some(&root))
             {
                 window.on_commit();
             }

@@ -17,6 +17,7 @@
 mod auth;
 mod capture;
 mod encode;
+mod focus;
 mod handlers;
 mod input;
 mod layout;
@@ -29,6 +30,7 @@ use lwfa_proto::ToEngine;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::calloop::channel;
 use smithay::reexports::wayland_server::Display;
+use smithay::xwayland::{X11Wm, XWayland, XWaylandEvent};
 
 use crate::layout::Mode;
 use crate::shell::{DEFAULT_ADDR, ShellEvent, ShellLink};
@@ -40,31 +42,85 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => tracing_subscriber::fmt().init(),
     }
 
-    let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
+    let mut event_loop: EventLoop<'static, CalloopData> = EventLoop::try_new()?;
     let display: Display<Lwfa> = Display::new()?;
-    let display_handle = display.handle();
-    let state = Lwfa::new(&mut event_loop, display);
-
-    let mut data = CalloopData {
-        state,
-        display_handle,
-    };
+    let mut data = Lwfa::new(&mut event_loop, display);
 
     winit::init_winit(&mut event_loop, &mut data)?;
     init_shell_link(&mut event_loop, &mut data)?;
+    init_xwayland(&mut event_loop, &mut data);
 
-    tracing::info!(
-        "lwfa running on WAYLAND_DISPLAY={:?}",
-        data.state.socket_name
-    );
+    tracing::info!("lwfa running on WAYLAND_DISPLAY={:?}", data.socket_name);
 
     if std::env::var_os("LWFA_NO_AUTOSTART").is_none() {
-        data.state.spawn_terminal();
+        data.spawn_terminal();
     }
 
     event_loop.run(None, &mut data, |_| {})?;
 
     Ok(())
+}
+
+/// Start Xwayland so X11 clients have somewhere to connect.
+///
+/// Never fatal. A machine without Xwayland installed, or one where it fails to
+/// start, still gets a working compositor for native Wayland clients; it just
+/// cannot run Steam. `LWFA_NO_XWAYLAND` skips it deliberately.
+///
+/// The server is started eagerly rather than on the first X11 connection.
+/// Lazy startup is what most compositors do and it does save ~30MB, but it
+/// means `DISPLAY` is unset when early clients are spawned, and a client that
+/// checks once at startup will already have decided X11 is unavailable.
+fn init_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut CalloopData) {
+    if std::env::var_os("LWFA_NO_XWAYLAND").is_some() {
+        tracing::info!("LWFA_NO_XWAYLAND set, skipping xwayland; X11 clients will not run");
+        return;
+    }
+
+    let (xwayland, client) = match XWayland::spawn(
+        &data.display_handle.clone(),
+        None,
+        std::iter::empty::<(String, String)>(),
+        true,
+        std::process::Stdio::null(),
+        std::process::Stdio::null(),
+        |_| (),
+    ) {
+        Ok(started) => started,
+        Err(err) => {
+            tracing::warn!("could not start xwayland: {err}. X11 clients will not run.");
+            return;
+        }
+    };
+
+    let handle = event_loop.handle();
+    let ret = handle.insert_source(xwayland, move |event, _, data| match event {
+        XWaylandEvent::Ready {
+            x11_socket,
+            display_number,
+        } => {
+            // Only now is DISPLAY meaningful. Held on the state rather than put
+            // in the environment; see `Lwfa::spawn` for why.
+            data.xdisplay = Some(display_number);
+            match X11Wm::start_wm(data.loop_handle.clone(), x11_socket, client.clone()) {
+                Ok(wm) => {
+                    data.xwm = Some(wm);
+                    tracing::info!("xwayland ready on DISPLAY=:{display_number}");
+                }
+                Err(err) => {
+                    tracing::warn!("could not attach the X11 window manager: {err}");
+                    data.xdisplay = None;
+                }
+            }
+        }
+        XWaylandEvent::Error => {
+            tracing::warn!("xwayland failed to start; X11 clients will not run");
+            data.xdisplay = None;
+        }
+    });
+    if let Err(err) = ret {
+        tracing::warn!("could not watch xwayland: {err}. X11 clients will not run.");
+    }
 }
 
 /// Start the shell listener and route its events into the compositor.
@@ -98,14 +154,14 @@ fn init_shell_link(
     };
     // The encoder needs a frame sink, so it is spawned once the link exists.
     match crate::encode::EncodeWorker::spawn(link.sink()) {
-        Ok(worker) => data.state.encoders = Some(worker),
+        Ok(worker) => data.encoders = Some(worker),
         Err(err) => {
             // Not fatal: the compositor still works, there is just nothing to
             // send a remote shell.
             tracing::error!("could not start the encoder thread: {err}. Streaming disabled.");
         }
     }
-    data.state.shell = Some(link);
+    data.shell = Some(link);
     announce(bound, &token);
 
     event_loop
@@ -114,7 +170,7 @@ fn init_shell_link(
             let channel::Event::Msg(event) = event else {
                 return;
             };
-            handle_shell_event(&mut data.state, event);
+            handle_shell_event(data, event);
         })
         .map_err(|err| format!("failed to insert the shell event source: {err}"))?;
 
@@ -217,11 +273,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 // back would be noise and could start a loop.
                 state.set_focus(Some(id), false);
             }
-            ToEngine::CloseWindow { id } => {
-                if let Some(toplevel) = state.layout.window(id).and_then(|w| w.toplevel()) {
-                    toplevel.send_close();
-                }
-            }
+            ToEngine::CloseWindow { id } => state.request_close(id),
             ToEngine::SetStreams { windows, h264 } => {
                 // Total, like SetLayout: anything not listed stops streaming.
                 let next: std::collections::HashSet<_> = windows.into_iter().collect();

@@ -39,6 +39,7 @@ use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Bind, Color32F, ExportMem, Frame, Offscreen, Renderer};
 use smithay::desktop::Window;
 use smithay::utils::{Buffer as BufferCoord, Physical, Rectangle, Scale, Size, Transform};
+use smithay::wayland::seat::WaylandFocus;
 
 /// A captured window image, tightly packed RGBA.
 pub struct CapturedFrame {
@@ -104,7 +105,10 @@ impl SurfaceCapture {
             return None;
         }
 
-        let surface = window.toplevel()?.wl_surface().clone();
+        // Not `toplevel()`, which is `None` for an X11 window and would make
+        // every X11 client stream nothing at all while still appearing in the
+        // strip with the right title and geometry.
+        let surface = window.wl_surface()?.into_owned();
 
         // Building elements is CPU-only and cheap. Doing it before the skip
         // check is what lets the commit counters be read at all: they live on

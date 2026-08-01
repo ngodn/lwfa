@@ -12,20 +12,23 @@ use std::ffi::OsString;
 use std::sync::Arc;
 
 use lwfa_proto::{Modifiers, PROTOCOL_VERSION, ToShell, WindowId, WindowInfo};
-use smithay::desktop::{PopupManager, Space, Window, WindowSurfaceType};
+use smithay::desktop::{PopupManager, Space, Window, WindowSurface, WindowSurfaceType};
 use smithay::input::{Seat, SeatState};
 use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction};
+use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction};
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
 use smithay::wayland::socket::ListeningSocketSource;
+use smithay::wayland::xwayland_shell::XWaylandShellState;
+use smithay::xwayland::X11Wm;
 
 use crate::capture::SurfaceCapture;
 use crate::encode::EncodeWorker;
@@ -56,6 +59,9 @@ pub struct Lwfa {
     /// and needs no streams at all.
     pub streaming: std::collections::HashSet<WindowId>,
     pub loop_signal: LoopSignal,
+    /// Kept because `X11Wm` registers its own event sources, and it is started
+    /// from inside a callback where the loop itself is not reachable.
+    pub loop_handle: LoopHandle<'static, CalloopData>,
 
     focused: Option<WindowId>,
     next_window_id: u64,
@@ -66,8 +72,17 @@ pub struct Lwfa {
     /// stops a `WindowChanged` being sent on every single commit.
     reported: std::collections::HashMap<WindowId, WindowInfo>,
 
+    /// The X11 window manager, once Xwayland has started and handed us a
+    /// privileged connection. `None` before that, and for the whole run if
+    /// Xwayland is not installed.
+    pub xwm: Option<X11Wm>,
+    /// The X display number, for putting `DISPLAY` in a spawned client's
+    /// environment. See `Lwfa::spawn`.
+    pub xdisplay: Option<u32>,
+
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    pub xwayland_shell_state: XWaylandShellState,
     pub shm_state: ShmState,
     pub seat_state: SeatState<Lwfa>,
     pub data_device_state: DataDeviceState,
@@ -82,11 +97,14 @@ pub struct Lwfa {
 }
 
 impl Lwfa {
-    pub fn new(event_loop: &mut EventLoop<CalloopData>, display: Display<Self>) -> Self {
+    pub fn new(event_loop: &mut EventLoop<'static, CalloopData>, display: Display<Self>) -> Self {
         let dh = display.handle();
 
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        // Advertised unconditionally, and only Xwayland can bind it. Creating
+        // the global costs nothing if Xwayland never starts.
+        let xwayland_shell_state = XWaylandShellState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let mut seat_state = SeatState::new();
@@ -106,6 +124,7 @@ impl Lwfa {
 
         let socket_name = Self::init_wayland_listener(display, event_loop);
         let loop_signal = event_loop.get_signal();
+        let loop_handle = event_loop.handle();
 
         Self {
             start_time: std::time::Instant::now(),
@@ -118,12 +137,16 @@ impl Lwfa {
             streaming: std::collections::HashSet::new(),
             space: Space::default(),
             loop_signal,
+            loop_handle,
             focused: None,
             next_window_id: 1,
             reported: std::collections::HashMap::new(),
             socket_name,
+            xwm: None,
+            xdisplay: None,
             compositor_state,
             xdg_shell_state,
+            xwayland_shell_state,
             shm_state,
             output_manager_state,
             seat_state,
@@ -135,7 +158,7 @@ impl Lwfa {
 
     fn init_wayland_listener(
         display: Display<Lwfa>,
-        event_loop: &mut EventLoop<CalloopData>,
+        event_loop: &mut EventLoop<'static, CalloopData>,
     ) -> OsString {
         let listening_socket =
             ListeningSocketSource::new_auto().expect("failed to bind a wayland socket");
@@ -163,7 +186,7 @@ impl Lwfa {
                     // the loop, and the only access is through this closure.
                     #[allow(unsafe_code)]
                     unsafe {
-                        display.get_mut().dispatch_clients(&mut state.state)?;
+                        display.get_mut().dispatch_clients(state)?;
                     }
                     Ok(PostAction::Continue)
                 },
@@ -187,24 +210,34 @@ impl Lwfa {
         self.focused
     }
 
-    /// Read the current title and app id straight off the toplevel.
+    /// Read the current title and app id straight off the window.
     ///
     /// Clients set these after mapping and change them later, so this is read
     /// on demand rather than cached and left stale.
     pub fn window_info(&self, id: WindowId) -> Option<WindowInfo> {
         let window = self.layout.window(id)?;
-        let toplevel = window.toplevel()?;
-        let (app_id, title) =
-            smithay::wayland::compositor::with_states(toplevel.wl_surface(), |states| {
-                let data = states
-                    .data_map
-                    .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
-                    .map(|d| d.lock().unwrap());
-                match data {
-                    Some(d) => (d.app_id.clone(), d.title.clone()),
-                    None => (None, None),
-                }
-            });
+        let (app_id, title) = match window.underlying_surface() {
+            WindowSurface::Wayland(toplevel) => {
+                smithay::wayland::compositor::with_states(toplevel.wl_surface(), |states| {
+                    let data = states
+                        .data_map
+                        .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+                        .map(|d| d.lock().unwrap());
+                    match data {
+                        Some(d) => (d.app_id.clone(), d.title.clone()),
+                        None => (None, None),
+                    }
+                })
+            }
+            // WM_CLASS stands in for the app id. It is the closest X11 has, and
+            // it is what desktop files have always matched on. Both come back
+            // as empty strings rather than absent, so normalise to None and let
+            // the shell show its placeholder.
+            WindowSurface::X11(x11) => {
+                let blank = |s: String| (!s.is_empty()).then_some(s);
+                (blank(x11.class()), blank(x11.title()))
+            }
+        };
         Some(WindowInfo { id, app_id, title })
     }
 
@@ -224,6 +257,39 @@ impl Lwfa {
 
     pub fn forget_reported(&mut self, id: WindowId) {
         self.reported.remove(&id);
+    }
+
+    /// Drop every trace of a window that has gone away, and tell the shell.
+    ///
+    /// Shared by the Wayland and X11 destroy paths. Forgetting one of these
+    /// places leaks in a way that is easy to miss: a stale capture keeps a
+    /// texture alive, and a stale encoder session holds one of only eight NVENC
+    /// slots. Safe to call twice, which matters because X11 reports both an
+    /// unmap and a destroy for the same window.
+    pub fn retire_window(&mut self, id: WindowId) {
+        if let Some(window) = self.layout.window(id).cloned() {
+            self.space.unmap_elem(&window);
+        }
+        self.layout.forget(id);
+        self.forget_reported(id);
+        self.capture.forget(id);
+        self.streaming.remove(&id);
+        if let Some(worker) = self.encoders.as_ref() {
+            worker.forget(id);
+        }
+
+        if self.focused() == Some(id) {
+            // Focus something else rather than leaving the seat pointing at a
+            // window that no longer exists.
+            let next = self.topmost_window_id();
+            self.set_focus(next, true);
+        }
+
+        self.send_to_shell(ToShell::WindowClosed { id });
+
+        if self.layout.mode() == layout::Mode::Safe {
+            self.apply_safe_mode();
+        }
     }
 
     pub fn send_to_shell(&self, message: ToShell) {
@@ -294,19 +360,40 @@ impl Lwfa {
 
         let target = id
             .and_then(|id| self.layout.window(id))
-            .and_then(|w| w.toplevel())
-            .map(|t| t.wl_surface().clone());
+            .and_then(crate::focus::KeyboardFocus::of);
 
         // Activated state drives the client's own focus styling.
         for (window, _) in self.layout.placements() {
-            let is_focused = window
-                .toplevel()
-                .map(|t| Some(t.wl_surface()) == target.as_ref())
-                .unwrap_or(false);
+            // Compared through `target`, never `is_none() == is_none()`: an
+            // X11 window has no `wl_surface` until Xwayland associates one, and
+            // matching two absent surfaces would activate every window that had
+            // not finished mapping.
+            let is_focused = target
+                .as_ref()
+                .and_then(|t| t.wl_surface())
+                .is_some_and(|t| window.wl_surface() == Some(t));
             window.set_activated(is_focused);
-            if let Some(toplevel) = window.toplevel() {
-                toplevel.send_pending_configure();
+            match window.underlying_surface() {
+                WindowSurface::Wayland(toplevel) => {
+                    toplevel.send_pending_configure();
+                }
+                // `set_activated` already wrote the X11 property. There is no
+                // second round trip to flush.
+                WindowSurface::X11(_) => {}
             }
+        }
+
+        // X11 keeps its own stacking order, and a client that believes it is
+        // behind something will not take input properly. Nothing to do for
+        // Wayland, where the shell's z-order is the only order there is.
+        let focused_x11 = id
+            .and_then(|id| self.layout.window(id))
+            .and_then(|w| w.x11_surface())
+            .cloned();
+        if let (Some(xwm), Some(x11)) = (self.xwm.as_mut(), focused_x11)
+            && let Err(err) = xwm.raise_window(&x11)
+        {
+            tracing::warn!("failed to raise an X11 window: {err}");
         }
 
         if let Some(keyboard) = self.seat.get_keyboard() {
@@ -350,9 +437,20 @@ impl Lwfa {
 
     pub fn send_configures(&mut self, configures: Vec<layout::PendingConfigure>) {
         for configure in configures {
-            if let Some(toplevel) = configure.window.toplevel() {
-                toplevel.with_pending_state(|state| state.size = Some(configure.size));
-                toplevel.send_pending_configure();
+            match configure.window.underlying_surface() {
+                WindowSurface::Wayland(toplevel) => {
+                    toplevel.with_pending_state(|state| state.size = Some(configure.rect.size));
+                    toplevel.send_pending_configure();
+                }
+                WindowSurface::X11(x11) => {
+                    // X11 has no notion of a client that may decline, so this
+                    // both asks and tells. Unlike xdg-shell it takes a
+                    // position, which is what an override-redirect menu reads
+                    // to work out where to put itself.
+                    if let Err(err) = x11.configure(configure.rect) {
+                        tracing::warn!("failed to configure an X11 window: {err}");
+                    }
+                }
             }
         }
     }
@@ -494,10 +592,13 @@ impl Lwfa {
     }
 }
 
-pub struct CalloopData {
-    pub state: Lwfa,
-    pub display_handle: DisplayHandle,
-}
+/// The event loop's data type.
+///
+/// An alias, not a wrapper. `X11Wm::start_wm` requires the loop data to
+/// implement `XwmHandler`, and Smithay's protocol handlers are all implemented
+/// on `Lwfa`, so the two have to be the same type. The wrapper this replaces
+/// held a second copy of `display_handle` and nothing else.
+pub type CalloopData = Lwfa;
 
 #[derive(Default)]
 pub struct ClientState {

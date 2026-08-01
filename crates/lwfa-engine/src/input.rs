@@ -23,7 +23,6 @@ use smithay::backend::input::{
 };
 use smithay::input::keyboard::{FilterResult, keysyms};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
 
 use crate::layout::Mode;
@@ -100,12 +99,8 @@ impl Lwfa {
             "h" | "Left" => current.checked_sub(1).unwrap_or(ids.len() - 1),
             "l" | "Right" => (current + 1) % ids.len(),
             "w" => {
-                if let Some(toplevel) = self
-                    .focused()
-                    .and_then(|id| self.layout.window(id))
-                    .and_then(|w| w.toplevel())
-                {
-                    toplevel.send_close();
+                if let Some(id) = self.focused() {
+                    self.request_close(id);
                 }
                 return;
             }
@@ -116,11 +111,42 @@ impl Lwfa {
         self.apply_safe_mode();
     }
 
+    /// Politely ask a window to close. The client decides whether to.
+    pub fn request_close(&self, id: lwfa_proto::WindowId) {
+        let Some(window) = self.layout.window(id) else {
+            return;
+        };
+        match window.underlying_surface() {
+            smithay::desktop::WindowSurface::Wayland(toplevel) => toplevel.send_close(),
+            smithay::desktop::WindowSurface::X11(x11) => {
+                if let Err(err) = x11.close() {
+                    tracing::warn!("failed to close an X11 window: {err}");
+                }
+            }
+        }
+    }
+
     pub fn spawn(&self, command: &str) {
-        match std::process::Command::new(command)
-            .env("WAYLAND_DISPLAY", &self.socket_name)
-            .spawn()
-        {
+        let mut cmd = std::process::Command::new(command);
+        cmd.env("WAYLAND_DISPLAY", &self.socket_name);
+
+        // Set per-process rather than with `set_var`, which is unsafe in
+        // edition 2024 and genuinely racy here: by the time Xwayland reports
+        // ready, the encoder and shell threads are already running and could be
+        // reading the environment.
+        match self.xdisplay {
+            Some(n) => {
+                cmd.env("DISPLAY", format!(":{n}"));
+            }
+            // Explicitly cleared, not left inherited. Otherwise a client would
+            // find the *host* compositor's X server and open its window there,
+            // outside lwfa entirely.
+            None => {
+                cmd.env_remove("DISPLAY");
+            }
+        }
+
+        match cmd.spawn() {
             Ok(_) => tracing::info!("spawned {command}"),
             Err(err) => tracing::error!("failed to spawn {command}: {err}"),
         }
@@ -227,7 +253,11 @@ impl Lwfa {
                         Some(id) => self.set_focus(Some(id), true),
                         None => {
                             if let Some(keyboard) = self.seat.get_keyboard() {
-                                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+                                keyboard.set_focus(
+                                    self,
+                                    Option::<crate::focus::KeyboardFocus>::None,
+                                    serial,
+                                );
                             }
                         }
                     }

@@ -25,8 +25,8 @@ use std::time::Instant;
 
 use lwfa_proto::{SpringSpec, WindowId, WindowLayout};
 use lwfa_spring::{Spring, SpringOptions};
-use smithay::desktop::Window;
-use smithay::utils::{Logical, Point, Size};
+use smithay::desktop::{Window, WindowSurface};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 
 /// Who is deciding where windows go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,12 +127,31 @@ struct Tracked {
     window: Window,
     x: Animated,
     y: Animated,
-    /// Last size sent as a `configure`, so an unchanged layout does not
+    /// Last rectangle sent as a `configure`, so an unchanged layout does not
     /// re-configure every window on every message.
-    size: Option<Size<i32, Logical>>,
+    ///
+    /// The location half only matters for X11. An `xdg_toplevel` configure
+    /// carries no position at all, and an X11 one carries both.
+    sent: Option<Rectangle<i32, Logical>>,
     z: i32,
     /// False when the shell omitted this window from the last `SetLayout`.
     visible: bool,
+}
+
+impl Tracked {
+    /// Whether this rectangle is worth a `configure`.
+    ///
+    /// Wayland ignores the location, because `xdg_toplevel.configure` has no
+    /// field for it: a client that moves but keeps its size has nothing new to
+    /// be told, and telling it anyway would make every scroll a round of
+    /// configures across every visible window.
+    fn needs_configure(&self, rect: Rectangle<i32, Logical>) -> bool {
+        match self.sent {
+            None => true,
+            Some(sent) if self.window.is_x11() => sent != rect,
+            Some(sent) => sent.size != rect.size,
+        }
+    }
 }
 
 /// Reconciles shell-declared layout into positions the compositor can apply.
@@ -142,10 +161,15 @@ pub struct Layout {
     output_size: Size<i32, Logical>,
 }
 
-/// A size the engine should send to a client as a `configure`.
+/// A geometry the engine should send to a client as a `configure`.
+///
+/// Carries the *target* rectangle rather than the animated one. An X11 client
+/// is told where it will come to rest, not where it is passing through, which
+/// keeps a scroll from generating a configure per frame and leaves the client's
+/// belief correct once the spring settles.
 pub struct PendingConfigure {
     pub window: Window,
-    pub size: Size<i32, Logical>,
+    pub rect: Rectangle<i32, Logical>,
 }
 
 impl Layout {
@@ -180,7 +204,7 @@ impl Layout {
                 window,
                 x: Animated::new(0.0),
                 y: Animated::new(0.0),
-                size: None,
+                sent: None,
                 z: 0,
                 // Hidden until something places it, so a window cannot flash at
                 // the origin for one frame before the shell responds.
@@ -208,16 +232,18 @@ impl Layout {
     ///
     /// Needed on destroy: by the time `toplevel_destroyed` fires the window may
     /// already be gone from the space, but the surface still identifies it.
+    ///
+    /// An X11 window has a `wl_surface` too, but only after Xwayland has
+    /// associated one, so the lookup is by value rather than by reference.
     pub fn id_of_surface(
         &self,
         surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) -> Option<WindowId> {
         self.tracked
             .iter()
-            .find(|(_, t)| {
-                t.window
-                    .toplevel()
-                    .is_some_and(|toplevel| toplevel.wl_surface() == surface)
+            .find(|(_, t)| match t.window.underlying_surface() {
+                WindowSurface::Wayland(toplevel) => toplevel.wl_surface() == surface,
+                WindowSurface::X11(x11) => x11.wl_surface().as_ref() == Some(surface),
             })
             .map(|(id, _)| *id)
     }
@@ -278,16 +304,19 @@ impl Layout {
                 }
             }
 
-            let size: Size<i32, Logical> = (
-                (layout.rect.width.round() as i32).max(1),
-                (layout.rect.height.round() as i32).max(1),
-            )
-                .into();
-            if tracked.size != Some(size) {
-                tracked.size = Some(size);
+            let rect = Rectangle::new(
+                (layout.rect.x.round() as i32, layout.rect.y.round() as i32).into(),
+                (
+                    (layout.rect.width.round() as i32).max(1),
+                    (layout.rect.height.round() as i32).max(1),
+                )
+                    .into(),
+            );
+            if tracked.needs_configure(rect) {
+                tracked.sent = Some(rect);
                 configures.push(PendingConfigure {
                     window: tracked.window.clone(),
-                    size,
+                    rect,
                 });
             }
         }
@@ -311,11 +340,12 @@ impl Layout {
             }
             tracked.x.snap_to(0.0);
             tracked.y.snap_to(0.0);
-            if tracked.size != Some(size) {
-                tracked.size = Some(size);
+            let rect = Rectangle::new((0, 0).into(), size);
+            if tracked.needs_configure(rect) {
+                tracked.sent = Some(rect);
                 configures.push(PendingConfigure {
                     window: tracked.window.clone(),
-                    size,
+                    rect,
                 });
             }
         }
