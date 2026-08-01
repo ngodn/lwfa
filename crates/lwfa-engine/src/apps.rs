@@ -46,7 +46,10 @@ fn search_paths() -> Vec<PathBuf> {
         .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
     roots.extend(dirs.split(':').filter(|p| !p.is_empty()).map(PathBuf::from));
 
-    roots.into_iter().map(|root| root.join("applications")).collect()
+    roots
+        .into_iter()
+        .map(|root| root.join("applications"))
+        .collect()
 }
 
 /// Every launchable application, sorted by name.
@@ -243,8 +246,11 @@ mod tests {
 
     #[test]
     fn keeps_a_literal_percent() {
-        let app = parse("x", "[Desktop Entry]\nType=Application\nName=X\nExec=x --at 50%%\n")
-            .expect("should parse");
+        let app = parse(
+            "x",
+            "[Desktop Entry]\nType=Application\nName=X\nExec=x --at 50%%\n",
+        )
+        .expect("should parse");
         assert_eq!(app.exec, "x --at 50%");
     }
 }

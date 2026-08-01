@@ -7,5 +7,10 @@
     "scale": 1.0
   },
   "windows": [],
-  "focused": null
+  "focused": null,
+  "permissions": {
+    "mode": "interact",
+    "allowedApps": null
+  },
+  "account": "owner"
 }

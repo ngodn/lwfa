@@ -11,7 +11,22 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DecodedFrame, ToShell, WindowId, WindowInfo } from "@lwfa/proto";
+import type {
+  DecodedFrame,
+  Permissions,
+  ToShell,
+  WindowId,
+  WindowInfo,
+} from "@lwfa/proto";
+
+/**
+ * What the shell assumes before `Hello` arrives.
+ *
+ * The least it could be, not the most. Assuming interact and then discovering
+ * otherwise would flash controls the session cannot use, and briefly send input
+ * the engine will drop.
+ */
+const VIEW_ONLY: Permissions = { mode: "view", allowedApps: [] };
 import { Connection, type Status } from "./connection.js";
 import { Login } from "./Login.js";
 import {
@@ -23,6 +38,13 @@ import {
 import { FrameDecoder, supportsH264 } from "./decode.js";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
 import { appsRequested, clearApps, setApps } from "@/lib/apps"
+import { log } from "@/lib/log"
+import {
+  accountsRequested,
+  clearAccounts,
+  setAccountError,
+  setAccounts,
+} from "@/lib/accounts"
 import { ShellChrome } from "@/components/ShellChrome";
 import { Desktop } from "@/components/Desktop";
 import { SessionBadge } from "@/components/SessionBadge";
@@ -95,6 +117,8 @@ export function App(): React.ReactElement {
     () => ADOPTED ?? loadPassword(),
   );
   const [authError, setAuthError] = useState<string>();
+  const [permissions, setPermissions] = useState<Permissions>(VIEW_ONLY);
+  const [account, setAccount] = useState("");
   const [status, setStatus] = useState<Status>("connecting");
   const [statusDetail, setStatusDetail] = useState<string>();
   const [output, setOutput] = useState<Output>({ width: 0, height: 0 });
@@ -212,6 +236,8 @@ export function App(): React.ReactElement {
     const handleMessage = (message: ToShell) => {
       switch (message.type) {
         case "hello": {
+          setPermissions(message.permissions);
+          setAccount(message.account);
           const out = {
             width: message.output.width,
             height: message.output.height,
@@ -249,6 +275,7 @@ export function App(): React.ReactElement {
         }
 
         case "windowOpened":
+          log("info", `window ${message.window.id} opened (${message.window.appId ?? "?"})`);
           setWindows((prev) =>
             new Map(prev).set(message.window.id, message.window),
           );
@@ -278,6 +305,20 @@ export function App(): React.ReactElement {
 
         case "apps":
           setApps(message.apps)
+          break
+
+        case "accounts":
+          setAccounts(message.accounts)
+          break
+
+        case "error":
+          // Only account administration reports errors so far. Routing by the
+          // request name keeps this from becoming a global error bus that
+          // every panel has to filter.
+          log("error", `${message.request}: ${message.message}`);
+          if (message.request.endsWith("Account") || message.request === "listAccounts") {
+            setAccountError(message.message)
+          }
           break
 
         case "focusChanged":
@@ -337,6 +378,10 @@ export function App(): React.ReactElement {
       onStatus: (s, detail) => {
         setStatus(s);
         setStatusDetail(detail);
+        log(
+          s === "connected" ? "info" : s === "connecting" ? "info" : "warn",
+          detail ? `${s}: ${detail}` : s,
+        );
         // Deliberately does NOT clear the stored password. The shell cannot
         // tell a refused password from an engine that is not running (see
         // `connection.ts`), and wiping a correct password every time the
@@ -350,8 +395,9 @@ export function App(): React.ReactElement {
       conn.close();
       decoder.close();
       clearFrames();
-      // Another machine has a different set of applications installed.
+      // Another machine has a different set of applications and accounts.
       clearApps();
+      clearAccounts();
       connection.current = null;
       decoderRef.current = null;
     };
@@ -432,6 +478,7 @@ export function App(): React.ReactElement {
     return {
       send: (message) => {
         if (message.type === "listApps") appsRequested()
+        if (message.type === "listAccounts") accountsRequested()
         send(message)
       },
       focusWindow: (id) =>
@@ -460,6 +507,8 @@ export function App(): React.ReactElement {
       windows,
       strip,
       endpoint: ENGINE_BASE,
+      permissions,
+      account,
     }),
     [status, statusDetail, output, windows, strip],
   );

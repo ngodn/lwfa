@@ -45,6 +45,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+argon2 = { version = "0.5.3", features = ["std", "password-hash"] }
 
 [lints]
 workspace = true

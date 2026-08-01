@@ -76,11 +76,32 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
     : { [side]: "var(--rail-size)", height: "min(30rem, calc(100dvh - var(--rail-size)))", maxHeight: "none" }
 
   return (
-    <Sheet open={active !== null} onOpenChange={(open) => !open && onClose()}>
+    // `modal={false}`: this is a side panel over a live desktop, not a dialog.
+    // A modal sheet traps focus and lays a full-screen overlay over everything,
+    // including the rail, so switching from one panel to another meant closing
+    // the first one by hand. The overlay is also made non-blocking and much
+    // fainter in index.css, because darkening a running desktop to show a
+    // settings list is a heavy way to say "this is on top".
+    <Sheet open={active !== null} onOpenChange={(open) => !open && onClose()} modal={false}>
       <SheetContent
         side={side}
         className={cnPanel(vertical)}
         style={geometry}
+        // A press on the rail is a *switch*, not a dismissal. Without this the
+        // sheet closes on the pointer-down and the button's click then reopens
+        // it, and the two race: the panel you asked for ends up selected in the
+        // rail with nothing on screen.
+        onPointerDownOutside={(event) => {
+          if ((event.target as Element | null)?.closest?.("[data-shell-nav]")) {
+            event.preventDefault()
+          }
+        }}
+        // Same reasoning for the focus that follows it.
+        onInteractOutside={(event) => {
+          if ((event.target as Element | null)?.closest?.("[data-shell-nav]")) {
+            event.preventDefault()
+          }
+        }}
       >
         {view === null ? null : view.kind === "item" ? (
           <>

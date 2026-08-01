@@ -34,7 +34,6 @@
     "baseUrl": ".",
     "paths": { "@/*": ["packages/shell/src/*"] }
   },
-  "exclude": ["packages/shell/src/components/ui"],
   "include": [
     "packages/*/src/**/*.ts",
     "packages/*/src/**/*.tsx",

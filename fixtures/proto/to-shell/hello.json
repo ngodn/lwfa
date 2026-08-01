@@ -18,5 +18,10 @@
       "title": null
     }
   ],
-  "focused": 1
+  "focused": 1,
+  "permissions": {
+    "mode": "interact",
+    "allowedApps": null
+  },
+  "account": "owner"
 }

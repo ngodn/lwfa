@@ -173,6 +173,22 @@
   }
 }
 
+@layer components {
+  /*
+   * The panel sheet is non-modal: see PanelHost.
+   *
+   * Radix still renders an overlay, and shadcn's default darkens the whole
+   * viewport and swallows every click. Both are wrong here. The thing behind
+   * the panel is a live desktop the user may want to keep watching, and the
+   * navigation rail lives outside the panel precisely so they can switch
+   * panels without dismissing one first.
+   */
+  [data-slot="sheet-overlay"] {
+    pointer-events: none;
+    background: color-mix(in oklab, var(--background) 45%, transparent);
+  }
+}
+
 @layer utilities {
   /* Safe areas, because this runs full-screen on a tablet with a home
      indicator and under a notch. */

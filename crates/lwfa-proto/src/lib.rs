@@ -177,6 +177,11 @@ pub enum ToShell {
         output: Output,
         windows: Vec<WindowInfo>,
         focused: Option<WindowId>,
+        /// What this session may do. Advisory for the shell, enforced by the
+        /// engine; see [`Permissions`].
+        permissions: Permissions,
+        /// Which account this is, for the UI to show. "owner" for `AUTH_PASS`.
+        account: String,
     },
     #[serde(rename_all = "camelCase")]
     OutputChanged { output: Output },
@@ -209,6 +214,77 @@ pub enum ToShell {
     /// launcher at all.
     #[serde(rename_all = "camelCase")]
     Apps { apps: Vec<AppEntry> },
+
+    /// The accounts on this machine, in reply to [`ToEngine::ListAccounts`].
+    ///
+    /// Never contains a password or a hash. Sent only to the owner; any other
+    /// session gets `error` instead.
+    #[serde(rename_all = "camelCase")]
+    Accounts { accounts: Vec<AccountInfo> },
+
+    /// Something the shell asked for did not happen, and why.
+    ///
+    /// Distinct from a dropped message: this is for requests with a visible
+    /// result, so the UI can say "that name is taken" rather than leaving a
+    /// dialog waiting for a reply that is never coming.
+    #[serde(rename_all = "camelCase")]
+    Error { request: String, message: String },
+}
+
+/// One account, as the Access panel sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountInfo {
+    pub id: i64,
+    pub name: String,
+    pub permissions: Permissions,
+}
+
+/// What a connected session is allowed to do.
+///
+/// Sent in `Hello` so the shell can grey out what it cannot use, but it is the
+/// *engine* that enforces it. A permission checked only in the browser is not a
+/// permission, it is a suggestion: anyone can open a socket and send whatever
+/// they like.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Permissions {
+    pub mode: SessionMode,
+    /// Desktop entry ids this session may launch. `None` means all of them.
+    pub allowed_apps: Option<Vec<String>>,
+}
+
+impl Permissions {
+    /// Everything. What `AUTH_PASS` grants.
+    pub fn owner() -> Self {
+        Self {
+            mode: SessionMode::Interact,
+            allowed_apps: None,
+        }
+    }
+
+    pub fn may_interact(&self) -> bool {
+        self.mode == SessionMode::Interact
+    }
+
+    /// Whether this session may launch a given desktop entry.
+    pub fn may_launch(&self, id: &str) -> bool {
+        if !self.may_interact() {
+            return false;
+        }
+        match &self.allowed_apps {
+            None => true,
+            Some(allowed) => allowed.iter().any(|a| a == id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionMode {
+    /// Pixels only. Input and spawning are dropped by the engine.
+    View,
+    Interact,
 }
 
 /// One launchable application, from a freedesktop `.desktop` entry.
@@ -278,6 +354,27 @@ pub enum ToEngine {
     /// Ask for the installed applications. Answered with [`ToShell::Apps`].
     #[serde(rename_all = "camelCase")]
     ListApps,
+
+    /// Account administration. All four require the owner; anything else is
+    /// answered with [`ToShell::Error`] rather than silently ignored, because
+    /// these have a visible result the UI is waiting on.
+    #[serde(rename_all = "camelCase")]
+    ListAccounts,
+    #[serde(rename_all = "camelCase")]
+    CreateAccount {
+        name: String,
+        password: String,
+        permissions: Permissions,
+    },
+    #[serde(rename_all = "camelCase")]
+    UpdateAccount {
+        id: i64,
+        permissions: Permissions,
+        /// Only when it is being changed. `None` leaves the existing one.
+        password: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    DeleteAccount { id: i64 },
 
     /// Pointer moved within a window.
     ///
@@ -374,6 +471,8 @@ mod tests {
     #[test]
     fn messages_survive_a_roundtrip() {
         let hello = ToShell::Hello {
+            permissions: Permissions::owner(),
+            account: "owner".to_string(),
             protocol_version: PROTOCOL_VERSION,
             output: Output {
                 width: 1920,

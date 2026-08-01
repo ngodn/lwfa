@@ -24,8 +24,13 @@ function Slider({
   return (
     <SliderPrimitive.Root
       data-slot="slider"
-      defaultValue={defaultValue}
-      value={value}
+      // Spread rather than passed explicitly: this repo runs with
+      // `exactOptionalPropertyTypes`, under which `value={undefined}` is not
+      // the same as omitting `value`, and Radix's props are optional rather
+      // than optional-or-undefined. Re-apply if `shadcn add slider` overwrites
+      // this file.
+      {...(defaultValue !== undefined ? { defaultValue } : {})}
+      {...(value !== undefined ? { value } : {})}
       min={min}
       max={max}
       className={cn(

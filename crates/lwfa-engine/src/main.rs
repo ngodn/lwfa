@@ -14,6 +14,7 @@
 //! Everything else modified with Alt is forwarded to the shell, which decides
 //! what it means. Focus order is layout policy, and policy lives in the shell.
 
+mod accounts;
 mod apps;
 mod auth;
 mod capture;
@@ -144,9 +145,23 @@ fn init_shell_link(
         }
     };
 
+    // Not fatal if it fails: the owner's AUTH_PASS still works, so a broken
+    // database means "no named accounts" rather than "no way in".
+    let accounts = match crate::accounts::Accounts::open() {
+        Ok(db) => Some(std::sync::Arc::new(std::sync::Mutex::new(db))),
+        Err(err) => {
+            tracing::warn!(
+                "could not open the accounts database: {err}. Only AUTH_PASS will work."
+            );
+            None
+        }
+    };
+    data.accounts = accounts.clone();
+
     let (link, bound, shared_token) = match ShellLink::bind(
         &addr,
         token.clone(),
+        accounts,
         events_tx,
         data.config.stream.max_frames_in_flight,
     ) {
@@ -288,7 +303,12 @@ fn announce(bound: std::net::SocketAddr, token: &str) {
 
 fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
     match event {
-        ShellEvent::Connected => {
+        ShellEvent::Connected {
+            permissions,
+            account,
+        } => {
+            state.permissions = permissions;
+            state.account = account;
             if let Some(shell) = state.shell.as_mut() {
                 shell.set_connected(true);
             }
@@ -322,78 +342,218 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             tracing::info!("shell gone, back to safe mode");
         }
 
-        ShellEvent::Message(message) => match message {
-            ToEngine::SetLayout { windows, animate } => {
-                let configures = state.layout.apply(
-                    &windows,
-                    animate.map(|a| a.spring),
-                    std::time::Instant::now(),
+        ShellEvent::Message(message) => {
+            // Enforced here, at the one point every shell message passes
+            // through, rather than at each handler. A permission checked in
+            // nine places is a permission that will be missing from the tenth.
+            if !permitted(state, &message) {
+                tracing::debug!(
+                    "dropped {} from {}, which may not interact",
+                    kind_of(&message),
+                    state.account
                 );
-                state.send_configures(configures);
-                state.apply_layout();
+                return;
             }
-            ToEngine::FocusWindow { id } => {
-                // notify_shell false: the shell asked for this, so echoing it
-                // back would be noise and could start a loop.
-                state.set_focus(Some(id), false);
+            handle_shell_message(state, message)
+        }
+    }
+}
+
+/// Whether the connected session is allowed to send this.
+///
+/// Read-only traffic is always fine: laying windows out and asking for pixels
+/// is what a viewer *is*. Anything that reaches the machine underneath, whether
+/// by typing into it, clicking on it, closing something or starting something,
+/// requires interact.
+#[cfg_attr(test, allow(dead_code))]
+fn permitted(state: &Lwfa, message: &ToEngine) -> bool {
+    match message {
+        // Layout and streaming are the viewer's own business: they decide what
+        // their screen shows, not what the machine does.
+        ToEngine::SetLayout { .. }
+        | ToEngine::SetStreams { .. }
+        | ToEngine::FocusWindow { .. }
+        | ToEngine::ListApps => true,
+
+        // Administering accounts is the owner's alone, and is refused out loud
+        // rather than dropped: the UI is waiting on a reply.
+        ToEngine::ListAccounts
+        | ToEngine::CreateAccount { .. }
+        | ToEngine::UpdateAccount { .. }
+        | ToEngine::DeleteAccount { .. } => true,
+
+        // Launching is gated twice: on interact, and on the app list.
+        ToEngine::Spawn { command } => state.permissions.may_interact() && state.may_spawn(command),
+
+        // Everything else drives the machine.
+        _ => state.permissions.may_interact(),
+    }
+}
+
+fn kind_of(message: &ToEngine) -> &'static str {
+    match message {
+        ToEngine::Spawn { .. } => "spawn",
+        ToEngine::CloseWindow { .. } => "closeWindow",
+        ToEngine::Key { .. } => "key",
+        ToEngine::PointerButton { .. } | ToEngine::PointerMotion { .. } => "pointer",
+        ToEngine::TouchDown { .. } | ToEngine::TouchMotion { .. } | ToEngine::TouchUp { .. } => {
+            "touch"
+        }
+        _ => "message",
+    }
+}
+
+fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
+    match message {
+        ToEngine::SetLayout { windows, animate } => {
+            let configures = state.layout.apply(
+                &windows,
+                animate.map(|a| a.spring),
+                std::time::Instant::now(),
+            );
+            state.send_configures(configures);
+            state.apply_layout();
+        }
+        ToEngine::FocusWindow { id } => {
+            // notify_shell false: the shell asked for this, so echoing it
+            // back would be noise and could start a loop.
+            state.set_focus(Some(id), false);
+        }
+        ToEngine::CloseWindow { id } => state.request_close(id),
+        ToEngine::ListApps => {
+            // Scanned on demand. A few hundred small files is a handful of
+            // milliseconds, and doing it eagerly would cost every session
+            // that never opens the launcher.
+            let apps = crate::apps::installed();
+            tracing::debug!("found {} installed applications", apps.len());
+            state.send_to_shell(lwfa_proto::ToShell::Apps { apps });
+        }
+        ToEngine::SetStreams { windows, h264 } => {
+            // Total, like SetLayout: anything not listed stops streaming.
+            let next: std::collections::HashSet<_> = windows.into_iter().collect();
+            // Force a fresh, self-contained frame for every window named
+            // here, not just newly-added ones.
+            //
+            // This is the moment that matters: a shell announces what it
+            // wants *after* connecting, so invalidating on connect alone
+            // pushes frames out before the client has asked for anything,
+            // and damage tracking then means an idle window never produces
+            // another one. The symptom is a browser where only the window
+            // you happen to type in is ever visible.
+            //
+            // Cheap because it is bounded by what the viewport shows and
+            // only costs one capture per window.
+            for id in &next {
+                state.capture.invalidate(*id);
             }
-            ToEngine::CloseWindow { id } => state.request_close(id),
-            ToEngine::ListApps => {
-                // Scanned on demand. A few hundred small files is a handful of
-                // milliseconds, and doing it eagerly would cost every session
-                // that never opens the launcher.
-                let apps = crate::apps::installed();
-                tracing::debug!("found {} installed applications", apps.len());
-                state.send_to_shell(lwfa_proto::ToShell::Apps { apps });
+            if let Some(worker) = state.encoders.as_ref() {
+                worker.set_client_supports_h264(h264);
             }
-            ToEngine::SetStreams { windows, h264 } => {
-                // Total, like SetLayout: anything not listed stops streaming.
-                let next: std::collections::HashSet<_> = windows.into_iter().collect();
-                // Force a fresh, self-contained frame for every window named
-                // here, not just newly-added ones.
-                //
-                // This is the moment that matters: a shell announces what it
-                // wants *after* connecting, so invalidating on connect alone
-                // pushes frames out before the client has asked for anything,
-                // and damage tracking then means an idle window never produces
-                // another one. The symptom is a browser where only the window
-                // you happen to type in is ever visible.
-                //
-                // Cheap because it is bounded by what the viewport shows and
-                // only costs one capture per window.
-                for id in &next {
-                    state.capture.invalidate(*id);
+            if let Some(worker) = state.encoders.as_ref() {
+                worker.request_keyframes();
+            }
+            state.streaming = next;
+            tracing::debug!("streaming {} window(s)", state.streaming.len());
+        }
+        ToEngine::PointerMotion { window, x, y } => state.remote_pointer_motion(window, x, y),
+        ToEngine::PointerButton { button, pressed } => state.remote_pointer_button(button, pressed),
+        ToEngine::PointerAxis {
+            horizontal,
+            vertical,
+        } => state.remote_pointer_axis(horizontal, vertical),
+        ToEngine::PointerLeave => state.remote_pointer_leave(),
+        ToEngine::Key { key, pressed } => state.remote_key(key, pressed),
+        ToEngine::TouchDown { window, id, x, y } => state.remote_touch_down(window, id, x, y),
+        ToEngine::TouchMotion { window, id, x, y } => state.remote_touch_motion(window, id, x, y),
+        ToEngine::TouchUp { id } => state.remote_touch_up(id),
+        ToEngine::Spawn { command } => {
+            // Reaching here means `permitted` already checked both interact and
+            // the account's application list.
+            state.spawn(&command);
+        }
+
+        ToEngine::ListAccounts => match state.accounts_for_owner("listAccounts") {
+            Ok(db) => {
+                let accounts = db
+                    .lock()
+                    .ok()
+                    .and_then(|db| db.list().ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|a| lwfa_proto::AccountInfo {
+                        id: a.id,
+                        name: a.name,
+                        permissions: a.permissions,
+                    })
+                    .collect();
+                state.send_to_shell(lwfa_proto::ToShell::Accounts { accounts });
+            }
+            Err(refusal) => state.send_to_shell(refusal),
+        },
+
+        ToEngine::CreateAccount {
+            name,
+            password,
+            permissions,
+        } => match state.accounts_for_owner("createAccount") {
+            Ok(db) => {
+                let result = db
+                    .lock()
+                    .map_err(|_| "the accounts database is unavailable".to_string())
+                    .and_then(|db| {
+                        db.create(&name, &password, &permissions)
+                            .map_err(|e| e.to_string())
+                    });
+                match result {
+                    Ok(account) => {
+                        tracing::info!("created account {}", account.name);
+                        state.reply_accounts();
+                    }
+                    Err(message) => state.send_to_shell(lwfa_proto::ToShell::Error {
+                        request: "createAccount".into(),
+                        message,
+                    }),
                 }
-                if let Some(worker) = state.encoders.as_ref() {
-                    worker.set_client_supports_h264(h264);
+            }
+            Err(refusal) => state.send_to_shell(refusal),
+        },
+
+        ToEngine::UpdateAccount {
+            id,
+            permissions,
+            password,
+        } => match state.accounts_for_owner("updateAccount") {
+            Ok(db) => {
+                let result = db
+                    .lock()
+                    .map_err(|_| "the accounts database is unavailable".to_string())
+                    .and_then(|db| {
+                        db.set_permissions(id, &permissions)
+                            .map_err(|e| e.to_string())?;
+                        if let Some(password) = password.as_deref().filter(|p| !p.is_empty()) {
+                            db.set_password(id, password).map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    });
+                match result {
+                    Ok(()) => state.reply_accounts(),
+                    Err(message) => state.send_to_shell(lwfa_proto::ToShell::Error {
+                        request: "updateAccount".into(),
+                        message,
+                    }),
                 }
-                if let Some(worker) = state.encoders.as_ref() {
-                    worker.request_keyframes();
+            }
+            Err(refusal) => state.send_to_shell(refusal),
+        },
+
+        ToEngine::DeleteAccount { id } => match state.accounts_for_owner("deleteAccount") {
+            Ok(db) => {
+                if let Ok(db) = db.lock() {
+                    let _ = db.delete(id);
                 }
-                state.streaming = next;
-                tracing::debug!("streaming {} window(s)", state.streaming.len());
+                state.reply_accounts();
             }
-            ToEngine::PointerMotion { window, x, y } => state.remote_pointer_motion(window, x, y),
-            ToEngine::PointerButton { button, pressed } => {
-                state.remote_pointer_button(button, pressed)
-            }
-            ToEngine::PointerAxis {
-                horizontal,
-                vertical,
-            } => state.remote_pointer_axis(horizontal, vertical),
-            ToEngine::PointerLeave => state.remote_pointer_leave(),
-            ToEngine::Key { key, pressed } => state.remote_key(key, pressed),
-            ToEngine::TouchDown { window, id, x, y } => state.remote_touch_down(window, id, x, y),
-            ToEngine::TouchMotion { window, id, x, y } => {
-                state.remote_touch_motion(window, id, x, y)
-            }
-            ToEngine::TouchUp { id } => state.remote_touch_up(id),
-            ToEngine::Spawn { command } => {
-                // NOTE: arbitrary command execution, reachable by anything that
-                // can open the socket. Acceptable while bound to localhost with
-                // no auth; see the security note in shell.rs and milestone 7.
-                state.spawn(&command);
-            }
+            Err(refusal) => state.send_to_shell(refusal),
         },
     }
 }

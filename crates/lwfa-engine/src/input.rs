@@ -111,6 +111,29 @@ impl Lwfa {
         self.apply_safe_mode();
     }
 
+    /// Whether the connected session may run this command.
+    ///
+    /// `allowed_apps` holds desktop entry *ids*, but what arrives over the wire
+    /// is the `Exec=` line the launcher read out of that entry, because that is
+    /// what actually gets run. So the entries are resolved and the command is
+    /// matched against the ones this account is allowed.
+    ///
+    /// Compared for equality, not by prefix: permitting `firefox` must not also
+    /// permit `firefox; rm -rf ~`, which a `starts_with` check would wave
+    /// straight through.
+    pub fn may_spawn(&self, command: &str) -> bool {
+        let Some(allowed) = self.permissions.allowed_apps.as_ref() else {
+            return true; // None means every application.
+        };
+        if allowed.is_empty() {
+            return false;
+        }
+        crate::apps::installed()
+            .into_iter()
+            .filter(|app| allowed.iter().any(|id| id == &app.id))
+            .any(|app| app.exec == command)
+    }
+
     /// Politely ask a window to close. The client decides whether to.
     pub fn request_close(&self, id: lwfa_proto::WindowId) {
         let Some(window) = self.layout.window(id) else {

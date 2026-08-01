@@ -24,7 +24,7 @@
 //! network in the clear, so this is safe on a home LAN and not safe on an
 //! untrusted one. Tunnel it until TLS exists.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::rc::Rc;
@@ -68,7 +68,14 @@ const GOODBYE_TIMEOUT: Duration = Duration::from_millis(250);
 #[derive(Debug)]
 pub enum ShellEvent {
     /// A shell connected. The engine replies with `Hello`.
-    Connected,
+    ///
+    /// Carries who it turned out to be, because authentication happens on the
+    /// accept thread during the handshake and the compositor needs the answer
+    /// to decide what the session may do.
+    Connected {
+        permissions: lwfa_proto::Permissions,
+        account: String,
+    },
     Message(ToEngine),
     Disconnected,
 }
@@ -135,6 +142,7 @@ impl ShellLink {
     pub fn bind(
         addr: &str,
         token: String,
+        accounts: Option<Arc<Mutex<crate::accounts::Accounts>>>,
         events: LoopSender<ShellEvent>,
         max_in_flight: usize,
     ) -> std::io::Result<(Self, std::net::SocketAddr, SharedToken)> {
@@ -157,6 +165,7 @@ impl ShellLink {
                 accept_loop(
                     listener,
                     thread_token,
+                    accounts,
                     events,
                     outgoing_rx,
                     thread_in_flight,
@@ -219,6 +228,7 @@ impl ShellLink {
 fn accept_loop(
     listener: TcpListener,
     token: SharedToken,
+    accounts: Option<Arc<Mutex<crate::accounts::Accounts>>>,
     events: LoopSender<ShellEvent>,
     outgoing: Receiver<Outgoing>,
     in_flight: Arc<AtomicUsize>,
@@ -237,29 +247,38 @@ fn accept_loop(
         // been replaced.
         loop {
             match listener.accept() {
-                Ok((stream, peer)) => match handshake(stream, &token.lock().unwrap().clone()) {
-                    Some(socket) => {
-                        if let Some(old) = current.take() {
-                            tracing::info!(
-                                "a new shell connected from {peer}, replacing the old one"
-                            );
-                            // Deliberately no `Disconnected` here. A
-                            // replacement is not a gap in shell coverage, and
-                            // dropping to safe mode and straight back would
-                            // resize every window twice and rebuild every
-                            // encoder session for nothing.
-                            say_goodbye(old);
-                        } else {
-                            tracing::info!("shell connected from {peer}");
+                Ok((stream, peer)) => {
+                    match handshake(stream, &token.lock().unwrap().clone(), accounts.as_deref()) {
+                        Some((socket, permissions, account)) => {
+                            if let Some(old) = current.take() {
+                                tracing::info!(
+                                    "a new shell connected from {peer}, replacing the old one"
+                                );
+                                // Deliberately no `Disconnected` here. A
+                                // replacement is not a gap in shell coverage, and
+                                // dropping to safe mode and straight back would
+                                // resize every window twice and rebuild every
+                                // encoder session for nothing.
+                                say_goodbye(old);
+                            } else {
+                                tracing::info!("shell connected from {peer}");
+                            }
+                            current = Some(socket);
+                            drain_stale(&outgoing, &in_flight);
+                            tracing::info!("authenticated as {account} ({:?})", permissions.mode);
+                            if events
+                                .send(ShellEvent::Connected {
+                                    permissions,
+                                    account,
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
                         }
-                        current = Some(socket);
-                        drain_stale(&outgoing, &in_flight);
-                        if events.send(ShellEvent::Connected).is_err() {
-                            return;
-                        }
+                        None => continue,
                     }
-                    None => continue,
-                },
+                }
                 Err(err) if err.kind() == ErrorKind::WouldBlock => break,
                 Err(err) => {
                     tracing::warn!("shell listener accept failed: {err}");
@@ -289,7 +308,18 @@ fn accept_loop(
 /// The handshake itself needs a blocking socket, but a client that connects and
 /// then says nothing would stall the whole loop, so it is bounded by a read
 /// timeout rather than trusted.
-fn handshake(stream: TcpStream, token: &str) -> Option<tungstenite::WebSocket<TcpStream>> {
+/// The result of a successful handshake: the socket, and who is on the far end.
+type Accepted = (
+    tungstenite::WebSocket<TcpStream>,
+    lwfa_proto::Permissions,
+    String,
+);
+
+fn handshake(
+    stream: TcpStream,
+    token: &str,
+    accounts: Option<&Mutex<crate::accounts::Accounts>>,
+) -> Option<Accepted> {
     // Nagle would add up to 40ms to a small layout message, which is a visible
     // hitch on something the user just triggered.
     let _ = stream.set_nodelay(true);
@@ -302,15 +332,29 @@ fn handshake(stream: TcpStream, token: &str) -> Option<tungstenite::WebSocket<Tc
     // A shared cell rather than a captured `&mut`: `accept_hdr`'s error
     // variant holds the callback, so a borrow would outlive the call and the
     // result could not be inspected afterwards.
-    let authorized = Rc::new(Cell::new(false));
-    let flag = Rc::clone(&authorized);
+    // Also carries *who*, not just whether: the same query parameter can be the
+    // owner's `AUTH_PASS` or any account's password, and the two grant very
+    // different things.
+    let identity: Rc<RefCell<Option<crate::accounts::Identity>>> = Rc::new(RefCell::new(None));
+    let found = Rc::clone(&identity);
 
     let accepted = tungstenite::accept_hdr(
         stream,
         |request: &tungstenite::handshake::server::Request, response| {
             let uri = request.uri().to_string();
-            let ok = auth::token_from_query(&uri).is_some_and(|t| auth::token_matches(token, &t));
-            flag.set(ok);
+            let presented = auth::token_from_query(&uri);
+            let who = presented.and_then(|presented| {
+                // The owner's password first, so the bootstrap credential keeps
+                // working even if an account is created with the same one.
+                if auth::token_matches(token, &presented) {
+                    return Some(crate::accounts::Identity::Owner);
+                }
+                accounts
+                    .and_then(|db| db.lock().ok()?.authenticate(&presented))
+                    .map(crate::accounts::Identity::User)
+            });
+            let ok = who.is_some();
+            *found.borrow_mut() = who;
             if ok {
                 Ok(response)
             } else {
@@ -325,7 +369,7 @@ fn handshake(stream: TcpStream, token: &str) -> Option<tungstenite::WebSocket<Tc
     let socket = match accepted {
         Ok(socket) => socket,
         Err(err) => {
-            if authorized.get() {
+            if identity.borrow().is_some() {
                 tracing::warn!("shell websocket handshake failed: {err}");
             } else {
                 // Expected whenever someone opens the port without the token.
@@ -343,7 +387,11 @@ fn handshake(stream: TcpStream, token: &str) -> Option<tungstenite::WebSocket<Tc
         tracing::warn!("could not set the shell socket non-blocking");
         return None;
     }
-    Some(socket)
+
+    // The callback ran and said yes, so this is populated. If it somehow is
+    // not, refusing beats guessing at permissions.
+    let who = identity.borrow_mut().take()?;
+    Some((socket, who.permissions(), who.name().to_string()))
 }
 
 /// Close a replaced connection, making sure the reason actually gets sent.

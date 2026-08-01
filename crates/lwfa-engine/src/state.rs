@@ -50,6 +50,12 @@ pub struct Lwfa {
     pub layout: Layout,
     /// The shell connection, if any. `None` until the listener binds.
     pub shell: Option<ShellLink>,
+    /// What the connected session may do. Enforced here, not in the browser.
+    pub permissions: lwfa_proto::Permissions,
+    /// Which account is connected, for logging and for `Hello`.
+    pub account: String,
+    /// Named accounts, if the database opened. See `accounts.rs`.
+    pub accounts: Option<Arc<std::sync::Mutex<crate::accounts::Accounts>>>,
     /// Per-surface capture. Only does work when something asks it to.
     pub capture: SurfaceCapture,
     /// Encoding runs on its own thread. Opening an NVENC session costs
@@ -136,6 +142,15 @@ impl Lwfa {
             // Real size arrives from the backend once the output exists.
             layout: Layout::new((0, 0).into()),
             shell: None,
+            // Until a shell authenticates there is nothing to permit. Starting
+            // at owner would give a window between bind and connect in which a
+            // half-authenticated session could act.
+            permissions: lwfa_proto::Permissions {
+                mode: lwfa_proto::SessionMode::View,
+                allowed_apps: Some(Vec::new()),
+            },
+            account: String::new(),
+            accounts: None,
             capture: SurfaceCapture::default(),
             encoders: None,
             streaming: std::collections::HashSet::new(),
@@ -333,6 +348,8 @@ impl Lwfa {
             },
             windows,
             focused: self.focused,
+            permissions: self.permissions.clone(),
+            account: self.account.clone(),
         }
     }
 
@@ -572,6 +589,48 @@ impl Lwfa {
         }
 
         overlays
+    }
+
+    /// The accounts database, but only for a session that may administer it.
+    ///
+    /// Account administration is the owner's alone. A session that authenticated
+    /// with a named account can read its own permissions from `Hello`, and that
+    /// is all: letting a view-only guest list or edit accounts would make the
+    /// whole permission system decorative.
+    pub fn accounts_for_owner(
+        &self,
+        request: &str,
+    ) -> Result<Arc<std::sync::Mutex<crate::accounts::Accounts>>, ToShell> {
+        if self.account != "owner" {
+            return Err(ToShell::Error {
+                request: request.to_string(),
+                message: "only the owner may manage accounts".to_string(),
+            });
+        }
+        self.accounts.clone().ok_or_else(|| ToShell::Error {
+            request: request.to_string(),
+            message: "the accounts database is not available".to_string(),
+        })
+    }
+
+    /// Send the current account list, after a change.
+    pub fn reply_accounts(&mut self) {
+        let Some(db) = self.accounts.clone() else {
+            return;
+        };
+        let accounts = db
+            .lock()
+            .ok()
+            .and_then(|db| db.list().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| lwfa_proto::AccountInfo {
+                id: a.id,
+                name: a.name,
+                permissions: a.permissions,
+            })
+            .collect();
+        self.send_to_shell(ToShell::Accounts { accounts });
     }
 
     /// Capture the streaming windows and queue them for the shell.

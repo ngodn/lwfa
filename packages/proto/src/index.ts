@@ -90,6 +90,9 @@ export type ToShell =
       output: Output
       windows: WindowInfo[]
       focused: WindowId | null
+      permissions: Permissions
+      /** Which account this is. "owner" for AUTH_PASS. */
+      account: string
     }
   | { type: "outputChanged"; output: Output }
   | { type: "windowOpened"; window: WindowInfo }
@@ -110,6 +113,37 @@ export type ToShell =
    * touches the filesystem and most sessions never open the launcher.
    */
   | { type: "apps"; apps: AppEntry[] }
+  /** The accounts on this machine. Never contains a password or a hash. */
+  | { type: "accounts"; accounts: AccountInfo[] }
+  /**
+   * A request with a visible result did not happen, and why.
+   *
+   * Distinct from a dropped message: this exists so the UI can say "that name
+   * is taken" rather than leaving a dialog waiting for a reply.
+   */
+  | { type: "error"; request: string; message: string }
+
+/**
+ * What a connected session is allowed to do.
+ *
+ * Advisory here: the shell uses it to grey out what it cannot use. The engine
+ * enforces it. A permission checked only in the browser is not a permission,
+ * it is a suggestion.
+ */
+export interface Permissions {
+  mode: SessionMode
+  /** Desktop entry ids this session may launch. `null` means all of them. */
+  allowedApps: string[] | null
+}
+
+export type SessionMode = "view" | "interact"
+
+/** One account, as the Access panel sees it. */
+export interface AccountInfo {
+  id: number
+  name: string
+  permissions: Permissions
+}
 
 /** One launchable application, from a freedesktop `.desktop` entry. */
 export interface AppEntry {
@@ -132,6 +166,11 @@ export type ToEngine =
   | { type: "spawn"; command: string }
   /** Ask for the installed applications. Answered with `apps`. */
   | { type: "listApps" }
+  /** Account administration. All four require the owner. */
+  | { type: "listAccounts" }
+  | { type: "createAccount"; name: string; password: string; permissions: Permissions }
+  | { type: "updateAccount"; id: number; permissions: Permissions; password: string | null }
+  | { type: "deleteAccount"; id: number }
   /**
    * Which windows the shell wants pixels for. Total: anything not listed stops
    * streaming. A shell compositing natively asks for none.
@@ -349,7 +388,11 @@ export function decodeToShell(text: string): ToShell {
   switch (t) {
     case "hello": {
       const where = `${at}.hello`
-      noExtraKeys(o, ["type", "protocolVersion", "output", "windows", "focused"], where)
+      noExtraKeys(
+        o,
+        ["type", "protocolVersion", "output", "windows", "focused", "permissions", "account"],
+        where,
+      )
       return {
         type: "hello",
         protocolVersion: int(o, "protocolVersion", where),
@@ -358,6 +401,8 @@ export function decodeToShell(text: string): ToShell {
           decodeWindowInfo(w, `${where}.windows[${i}]`),
         ),
         focused: nullableId(o, "focused", where),
+        permissions: decodePermissions(o["permissions"], `${where}.permissions`),
+        account: str(o, "account", where),
       }
     }
     case "outputChanged": {
@@ -390,6 +435,21 @@ export function decodeToShell(text: string): ToShell {
         modifiers: decodeModifiers(o["modifiers"], `${where}.modifiers`),
       }
     }
+    case "accounts": {
+      const where = `${at}.accounts`
+      noExtraKeys(o, ["type", "accounts"], where)
+      const list = o["accounts"]
+      if (!Array.isArray(list)) throw new ProtocolError(`${where}.accounts: expected an array`)
+      return {
+        type: "accounts",
+        accounts: list.map((a, i) => decodeAccount(a, `${where}.accounts[${i}]`)),
+      }
+    }
+    case "error": {
+      const where = `${at}.error`
+      noExtraKeys(o, ["type", "request", "message"], where)
+      return { type: "error", request: str(o, "request", where), message: str(o, "message", where) }
+    }
     case "apps": {
       const where = `${at}.apps`
       noExtraKeys(o, ["type", "apps"], where)
@@ -399,6 +459,41 @@ export function decodeToShell(text: string): ToShell {
     }
     default:
       throw new ProtocolError(`${at}: unknown message type ${JSON.stringify(t)}`)
+  }
+}
+
+function decodeAccount(value: unknown, at: string): AccountInfo {
+  const o = asObject(value, at)
+  noExtraKeys(o, ["id", "name", "permissions"], at)
+  return {
+    id: int(o, "id", at),
+    name: str(o, "name", at),
+    permissions: decodePermissions(o["permissions"], `${at}.permissions`),
+  }
+}
+
+function decodePermissions(value: unknown, at: string): Permissions {
+  const o = asObject(value, at)
+  noExtraKeys(o, ["mode", "allowedApps"], at)
+  const mode = str(o, "mode", at)
+  if (mode !== "view" && mode !== "interact") {
+    throw new ProtocolError(`${at}.mode: expected "view" or "interact", got ${mode}`)
+  }
+  const allowed = o["allowedApps"]
+  if (allowed !== null && !Array.isArray(allowed)) {
+    throw new ProtocolError(`${at}.allowedApps: expected an array or null`)
+  }
+  return {
+    mode,
+    allowedApps:
+      allowed === null
+        ? null
+        : allowed.map((a, i) => {
+            if (typeof a !== "string") {
+              throw new ProtocolError(`${at}.allowedApps[${i}]: expected a string`)
+            }
+            return a
+          }),
   }
 }
 

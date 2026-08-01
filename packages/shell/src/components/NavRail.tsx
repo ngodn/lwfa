@@ -100,6 +100,7 @@ export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps)
     <nav
       ref={railRef as React.Ref<HTMLElement>}
       aria-label="Shell navigation"
+      data-shell-nav
       data-edge={edge}
       className={cn(
         "z-30 flex shrink-0 items-center bg-sidebar/80 backdrop-blur-xl",

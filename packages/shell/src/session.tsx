@@ -14,7 +14,7 @@
  */
 
 import { createContext, use } from "react"
-import type { ToEngine, WindowId, WindowInfo } from "@lwfa/proto"
+import type { Permissions, ToEngine, WindowId, WindowInfo } from "@lwfa/proto"
 import type { Status } from "./connection.js"
 import type { Output, StripState } from "./strip.js"
 
@@ -27,6 +27,15 @@ export interface SessionState {
   strip: StripState
   /** The endpoint this shell is talking to, for display. */
   endpoint: string
+  /**
+   * What this session may do.
+   *
+   * Advisory: the shell uses it to grey out controls. The engine enforces it,
+   * because a check that runs in the browser is a suggestion.
+   */
+  permissions: Permissions
+  /** Which account is connected. "owner" for AUTH_PASS. */
+  account: string
 }
 
 /**

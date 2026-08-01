@@ -36,6 +36,8 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         (
             "hello",
             ToShell::Hello {
+                permissions: lwfa_proto::Permissions::owner(),
+                account: "owner".to_string(),
                 protocol_version: PROTOCOL_VERSION,
                 output,
                 windows: vec![
@@ -56,6 +58,8 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         (
             "hello-empty",
             ToShell::Hello {
+                permissions: lwfa_proto::Permissions::owner(),
+                account: "owner".to_string(),
                 protocol_version: PROTOCOL_VERSION,
                 output,
                 windows: vec![],
