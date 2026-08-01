@@ -38,7 +38,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
-const WIDTH_LABEL = ["1/3", "1/2", "2/3"] as const
+const WIDTH_LABEL = ["1/3", "1/2", "2/3", "90%"] as const
 
 function WindowsPanel() {
   const { strip } = useSessionState()

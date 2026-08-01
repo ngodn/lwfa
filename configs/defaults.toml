@@ -155,10 +155,28 @@ min_present_ms = 4
 gap = 12
 
 # Column widths as a fraction of the output, cycled by Alt+4.
-width_presets = [0.3333333333333333, 0.5, 0.6666666666666667]
+#
+# 0.9 rather than 1.0 for the widest: the sliver of the neighbour showing at the
+# edge is what tells you the strip continues. A column at exactly 100% looks
+# like a maximised window, and then scrolling sideways is a surprise.
+width_presets = [0.3333333333333333, 0.5, 0.6666666666666667, 0.9]
 
 # Which of those a new column gets. An index into `width_presets`.
-default_width = 1
+#
+# The widest, so an application you open gets essentially the whole viewport and
+# is immediately usable. Anything smaller is a decision the user can make with
+# one tap once they want two things side by side, whereas a window that opens
+# too small has to be fixed before it is useful.
+default_width = 3
+
+# Keep the focused column in the middle of the viewport.
+#
+# Focus then always lands in the same place, so moving along the strip is a
+# predictable motion rather than a scroll you have to read, and both neighbours
+# peek in at the edges. It matters most on a tablet, where there is no keyboard
+# to tell you where you are. Set false for the minimal-scroll behaviour, which
+# wastes no motion on a wide display where several columns already fit.
+centre_focused = true
 
 # Floor in logical pixels, so a preset cannot make a column unusably narrow on
 # a small viewport. This is what stops ⅓ of a phone screen being 120px.

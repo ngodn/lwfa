@@ -216,7 +216,7 @@ export function App(): React.ReactElement {
       type: "setStreams",
       windows: streamingRef.current
         ? windows
-            .filter((w) => intersectsViewport(w.rect, out.width))
+            .filter((w) => intersectsViewport(w.rect, out))
             .map((w) => w.id)
         : [],
       // Tell the engine what this browser can actually decode. Over plain HTTP
@@ -490,7 +490,7 @@ export function App(): React.ReactElement {
     if (!streaming) return new Set<WindowId>();
     return new Set(
       placed
-        .filter((w) => intersectsViewport(w.rect, output.width))
+        .filter((w) => intersectsViewport(w.rect, output))
         .map((w) => w.id),
     );
   }, [streaming, placed, output.width]);

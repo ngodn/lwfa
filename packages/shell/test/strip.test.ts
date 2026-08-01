@@ -11,6 +11,7 @@ import {
   DEFAULT_CONFIG,
   EMPTY,
   type Output,
+  type StripConfig,
   type StripState,
   addWindow,
   allWindows,
@@ -27,8 +28,10 @@ import {
   focusWindow,
   focusWorkspace,
   focusedWindow,
+  WIDTH_PRESETS,
   intersectsViewport,
   layout,
+  orientationOf,
   moveToWorkspace,
   presetWidth,
   reflow,
@@ -37,12 +40,32 @@ import {
 } from "../src/strip.js"
 
 const config = DEFAULT_CONFIG
+
+/**
+ * The minimal-scroll behaviour, which is no longer the default.
+ *
+ * Both modes are supported and both are worth testing: centring is what a
+ * tablet wants, minimal scrolling is what a wide display wants.
+ */
+const minimalScroll = { ...DEFAULT_CONFIG, centreFocused: false }
 const wide: Output = { width: 1920, height: 1080 }
 /** The viewport milestone 2 was verified against, so numbers are comparable. */
 const nested: Output = { width: 1261, height: 1390 }
+/**
+ * A landscape viewport for the scrolling suite.
+ *
+ * `nested` is 1261x1390, which is *portrait*, so since the strip follows the
+ * long axis it scrolls vertically there. Reusing it for horizontal-scroll
+ * assertions tested the wrong axis.
+ */
+const scrollable: Output = { width: 1261, height: 800 }
 
-function withWindows(ids: number[], output: Output = wide): StripState {
-  return ids.reduce((state, id) => addWindow(state, id, output, config), EMPTY)
+function withWindows(
+  ids: number[],
+  output: Output = wide,
+  cfg: StripConfig = config,
+): StripState {
+  return ids.reduce((state, id) => addWindow(state, id, output, cfg), EMPTY)
 }
 
 describe("column sizing", () => {
@@ -50,6 +73,7 @@ describe("column sizing", () => {
     expect(presetWidth(0, wide, config)).toBe(640) // 1/3
     expect(presetWidth(1, wide, config)).toBe(960) // 1/2
     expect(presetWidth(2, wide, config)).toBe(1280) // 2/3
+    expect(presetWidth(3, wide, config)).toBe(1728) // 90%
   })
 
   it("has a floor on narrow viewports", () => {
@@ -62,12 +86,14 @@ describe("column sizing", () => {
     const widthOf = (s: StripState) => currentWorkspace(s).columns[0]!.width
     expect(widthOf(state)).toBe(config.defaultWidth)
 
-    state = cycleWidth(state, wide, config)
-    expect(widthOf(state)).toBe(2)
-    state = cycleWidth(state, wide, config)
-    expect(widthOf(state)).toBe(0)
-    state = cycleWidth(state, wide, config)
-    expect(widthOf(state)).toBe(1)
+    // Wraps back to 0 after the last preset, whatever the list length, so
+    // adding a preset does not need this test rewritten.
+    const presets = WIDTH_PRESETS.length
+    for (let step = 1; step <= presets; step++) {
+      state = cycleWidth(state, wide, config)
+      expect(widthOf(state)).toBe((config.defaultWidth + step) % presets)
+    }
+    expect(widthOf(state)).toBe(config.defaultWidth)
   })
 
   it("only resizes the focused column", () => {
@@ -249,28 +275,59 @@ describe("workspaces", () => {
 
 describe("scrolling", () => {
   it("scrolls right by the minimum needed to reveal the focused column", () => {
-    const state = withWindows([1, 2], nested)
+    const state = withWindows([1, 2], scrollable, minimalScroll)
     const ws = currentWorkspace(state)
-    const width = presetWidth(ws.columns[1]!.width, nested, config)
-    const right = columnX(ws.columns, 1, nested, config) + width + config.gap
-    expect(ws.viewOffset).toBe(right - nested.width)
+    const width = presetWidth(ws.columns[1]!.width, scrollable, minimalScroll)
+    const right = columnX(ws.columns, 1, scrollable, minimalScroll) + width + minimalScroll.gap
+    expect(ws.viewOffset).toBe(right - scrollable.width)
   })
 
   it("scrolls left to reveal a column off the left edge", () => {
-    let state = withWindows([1, 2], nested)
+    let state = withWindows([1, 2], scrollable, minimalScroll)
     expect(currentWorkspace(state).viewOffset).toBeGreaterThan(0)
-    state = focusLeft(state, nested, config)
+    state = focusLeft(state, scrollable, minimalScroll)
     expect(currentWorkspace(state).viewOffset).toBe(0)
   })
 
+  it("centres the focused column by default", () => {
+    // The property that makes a strip navigable without a keyboard: focus is
+    // always in the same place, so moving is a predictable motion.
+    const state = withWindows([1, 2], scrollable)
+    const ws = currentWorkspace(state)
+    const width = presetWidth(ws.columns[1]!.width, scrollable, config)
+    const left = columnX(ws.columns, 1, scrollable, config)
+    const centreOfColumn = left + width / 2
+    expect(ws.viewOffset + scrollable.width / 2).toBeCloseTo(centreOfColumn, 6)
+  })
+
+  it("keeps focus centred at both ends of the strip", () => {
+    // Deliberately not clamped: if the first column snapped to the left edge
+    // the ends would behave differently from the middle, which is exactly the
+    // unpredictability centring removes.
+    let state = withWindows([1, 2, 3], scrollable)
+    state = focusLeft(state, scrollable, config)
+    state = focusLeft(state, scrollable, config)
+    const ws = currentWorkspace(state)
+    expect(ws.focus).toBe(0)
+    const width = presetWidth(ws.columns[0]!.width, scrollable, config)
+    const centreOfColumn = columnX(ws.columns, 0, scrollable, config) + width / 2
+    expect(ws.viewOffset + scrollable.width / 2).toBeCloseTo(centreOfColumn, 6)
+  })
+
   it("does not move when the focused column is already visible", () => {
+    // Minimal mode only: centring moves it on purpose, even when it already
+    // fits, which is the whole point of centring.
     const roomy: Output = { width: 4000, height: 1080 }
-    const state = withWindows([1], roomy)
+    const state = withWindows([1], roomy, minimalScroll)
     expect(currentWorkspace(state).viewOffset).toBe(0)
   })
 
   it("pins the left edge of a column that cannot fit", () => {
-    const tiny: Output = { width: 260, height: 800 }
+    // Wider than the viewport, so no offset shows all of it. Pinning the left
+    // edge beats centring, which would cut off both sides instead of one.
+    // Landscape and narrow, so `minWidth` forces the column past the viewport:
+    // 0.9 x 200 is 180, floored to 240, which is wider than the 200 available.
+    const tiny: Output = { width: 200, height: 150 }
     const state = withWindows([1, 2], tiny)
     const ws = currentWorkspace(state)
     expect(ws.viewOffset).toBe(columnX(ws.columns, 1, tiny, config) - config.gap)
@@ -404,9 +461,16 @@ describe("viewport intersection", () => {
   it("excludes columns entirely off screen", () => {
     // This is what bounds the encoder budget by viewport width rather than by
     // how many windows are open.
-    expect(intersectsViewport({ x: -700, y: 0, width: 631, height: 100 }, 1261)).toBe(false)
-    expect(intersectsViewport({ x: -25, y: 0, width: 631, height: 100 }, 1261)).toBe(true)
-    expect(intersectsViewport({ x: 1300, y: 0, width: 631, height: 100 }, 1261)).toBe(false)
+    const landscape = { width: 1261, height: 800 }
+    expect(intersectsViewport({ x: -700, y: 0, width: 631, height: 100 }, landscape)).toBe(false)
+    expect(intersectsViewport({ x: -25, y: 0, width: 631, height: 100 }, landscape)).toBe(true)
+    expect(intersectsViewport({ x: 1300, y: 0, width: 631, height: 100 }, landscape)).toBe(false)
+
+    // Portrait tests the other axis: the same rect is judged by y, not x.
+    const portrait = { width: 800, height: 1261 }
+    expect(intersectsViewport({ x: 0, y: -700, width: 100, height: 631 }, portrait)).toBe(false)
+    expect(intersectsViewport({ x: 0, y: -25, width: 100, height: 631 }, portrait)).toBe(true)
+    expect(intersectsViewport({ x: 0, y: 1300, width: 100, height: 631 }, portrait)).toBe(false)
   })
 })
 

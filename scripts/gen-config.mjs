@@ -22,7 +22,13 @@ const OUT = fileURLToPath(new URL("../packages/shell/src/generated/config.ts", i
 const config = readConfig()
 const layout = config.layout ?? {}
 
-const required = ["gap", "width_presets", "default_width", "min_width"]
+const required = [
+  "gap",
+  "width_presets",
+  "default_width",
+  "min_width",
+  "centre_focused",
+]
 const missing = required.filter((key) => layout[key] === undefined)
 if (missing.length > 0) {
   console.error(`[layout] in ${CONFIG_PATH} is missing: ${missing.join(", ")}`)
@@ -70,6 +76,9 @@ export const DEFAULT_WIDTH = ${layout.default_width}
 
 /** Floor on column width, so a phone-width viewport stays usable. */
 export const MIN_WIDTH = ${layout.min_width}
+
+/** Keep the focused column in the middle of the viewport. */
+export const CENTRE_FOCUSED = ${layout.centre_focused === true}
 `
 
 mkdirSync(fileURLToPath(new URL("../packages/shell/src/generated/", import.meta.url)), {
