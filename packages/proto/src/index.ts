@@ -113,6 +113,13 @@ export type ToShell =
    * touches the filesystem and most sessions never open the launcher.
    */
   | { type: "apps"; apps: AppEntry[] }
+  /**
+   * Icons for the applications, sent after `apps`.
+   *
+   * Separate so the launcher paints its list immediately and fills icons in as
+   * they arrive.
+   */
+  | { type: "appIcons"; icons: AppIcon[] }
   /** The accounts on this machine. Never contains a password or a hash. */
   | { type: "accounts"; accounts: AccountInfo[] }
   /**
@@ -137,6 +144,14 @@ export interface Permissions {
 }
 
 export type SessionMode = "view" | "interact"
+
+/** One resolved application icon, as a `data:` URI. */
+export interface AppIcon {
+  /** The desktop entry id this belongs to. */
+  id: string
+  /** `data:image/svg+xml;base64,...` or `data:image/png;base64,...`. */
+  data: string
+}
 
 /** One account, as the Access panel sees it. */
 export interface AccountInfo {
@@ -164,8 +179,15 @@ export type ToEngine =
   | { type: "focusWindow"; id: WindowId }
   | { type: "closeWindow"; id: WindowId }
   | { type: "spawn"; command: string }
-  /** Ask for the installed applications. Answered with `apps`. */
+  /** Ask for the installed applications. Answered with `apps`, without icons. */
   | { type: "listApps" }
+  /**
+   * Ask for icons, by desktop entry id.
+   *
+   * Separate from `listApps` so the shell asks only for what it does not
+   * already have cached. A full set is over a megabyte.
+   */
+  | { type: "requestIcons"; ids: string[] }
   /** Account administration. All four require the owner. */
   | { type: "listAccounts" }
   | { type: "createAccount"; name: string; password: string; permissions: Permissions }
@@ -433,6 +455,23 @@ export function decodeToShell(text: string): ToShell {
         type: "keyBinding",
         key: str(o, "key", where),
         modifiers: decodeModifiers(o["modifiers"], `${where}.modifiers`),
+      }
+    }
+    case "appIcons": {
+      const where = `${at}.appIcons`
+      noExtraKeys(o, ["type", "icons"], where)
+      const list = o["icons"]
+      if (!Array.isArray(list)) throw new ProtocolError(`${where}.icons: expected an array`)
+      return {
+        type: "appIcons",
+        icons: list.map((icon, i) => {
+          const entry = asObject(icon, `${where}.icons[${i}]`)
+          noExtraKeys(entry, ["id", "data"], `${where}.icons[${i}]`)
+          return {
+            id: str(entry, "id", `${where}.icons[${i}]`),
+            data: str(entry, "data", `${where}.icons[${i}]`),
+          }
+        }),
       }
     }
     case "accounts": {

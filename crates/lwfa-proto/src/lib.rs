@@ -215,6 +215,14 @@ pub enum ToShell {
     #[serde(rename_all = "camelCase")]
     Apps { apps: Vec<AppEntry> },
 
+    /// Icons for the applications, sent after [`ToShell::Apps`].
+    ///
+    /// Separate so the launcher paints its list immediately and fills icons in
+    /// as they arrive: resolving a theme and reading a hundred files is not
+    /// slow, but it is slower than showing the names.
+    #[serde(rename_all = "camelCase")]
+    AppIcons { icons: Vec<AppIcon> },
+
     /// The accounts on this machine, in reply to [`ToEngine::ListAccounts`].
     ///
     /// Never contains a password or a hash. Sent only to the owner; any other
@@ -229,6 +237,16 @@ pub enum ToShell {
     /// dialog waiting for a reply that is never coming.
     #[serde(rename_all = "camelCase")]
     Error { request: String, message: String },
+}
+
+/// One resolved application icon, as a `data:` URI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppIcon {
+    /// The desktop entry id this belongs to.
+    pub id: String,
+    /// `data:image/svg+xml;base64,...` or `data:image/png;base64,...`.
+    pub data: String,
 }
 
 /// One account, as the Access panel sees it.
@@ -352,8 +370,19 @@ pub enum ToEngine {
     Spawn { command: String },
 
     /// Ask for the installed applications. Answered with [`ToShell::Apps`].
+    ///
+    /// Icons are *not* included: see [`ToEngine::RequestIcons`].
     #[serde(rename_all = "camelCase")]
     ListApps,
+
+    /// Ask for icons, by desktop entry id.
+    ///
+    /// Separate from [`ToEngine::ListApps`] so the shell can ask only for the
+    /// ones it does not already have. A full set is well over a megabyte, and
+    /// re-sending it on every reconnect to a client that cached it last time is
+    /// a megabyte of nothing.
+    #[serde(rename_all = "camelCase")]
+    RequestIcons { ids: Vec<String> },
 
     /// Account administration. All four require the owner; anything else is
     /// answered with [`ToShell::Error`] rather than silently ignored, because

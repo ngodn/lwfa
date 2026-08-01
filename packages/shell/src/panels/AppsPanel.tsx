@@ -5,14 +5,13 @@
  * other Linux launcher shows, so whatever is installed simply appears with no
  * per-app work here.
  *
- * # Why there are no icons
+ * # Icons
  *
- * A `.desktop` file names an icon; resolving that name to a file means walking
- * icon themes, inheritance chains and size buckets, and then getting the bytes
- * across the socket. That is a real feature, not a small one, and a launcher
- * that works with a coloured initial today beats one that is still being
- * designed. The name is carried in the protocol so it can be added later
- * without another round of changes.
+ * A `.desktop` file names an icon, not a path, so the engine walks the
+ * freedesktop theme chain to find a file and sends the bytes as a data URI.
+ * They arrive in their own message *after* the list, so the launcher paints
+ * immediately and fills in. Anything that does not resolve falls back to a
+ * coloured initial rather than a broken-image glyph.
  */
 
 import { memo, useDeferredValue, useEffect, useMemo, useState } from "react"
@@ -28,7 +27,7 @@ import { cn } from "@/lib/utils"
 
 function AppsPanel() {
   const actions = useSessionActions()
-  const { apps, loading } = useApps()
+  const { apps, icons, loading } = useApps()
   const [query, setQuery] = useState("")
 
   // The list can be several hundred entries; deferring keeps typing responsive
@@ -76,7 +75,12 @@ function AppsPanel() {
         <PanelSection title={`${matches.length} application${matches.length === 1 ? "" : "s"}`}>
           <ul className="space-y-1">
             {matches.map((app) => (
-              <AppRow key={app.id} app={app} onLaunch={() => actions.spawn(app.exec)} />
+              <AppRow
+                key={app.id}
+                app={app}
+                icon={icons.get(app.id)}
+                onLaunch={() => actions.spawn(app.exec)}
+              />
             ))}
           </ul>
         </PanelSection>
@@ -89,9 +93,21 @@ function AppsPanel() {
   )
 }
 
-const AppRow = memo(function AppRow({ app, onLaunch }: { app: AppEntry; onLaunch: () => void }) {
+const AppRow = memo(function AppRow({
+  app,
+  icon,
+  onLaunch,
+}: {
+  app: AppEntry
+  icon: string | undefined
+  onLaunch: () => void
+}) {
   return (
-    <li>
+    // `content-visibility: auto` lets the browser skip layout and paint for
+    // rows scrolled out of view. A hundred rows with an image each is enough
+    // that this is measurable, and `contain-intrinsic-size` keeps the scrollbar
+    // honest by telling it how tall a skipped row would be.
+    <li style={{ contentVisibility: "auto", containIntrinsicSize: "auto 56px" }}>
       <button
         onClick={onLaunch}
         className={cn(
@@ -99,13 +115,26 @@ const AppRow = memo(function AppRow({ app, onLaunch }: { app: AppEntry; onLaunch
           "transition-colors active:bg-accent [@media(hover:hover)]:hover:bg-accent",
         )}
       >
-        <span
-          className="grid size-9 shrink-0 place-items-center rounded-lg text-sm font-semibold text-white"
-          style={{ background: tint(app.id) }}
-          aria-hidden
-        >
-          {app.name.trim().charAt(0).toUpperCase() || "?"}
-        </span>
+        {icon ? (
+          <img
+            src={icon}
+            alt=""
+            // Decoded off the main thread and never lazy: the list is short and
+            // a launcher that pops icons in as you scroll feels broken.
+            decoding="async"
+            className="size-9 shrink-0 rounded-lg object-contain"
+          />
+        ) : (
+          // No icon resolved. A coloured initial beats a broken-image glyph,
+          // and is stable per app so the list stays recognisable.
+          <span
+            className="grid size-9 shrink-0 place-items-center rounded-lg text-sm font-semibold text-white"
+            style={{ background: tint(app.id) }}
+            aria-hidden
+          >
+            {app.name.trim().charAt(0).toUpperCase() || "?"}
+          </span>
+        )}
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium">{app.name}</span>
           {app.description ? (

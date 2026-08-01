@@ -22,6 +22,7 @@ mod config;
 mod encode;
 mod focus;
 mod handlers;
+mod icons;
 mod input;
 mod layout;
 mod remote_input;
@@ -373,7 +374,8 @@ fn permitted(state: &Lwfa, message: &ToEngine) -> bool {
         ToEngine::SetLayout { .. }
         | ToEngine::SetStreams { .. }
         | ToEngine::FocusWindow { .. }
-        | ToEngine::ListApps => true,
+        | ToEngine::ListApps
+        | ToEngine::RequestIcons { .. } => true,
 
         // Administering accounts is the owner's alone, and is refused out loud
         // rather than dropped: the UI is waiting on a reply.
@@ -426,7 +428,31 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             // that never opens the launcher.
             let apps = crate::apps::installed();
             tracing::debug!("found {} installed applications", apps.len());
+
+            // Names only. The shell asks for the icons it is missing, which
+            // for a returning client is usually none.
             state.send_to_shell(lwfa_proto::ToShell::Apps { apps });
+        }
+
+        ToEngine::RequestIcons { ids } => {
+            if ids.is_empty() {
+                return;
+            }
+            let wanted: Vec<(String, String)> = crate::apps::installed()
+                .into_iter()
+                .filter(|app| ids.iter().any(|id| id == &app.id))
+                .filter_map(|app| app.icon.map(|icon| (app.id, icon)))
+                .collect();
+
+            let started = std::time::Instant::now();
+            let icons = crate::icons::resolve_all(&wanted);
+            tracing::debug!(
+                "resolved {} of {} requested icons in {:.0}ms",
+                icons.len(),
+                wanted.len(),
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+            state.send_to_shell(lwfa_proto::ToShell::AppIcons { icons });
         }
         ToEngine::SetStreams { windows, h264 } => {
             // Total, like SetLayout: anything not listed stops streaming.

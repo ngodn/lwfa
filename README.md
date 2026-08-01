@@ -32,9 +32,14 @@ Milestone 4 of 7 complete. See the build order in the architecture doc.
       compositor, gated by a shared token. Reachable over the LAN; **no TLS yet**
 - [x] **XWayland** — X11 clients (Steam, Proton, older GTK2/Qt4, non-ozone
       Electron) map into the same strip, stream, and take remote input
+- [x] **The shell UI** — shadcn/ui, a navigation rail you can put on any edge
+      and reorder, an on-screen keyboard and gamepad, a launcher, and window
+      management. See [The shell](#the-shell)
+- [x] **Accounts** — named users in SQLite with per-account permissions,
+      enforced by the engine. See [Accounts](#accounts)
 - [ ] 5. Appearance vocabulary in both backends
-- [ ] 6. iPad: WebCodecs, gestures, responsive breakpoints
-- [ ] 7. Clipboard, audio, multi-monitor, DPI, reconnect, auth, packaging
+- [ ] 6. iPad: gestures, PWA install, offline shell
+- [ ] 7. Clipboard, audio, multi-monitor, DPI, TLS, packaging
 
 ## Requirements
 
@@ -241,6 +246,99 @@ with it. See `[render]` in the config.
 
 `scripts/dev-nested.sh` does the same placement on a host without those rules
 installed, and verifies it afterwards.
+
+## The shell
+
+The browser side is React 19 with [shadcn/ui](https://ui.shadcn.com/) on
+Tailwind v4. Fonts are self-hosted: the machine is often not on the internet,
+and a shell that waits on a font CDN before painting is a shell that never
+paints.
+
+### The navigation rail
+
+One strip of buttons along an edge you choose, in **two clusters**. The ones you
+reach for while working (windows, keyboard, gamepad) are anchored to the far end
+where a thumb rests; the ones you touch once a week sit at the near end, out of
+accidental reach, with the slack between them. That is a reachability decision,
+not decoration, and it survives every edge and every size.
+
+The rail **measures itself** rather than trusting breakpoints, because "do nine
+buttons fit" is a different question along the bottom of a phone than down its
+side. When they stop fitting they merge rather than disappear: keyboard and
+gamepad into **Input**, the management panels into **More**, down to a floor of
+Apps, Windows and the two grouped buttons. Nothing becomes unreachable, only
+differently routed.
+
+Edge, order, visibility, which end each button is anchored to, and button size
+are all in Settings, stored per device. They are per device on purpose: a phone
+wants the bar where a thumb is, the same person on a 27" display wants it down
+the side, and syncing them would make one device's ergonomics fight the other's.
+
+### Input
+
+The keyboard and gamepad are **input devices, not settings screens**, so they
+dock across the bottom rather than opening in a side panel. The keyboard takes
+space from the desktop, because typing while the keyboard covers the line you
+are editing is the failure it exists to prevent. The gamepad floats over it: a
+game wants every pixel, and its interesting parts are not under your thumbs.
+
+- **Keyboard** — Escape and the function row are always on screen; the
+  full-size tail (Insert, Home, Page Up, Print Screen, Scroll Lock…) is behind
+  a toggle, which is the right way round. Modifiers latch for one keypress in
+  normal mode and stay held in **combo** mode, so one finger can build
+  Ctrl+Alt+F2. Keys are sent as evdev keycodes, so the remote machine's own
+  keymap decides what they mean.
+- **Gamepad** — the [W3C standard mapping](https://w3c.github.io/gamepad/#remapping):
+  two analog sticks that click for L3/R3, L1/L2/R1/R2, face cluster, d-pad,
+  select/start/guide. Sticks quantise to eight directions with a dead zone, so a
+  resting thumb sends nothing and diagonals hold two keys. Edit mode is
+  [React Flow](https://reactflow.dev/); the dot grid appears **only** while
+  editing, never over a running game. Skins are PlayStation, Xbox or neutral and
+  change labels only.
+
+### Launcher and windows
+
+**Apps** reads the machine's freedesktop desktop entries, the same list every
+other Linux launcher shows.
+
+Icons are resolved through the icon theme chain (`gtk-icon-theme-name`, its
+`Inherits=`, then `hicolor`, then `/usr/share/pixmaps`) and sent as data URIs on
+request. A full set is over a megabyte, so the shell caches them in IndexedDB
+and asks only for what it does not already have; a returning client requests
+nothing. Icons that resolve to nothing are cached as tombstones, because roughly
+a sixth of desktop entries name an icon that is not installed and without that
+the shell would ask again on every reload forever. In the DOM they are blob
+URLs, not data URIs, so the browser decodes each once instead of re-parsing
+base64 per element.
+
+**Windows** has workspaces, per-window actions, and an *arrange* view that lays
+columns out as separated cards so a finger has something to grab, since windows
+on the real strip run off the viewport edges.
+
+## Accounts
+
+The engine has one shared password (`AUTH_PASS`) and, since accounts landed,
+named users as well. Everyone who knows the shared password can do everything;
+handing somebody a link so they can *watch* should not also let them run
+commands.
+
+Accounts live in SQLite on the machine they authenticate for, at
+`$XDG_STATE_HOME/lwfa/accounts.db`. There is no control plane to enrol with and
+nothing to be offline from. Passwords are Argon2id with a per-user salt.
+
+Each account has a **mode** (watch only, or interact) and a list of applications
+it may launch. `AUTH_PASS` means **the owner**: the bootstrap credential, the
+only identity that may administer accounts, and the way back in if the last
+named account locks itself out. Manage them in the Access panel.
+
+Enforcement is in the engine, at the single point every shell message passes
+through. The shell greys out what it cannot use, which is a courtesy rather than
+a control: anyone can open a socket and send whatever they like.
+
+Saved **connections** are the opposite and live in the browser. Which machines
+*you* care about is a property of the device in your hand, and storing that on a
+machine would mean that machine being switched off loses you the list of the
+others.
 
 ## Tests
 

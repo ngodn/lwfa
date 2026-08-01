@@ -37,7 +37,14 @@ import {
 } from "./credentials.js";
 import { FrameDecoder, supportsH264 } from "./decode.js";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
-import { appsRequested, clearApps, setApps } from "@/lib/apps"
+import {
+  appsRequested,
+  clearApps,
+  hydrateIcons,
+  iconsRequested,
+  setAppIcons,
+  setApps,
+} from "@/lib/apps"
 import { log } from "@/lib/log"
 import {
   accountsRequested,
@@ -303,8 +310,22 @@ export function App(): React.ReactElement {
           );
           break;
 
-        case "apps":
+        case "apps": {
           setApps(message.apps)
+          // Serve what this device already has, then ask only for the rest.
+          // On a returning client that is usually an empty request.
+          const ids = message.apps.filter((a) => a.icon !== null).map((a) => a.id)
+          void hydrateIcons(ids).then((missing) => {
+            if (missing.length > 0) {
+              iconsRequested(missing)
+              connection.current?.send({ type: "requestIcons", ids: missing })
+            }
+          })
+          break
+        }
+
+        case "appIcons":
+          setAppIcons(message.icons)
           break
 
         case "accounts":
