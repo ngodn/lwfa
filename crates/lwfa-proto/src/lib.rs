@@ -201,6 +201,34 @@ pub enum ToShell {
     /// `key` is an xkb keysym name such as `"h"`, `"Left"` or `"Return"`.
     #[serde(rename_all = "camelCase")]
     KeyBinding { key: String, modifiers: Modifiers },
+
+    /// Applications installed on the machine, in reply to [`ToEngine::ListApps`].
+    ///
+    /// Sent on request rather than in `Hello` because scanning the desktop
+    /// entries touches the filesystem, and most sessions never open the
+    /// launcher at all.
+    #[serde(rename_all = "camelCase")]
+    Apps { apps: Vec<AppEntry> },
+}
+
+/// One launchable application, from a freedesktop `.desktop` entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppEntry {
+    /// The desktop file's basename without its extension, e.g. `org.gnome.Nautilus`.
+    pub id: String,
+    pub name: String,
+    /// `Comment=`, when the entry has one.
+    pub description: Option<String>,
+    /// `Exec=`, with the freedesktop field codes (%f, %U, ...) removed.
+    pub exec: String,
+    /// `Icon=`. A name, not a path: the shell has no icon theme, so this is
+    /// only a hint for grouping and a fallback initial.
+    pub icon: Option<String>,
+    /// `Categories=`, split. Used to group the launcher.
+    pub categories: Vec<String>,
+    /// True when the entry asked for a terminal to be opened around it.
+    pub terminal: bool,
 }
 
 /// A pointer button, using Linux evdev numbering (`BTN_LEFT` = 0x110).
@@ -246,6 +274,10 @@ pub enum ToEngine {
     /// Launch a program. The engine sets `WAYLAND_DISPLAY` to its own socket.
     #[serde(rename_all = "camelCase")]
     Spawn { command: String },
+
+    /// Ask for the installed applications. Answered with [`ToShell::Apps`].
+    #[serde(rename_all = "camelCase")]
+    ListApps,
 
     /// Pointer moved within a window.
     ///

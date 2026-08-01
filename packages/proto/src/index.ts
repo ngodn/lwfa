@@ -103,12 +103,35 @@ export type ToShell =
    * shell. `key` is an xkb keysym name such as `"h"`, `"Left"` or `"Return"`.
    */
   | { type: "keyBinding"; key: string; modifiers: Modifiers }
+  /**
+   * Installed applications, in reply to `listApps`.
+   *
+   * On request rather than in `hello`, because scanning the desktop entries
+   * touches the filesystem and most sessions never open the launcher.
+   */
+  | { type: "apps"; apps: AppEntry[] }
+
+/** One launchable application, from a freedesktop `.desktop` entry. */
+export interface AppEntry {
+  /** The desktop file's basename without its extension. */
+  id: string
+  name: string
+  description: string | null
+  /** `Exec=`, with the freedesktop field codes (%f, %U, ...) removed. */
+  exec: string
+  /** An icon *name*, not a path. The shell has no icon theme; this is a hint. */
+  icon: string | null
+  categories: string[]
+  terminal: boolean
+}
 
 export type ToEngine =
   | { type: "setLayout"; windows: WindowLayout[]; animate: Animation | null }
   | { type: "focusWindow"; id: WindowId }
   | { type: "closeWindow"; id: WindowId }
   | { type: "spawn"; command: string }
+  /** Ask for the installed applications. Answered with `apps`. */
+  | { type: "listApps" }
   /**
    * Which windows the shell wants pixels for. Total: anything not listed stops
    * streaming. A shell compositing natively asks for none.
@@ -367,8 +390,38 @@ export function decodeToShell(text: string): ToShell {
         modifiers: decodeModifiers(o["modifiers"], `${where}.modifiers`),
       }
     }
+    case "apps": {
+      const where = `${at}.apps`
+      noExtraKeys(o, ["type", "apps"], where)
+      const list = o["apps"]
+      if (!Array.isArray(list)) throw new ProtocolError(`${where}.apps: expected an array`)
+      return { type: "apps", apps: list.map((app, i) => decodeApp(app, `${where}.apps[${i}]`)) }
+    }
     default:
       throw new ProtocolError(`${at}: unknown message type ${JSON.stringify(t)}`)
+  }
+}
+
+function decodeApp(value: unknown, at: string): AppEntry {
+  const o = asObject(value, at)
+  noExtraKeys(
+    o,
+    ["id", "name", "description", "exec", "icon", "categories", "terminal"],
+    at,
+  )
+  const categories = o["categories"]
+  if (!Array.isArray(categories)) throw new ProtocolError(`${at}.categories: expected an array`)
+  return {
+    id: str(o, "id", at),
+    name: str(o, "name", at),
+    description: nullableStr(o, "description", at),
+    exec: str(o, "exec", at),
+    icon: nullableStr(o, "icon", at),
+    categories: categories.map((c, i) => {
+      if (typeof c !== "string") throw new ProtocolError(`${at}.categories[${i}]: expected a string`)
+      return c
+    }),
+    terminal: bool(o, "terminal", at),
   }
 }
 

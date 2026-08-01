@@ -14,6 +14,7 @@
 //! Everything else modified with Alt is forwarded to the shell, which decides
 //! what it means. Focus order is layout policy, and policy lives in the shell.
 
+mod apps;
 mod auth;
 mod capture;
 mod config;
@@ -337,6 +338,14 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 state.set_focus(Some(id), false);
             }
             ToEngine::CloseWindow { id } => state.request_close(id),
+            ToEngine::ListApps => {
+                // Scanned on demand. A few hundred small files is a handful of
+                // milliseconds, and doing it eagerly would cost every session
+                // that never opens the launcher.
+                let apps = crate::apps::installed();
+                tracing::debug!("found {} installed applications", apps.len());
+                state.send_to_shell(lwfa_proto::ToShell::Apps { apps });
+            }
             ToEngine::SetStreams { windows, h264 } => {
                 // Total, like SetLayout: anything not listed stops streaming.
                 let next: std::collections::HashSet<_> = windows.into_iter().collect();

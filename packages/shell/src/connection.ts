@@ -31,6 +31,11 @@ export type Status =
   | "replaced"
   /** The engine refused the password. Retrying is pointless until it changes. */
   | "unauthorized"
+  /**
+   * Could not get past the handshake, and the cause is genuinely unknown:
+   * either nothing is listening or the password was refused. See `onclose`.
+   */
+  | "unreachable"
 
 export interface ConnectionHandlers {
   onMessage: (message: ToShell) => void
@@ -141,11 +146,25 @@ export class Connection {
       }
 
       if (!this.#everGreeted) {
-        // Never got past the handshake. Almost always a rejected password;
-        // retrying on a loop would just hammer the engine, so stop and let the
-        // user correct it.
-        this.#closed = true
-        this.#handlers.onStatus("unauthorized")
+        // Never got past the handshake. Two very different things look
+        // identical from here, and the browser will not tell us which:
+        //
+        //   - the engine refused the password, answering the upgrade with 401
+        //   - nothing was listening at all
+        //
+        // Both surface as a close with no reason and no `onopen`, because a
+        // failed WebSocket handshake deliberately hides the HTTP status from
+        // script. So this must not *guess*, and in particular must not report
+        // "unauthorized", which used to make the shell discard the stored
+        // password: restarting the engine then logged the user out and told
+        // them their correct password had been refused.
+        //
+        // Retry, and say honestly that it could be either.
+        this.#handlers.onStatus(
+          "unreachable",
+          "the engine did not accept the connection: it may be down, or the password may be wrong",
+        )
+        this.#scheduleReconnect()
         return
       }
 

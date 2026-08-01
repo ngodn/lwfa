@@ -23,6 +23,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { usePrefs, type NavEdge, type NavItemId } from "@/lib/prefs"
+import { useDock } from "@/lib/dock"
 import {
   NAV_GROUPS,
   TIER_COUNT,
@@ -53,6 +54,7 @@ const isVertical = (edge: NavEdge) => edge === "left" || edge === "right"
 export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps) {
   const { nav } = usePrefs()
   const { edge, order, hidden, anchored, size } = nav
+  const dock = useDock()
   const metrics = SIZES[size]
   const vertical = isVertical(edge)
 
@@ -89,6 +91,11 @@ export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps)
   const start = slots.filter((slot) => zoneOf(slot, anchored) === "start")
   const end = slots.filter((slot) => zoneOf(slot, anchored) === "end")
 
+  // The keyboard and gamepad buttons dock a surface rather than open a panel,
+  // so "active" for them means "on screen", not "its panel is open". Without
+  // this the only way to tell whether the keyboard is up is to look for it.
+  const isActive = (id: string) => id === active || id === dock
+
   return (
     <nav
       ref={railRef as React.Ref<HTMLElement>}
@@ -112,7 +119,7 @@ export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps)
           slot={slot}
           edge={edge}
           metrics={metrics}
-          active={active === slot.id}
+          active={isActive(slot.id)}
           onSelect={onSelect}
         />
       ))}
@@ -127,7 +134,7 @@ export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps)
           slot={slot}
           edge={edge}
           metrics={metrics}
-          active={active === slot.id}
+          active={isActive(slot.id)}
           onSelect={onSelect}
         />
       ))}

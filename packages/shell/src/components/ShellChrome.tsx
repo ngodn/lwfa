@@ -18,6 +18,8 @@ import { memo, useCallback, useLayoutEffect, useState } from "react"
 import { usePrefs } from "@/lib/prefs"
 import { NavRail, shellDirection, type NavTarget } from "@/components/NavRail"
 import { PanelHost } from "@/components/PanelHost"
+import { InputDock } from "@/components/InputDock"
+import { toggleDock } from "@/lib/dock"
 import type { NavItemId } from "@/lib/prefs"
 import type { NavGroupId } from "@/nav/registry"
 import { cn } from "@/lib/utils"
@@ -32,8 +34,14 @@ export const ShellChrome = memo(function ShellChrome({
   const [active, setActive] = useState<NavItemId | NavGroupId | null>(null)
 
   const select = useCallback((target: NavTarget) => {
-    // Tapping the open panel's own button closes it, which is what a bar of
-    // toggles should do and saves reaching for the overlay to dismiss it.
+    // The keyboard and the gamepad are input devices, not settings screens, so
+    // their buttons put them on screen rather than opening a panel about them.
+    // Their settings live behind the gear inside the dock. See `lib/dock.ts`.
+    if (target.kind === "item" && (target.id === "keyboard" || target.id === "gamepad")) {
+      toggleDock(target.id)
+      return
+    }
+    // Everything else toggles its panel, so tapping the open one closes it.
     setActive((current) => (current === target.id ? null : target.id))
   }, [])
 
@@ -51,7 +59,13 @@ export const ShellChrome = memo(function ShellChrome({
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <div className={cn("flex h-full w-full overflow-hidden bg-backdrop", shellDirection(nav.edge))}>
         <NavRail active={active} onSelect={select} />
-        <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden">{children}</main>
+        {/* A column, so a docked keyboard takes space from the desktop rather
+            than covering the line being typed into. The gamepad positions
+            itself absolutely inside this same box and takes none. */}
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="relative min-h-0 flex-1">{children}</div>
+          <InputDock onOpenSettings={setActive} />
+        </main>
         <PanelHost active={active} onClose={close} />
       </div>
     </TooltipProvider>
