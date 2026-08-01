@@ -97,22 +97,40 @@ Environment:
 - `LWFA_NO_AUTOSTART` — set to skip opening a terminal on launch
 - `LWFA_SHELL_ADDR` — where to listen for a shell (default `127.0.0.1:9843`;
   use `0.0.0.0:9843` to reach it from other devices)
-- `LWFA_SHELL_TOKEN` — the shared token. Generated per run if unset
+- `AUTH_PASS` — the shared password. Read from `.env` if not in the environment.
+  A temporary one is generated if neither is set, which breaks bookmarked URLs
 - `LWFA_PROFILE` — log per-window capture timings
 - `RUST_LOG=debug` — Smithay is chatty at `info`; `warn` is usually the useful level
 
 ### Using it from another device
 
-The engine prints a ready-made URL on startup. To reach it from a phone or
-tablet on the same network:
+Settings live in `.env`, which is gitignored. Start from the template:
 
 ```sh
-LWFA_SHELL_ADDR=0.0.0.0:9843 LWFA_SHELL_TOKEN=$(openssl rand -hex 16) cargo run -p lwfa-engine
+cp .env.example .env
+sed -i "s|^AUTH_PASS=.*|AUTH_PASS=$(openssl rand -hex 16)|" .env
+sed -i "s|^LWFA_SHELL_ADDR=.*|LWFA_SHELL_ADDR=0.0.0.0:9843|" .env
+chmod 600 .env
+```
+
+Then run both halves and open the link the engine prints:
+
+```sh
+cargo run -p lwfa-engine
 pnpm --filter @lwfa/shell dev    # already binds 0.0.0.0
 ```
 
-Then open the printed `http://<ip>:5173/?token=…` link. The shell finds the
-engine on whatever host served the page, so nothing else needs configuring.
+```
+open the shell at:  http://192.168.1.x:5173/?token=…
+```
+
+The shell connects to whatever host served the page, so nothing else needs
+configuring. Bookmark that URL on the tablet; it keeps working as long as
+`AUTH_PASS` stays the same.
+
+Environment variables override `.env`, so a one-off
+`LWFA_SHELL_ADDR=127.0.0.1:9843 cargo run -p lwfa-engine` works without
+editing the file.
 
 > **Security, plainly.** The shell protocol injects keystrokes and spawns
 > processes, so whoever can open the socket controls the session. A shared
@@ -125,8 +143,8 @@ engine on whatever host served the page, so nothing else needs configuring.
 > anywhere reachable from the internet — tunnel it over SSH or WireGuard until
 > TLS exists.
 >
-> Set `LWFA_SHELL_TOKEN` to keep the token stable across restarts, otherwise a
-> fresh one is generated each run and bookmarked URLs stop working.
+> `AUTH_PASS` in `.env` keeps the password stable across restarts. Without it a
+> fresh one is generated each run and any bookmarked URL stops working.
 
 On Hyprland, `scripts/dev-nested.sh` launches the engine pinned to a specific
 workspace (default 2, override with `LWFA_DEV_WORKSPACE`) so it never lands on

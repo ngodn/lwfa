@@ -24,3 +24,8 @@ node_modules/
 
 # Playwright MCP scratch output from browser verification runs.
 /.playwright-mcp/
+
+# Local secrets. AUTH_PASS lives here; never commit it.
+# See .env.example for the format.
+.env
+.env.local

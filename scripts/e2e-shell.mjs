@@ -14,6 +14,7 @@
  * Exits non-zero on the first failed expectation.
  */
 
+import { readFileSync } from "node:fs"
 import {
   DEFAULT_CONFIG,
   EMPTY,
@@ -28,9 +29,30 @@ import {
 } from "../packages/shell/src/strip.ts"
 import { PROTOCOL_VERSION, decodeToShell, encode } from "../packages/proto/src/index.ts"
 
-// The engine requires a token. Tests set LWFA_SHELL_TOKEN when launching it
-// so both sides agree; see scripts/dev-nested.sh.
-const TOKEN = process.env.LWFA_SHELL_TOKEN ?? ""
+/**
+ * The engine requires a password. Read it the same way the engine does, so
+ * running these needs no extra setup: AUTH_PASS from the environment, else
+ * from .env.
+ */
+function authPass() {
+  if (process.env.AUTH_PASS) return process.env.AUTH_PASS
+  try {
+    const file = readFileSync(new global.URL("../.env", import.meta.url), "utf8")
+    for (const line of file.split("\n")) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith("#")) continue
+      const at = trimmed.indexOf("=")
+      if (at === -1) continue
+      if (trimmed.slice(0, at).trim() !== "AUTH_PASS") continue
+      return trimmed.slice(at + 1).trim().replace(/^["']|["']$/g, "")
+    }
+  } catch {
+    // No .env is fine; the engine may have generated a token instead.
+  }
+  return ""
+}
+
+const TOKEN = authPass()
 const URL =
   process.argv[2] ?? `ws://127.0.0.1:9843${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ""}`
 const TIMEOUT_MS = 15_000

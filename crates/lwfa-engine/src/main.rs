@@ -72,7 +72,8 @@ fn init_shell_link(
     event_loop: &mut EventLoop<CalloopData>,
     data: &mut CalloopData,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let addr = std::env::var("LWFA_SHELL_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
+    // Environment first, then .env, then the loopback default.
+    let addr = auth::setting("LWFA_SHELL_ADDR").unwrap_or_else(|| DEFAULT_ADDR.to_string());
     let (events_tx, events_rx) = channel::channel::<ShellEvent>();
 
     let token = match auth::resolve_token() {

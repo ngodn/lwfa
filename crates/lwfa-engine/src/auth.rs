@@ -26,24 +26,133 @@ const TOKEN_BYTES: usize = 16;
 /// The name of the query parameter carrying the token.
 pub const TOKEN_PARAM: &str = "token";
 
-/// Read the token from the environment, or generate one.
+/// The variable holding the shared secret, in `.env` or the environment.
+pub const PASS_VAR: &str = "AUTH_PASS";
+
+/// Resolve the shared secret.
 ///
-/// Setting `LWFA_SHELL_TOKEN` makes it stable across restarts, which is what
-/// you want once a tablet has the URL bookmarked. Leaving it unset generates a
-/// fresh one each run, which is safer but means re-copying the URL.
+/// In order: the `AUTH_PASS` environment variable, then `AUTH_PASS` in a `.env`
+/// file beside the repo, then a freshly generated one.
+///
+/// A file is the normal path because the secret has to stay *stable* for a
+/// bookmarked URL on a tablet to keep working, and a generated-per-run secret
+/// breaks that bookmark on every restart.
 pub fn resolve_token() -> std::io::Result<String> {
-    if let Ok(token) = std::env::var("LWFA_SHELL_TOKEN") {
-        if token.is_empty() {
-            // Explicitly empty is not "no token"; that would be a footgun where
-            // a typo in a unit file silently disables authentication.
-            return Err(std::io::Error::other(
-                "LWFA_SHELL_TOKEN is set but empty. Unset it to generate one, \
-                 or give it a value.",
-            ));
-        }
-        return Ok(token);
+    if let Some(value) = std::env::var(PASS_VAR).ok().filter(|v| !v.is_empty()) {
+        tracing::debug!("using {PASS_VAR} from the environment");
+        return Ok(value);
     }
-    generate_token()
+
+    match dotenv_value(PASS_VAR)? {
+        Some(value) if !value.is_empty() => {
+            tracing::debug!("using {PASS_VAR} from .env");
+            Ok(value)
+        }
+        Some(_) => Err(std::io::Error::other(format!(
+            "{PASS_VAR} in .env is empty. Give it a value, or remove the line to \
+             have one generated."
+        ))),
+        None => {
+            tracing::warn!(
+                "no {PASS_VAR} set, so a temporary one was generated. Any bookmarked \
+                 shell URL will stop working on restart. Put {PASS_VAR} in .env to pin it."
+            );
+            generate_token()
+        }
+    }
+}
+
+/// Look a setting up in the environment, then in `.env`.
+///
+/// The environment wins, so a one-off `LWFA_SHELL_ADDR=... cargo run` overrides
+/// the file without editing it.
+pub fn setting(key: &str) -> Option<String> {
+    if let Some(value) = std::env::var(key).ok().filter(|v| !v.is_empty()) {
+        return Some(value);
+    }
+    dotenv_value(key).ok().flatten().filter(|v| !v.is_empty())
+}
+
+/// Read one key out of a `.env` file, if there is one.
+///
+/// Deliberately minimal: `KEY=value`, `#` comments, optional surrounding
+/// quotes. No interpolation, no `export`, no multi-line values. A secret file
+/// wants boring and predictable parsing far more than it wants features, and a
+/// surprising expansion rule here would be a security bug rather than an
+/// inconvenience.
+fn dotenv_value(key: &str) -> std::io::Result<Option<String>> {
+    let Some(path) = dotenv_path() else {
+        return Ok(None);
+    };
+
+    warn_if_world_readable(&path);
+
+    let contents = std::fs::read_to_string(&path)?;
+    Ok(parse_dotenv(&contents, key))
+}
+
+/// The parsing half, separated so it can be tested without touching the disk.
+fn parse_dotenv(contents: &str, key: &str) -> Option<String> {
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        // `export FOO=bar` is common enough in hand-written files to be worth
+        // tolerating, even though nothing here writes it.
+        let name = name
+            .trim()
+            .strip_prefix("export ")
+            .unwrap_or(name.trim())
+            .trim();
+        if name != key {
+            continue;
+        }
+        let value = value.trim();
+        let unquoted = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+        return Some(unquoted.to_string());
+    }
+    None
+}
+
+/// Where to look for `.env`.
+///
+/// The working directory first, so `cargo run` from the repo root finds it,
+/// then the repo root relative to the binary for an installed layout.
+fn dotenv_path() -> Option<std::path::PathBuf> {
+    let candidates = [
+        std::path::PathBuf::from(".env"),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|root| root.join(".env"))
+            .unwrap_or_default(),
+    ];
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// A secret readable by every user on the machine is not much of a secret.
+fn warn_if_world_readable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    let mode = metadata.permissions().mode();
+    if mode & 0o077 != 0 {
+        tracing::warn!(
+            "{} is readable by other users (mode {:o}). Run: chmod 600 {}",
+            path.display(),
+            mode & 0o777,
+            path.display(),
+        );
+    }
 }
 
 /// A random token from the kernel.
@@ -147,6 +256,70 @@ mod tests {
         // "tokenish=x" must not be read as the token.
         assert_eq!(token_from_query("/?tokenish=x"), None);
         assert_eq!(token_from_query("/?mytoken=x"), None);
+    }
+
+    #[test]
+    fn reads_a_plain_assignment() {
+        assert_eq!(
+            parse_dotenv("AUTH_PASS=hunter2", "AUTH_PASS").as_deref(),
+            Some("hunter2")
+        );
+    }
+
+    #[test]
+    fn ignores_comments_and_blank_lines() {
+        let file = "# a comment\n\n  # indented comment\nAUTH_PASS=abc\n";
+        assert_eq!(parse_dotenv(file, "AUTH_PASS").as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn strips_surrounding_quotes() {
+        assert_eq!(
+            parse_dotenv("AUTH_PASS=\"abc\"", "AUTH_PASS").as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            parse_dotenv("AUTH_PASS='abc'", "AUTH_PASS").as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn keeps_characters_that_look_like_syntax() {
+        // A generated password can contain anything. Mangling one silently
+        // would lock the user out with no clue why.
+        assert_eq!(
+            parse_dotenv("AUTH_PASS=a=b#c$d", "AUTH_PASS").as_deref(),
+            Some("a=b#c$d"),
+            "only the first = splits, and # mid-value is not a comment"
+        );
+    }
+
+    #[test]
+    fn tolerates_export_and_surrounding_whitespace() {
+        assert_eq!(
+            parse_dotenv("export AUTH_PASS = abc ", "AUTH_PASS").as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn does_not_match_a_similarly_named_key() {
+        let file = "MY_AUTH_PASS=wrong\nAUTH_PASS_EXTRA=wrong\nAUTH_PASS=right\n";
+        assert_eq!(parse_dotenv(file, "AUTH_PASS").as_deref(), Some("right"));
+    }
+
+    #[test]
+    fn returns_none_when_absent() {
+        assert_eq!(parse_dotenv("OTHER=1", "AUTH_PASS"), None);
+        assert_eq!(parse_dotenv("", "AUTH_PASS"), None);
+    }
+
+    #[test]
+    fn distinguishes_empty_from_absent() {
+        // Empty must be an error upstream, not a silently generated token:
+        // a typo in the file should not quietly change the password.
+        assert_eq!(parse_dotenv("AUTH_PASS=", "AUTH_PASS").as_deref(), Some(""));
     }
 
     #[test]
