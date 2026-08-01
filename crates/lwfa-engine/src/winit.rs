@@ -83,6 +83,14 @@ pub fn init_winit(
     let backend = Rc::new(RefCell::new(backend));
     let last_redraw = Rc::new(Cell::new(Instant::now()));
 
+    /// When the on-screen path last presented, used to tell a host-driven
+    /// redraw from a spurious one. See the check inside the Redraw handler.
+    let last_present = Rc::new(Cell::new(None::<Instant>));
+
+    // Heartbeat counters. See the heartbeat source further down.
+    let redraws = Rc::new(Cell::new(0u32));
+    let ticks = Rc::new(Cell::new(0u32));
+
     let mode = Mode {
         size: backend.borrow().window_size(),
         refresh: 60_000,
@@ -125,6 +133,9 @@ pub fn init_winit(
     event_loop.handle().insert_source(winit_source, {
         let backend = Rc::clone(&backend);
         let last_redraw = Rc::clone(&last_redraw);
+        let last_present = Rc::clone(&last_present);
+        let redraws = Rc::clone(&redraws);
+        let min_present = data.config.render.min_present();
         let output = output.clone();
         move |event, _, data| {
             let mut display = data.display_handle.clone();
@@ -164,46 +175,82 @@ pub fn init_winit(
                     // Tells the stall timer to stay out of the way: the host is
                     // driving us, so the on-screen path owns this frame.
                     last_redraw.set(Instant::now());
+                    redraws.set(redraws.get() + 1);
 
                     // Advance the scroll spring before rendering, so this frame
                     // shows the current position rather than the previous one.
                     state.tick_animations();
 
+                    tracing::trace!("redraw: begin");
                     let backend = &mut *backend.borrow_mut();
                     let backdrop = state.config.window.backdrop;
-                    let size = backend.window_size();
-                    let damage = Rectangle::from_size(size);
 
-                    {
-                        let (renderer, mut framebuffer) = match backend.bind() {
-                            Ok(bound) => bound,
-                            Err(err) => {
-                                tracing::error!("failed to bind the backend buffer: {err}");
-                                return;
+                    // Is this redraw plausibly the host asking for a frame?
+                    //
+                    // A host drives us through frame callbacks, so a genuine
+                    // one cannot arrive sooner than a display interval after
+                    // the last present: 16ms at 60Hz, 5.5ms at 180Hz. Anything
+                    // faster came from somewhere else, in practice a burst of
+                    // configures when a window rule places or full-screens us.
+                    //
+                    // Presenting on those is what hangs the compositor. The
+                    // host has not released the previous buffer and will not
+                    // release it for a surface it has never displayed, so the
+                    // second `submit()` blocks in libwayland, on the event loop
+                    // thread, forever. Nothing else is dispatched after that:
+                    // no shell events, no protocol traffic, no ping reply. The
+                    // host reports "application not responding" and every
+                    // remote client dies with it. Measured: the two redraws
+                    // were 0.24ms apart.
+                    //
+                    // So skip the on-screen half when it is too soon, and do
+                    // the rest of the frame anyway. Everything remote lives
+                    // below this and does not touch the host's swapchain.
+                    let now = Instant::now();
+                    let present = last_present
+                        .get()
+                        .is_none_or(|last| now.duration_since(last) >= min_present);
+
+                    if present {
+                        let size = backend.window_size();
+                        let damage = Rectangle::from_size(size);
+                        tracing::trace!("redraw: binding");
+                        {
+                            let (renderer, mut framebuffer) = match backend.bind() {
+                                Ok(bound) => bound,
+                                Err(err) => {
+                                    tracing::error!("failed to bind the backend buffer: {err}");
+                                    return;
+                                }
+                            };
+                            if let Err(err) = smithay::desktop::space::render_output::<
+                                _,
+                                WaylandSurfaceRenderElement<GlesRenderer>,
+                                _,
+                                _,
+                            >(
+                                &output,
+                                renderer,
+                                &mut framebuffer,
+                                1.0,
+                                0,
+                                [&state.space],
+                                &[],
+                                &mut damage_tracker,
+                                backdrop,
+                            ) {
+                                tracing::error!("render failed: {err}");
                             }
-                        };
-                        if let Err(err) = smithay::desktop::space::render_output::<
-                            _,
-                            WaylandSurfaceRenderElement<GlesRenderer>,
-                            _,
-                            _,
-                        >(
-                            &output,
-                            renderer,
-                            &mut framebuffer,
-                            1.0,
-                            0,
-                            [&state.space],
-                            &[],
-                            &mut damage_tracker,
-                            backdrop,
-                        ) {
-                            tracing::error!("render failed: {err}");
                         }
-                    }
-
-                    if let Err(err) = backend.submit(Some(&[damage])) {
-                        tracing::error!("failed to submit a frame: {err}");
+                        last_present.set(Some(now));
+                        tracing::trace!("redraw: rendered, submitting");
+                        backend.window().pre_present_notify();
+                        if let Err(err) = backend.submit(Some(&[damage])) {
+                            tracing::error!("failed to submit a frame: {err}");
+                        }
+                        tracing::trace!("redraw: submitted");
+                    } else {
+                        tracing::trace!("redraw: too soon to present, skipping the on-screen half");
                     }
 
                     state.space.elements().for_each(|window| {
@@ -236,7 +283,32 @@ pub fn init_winit(
                     state.popups.cleanup();
                     let _ = display.flush_clients();
 
-                    backend.window().request_redraw();
+                    // Deliberately NOT `request_redraw()` here.
+                    //
+                    // Asking for the next frame at the end of this one looks
+                    // like the obvious way to keep a render loop going, and it
+                    // is how this was written for months. It hangs the whole
+                    // compositor the first time the window is never shown.
+                    //
+                    // Traced: exactly two redraws happen. The first presents
+                    // fine. The second is the one this line asked for, and its
+                    // `submit()` never returns, because the host has not
+                    // released the first buffer and will not release it for a
+                    // surface it has never displayed. That blocks the event
+                    // loop thread, so nothing else runs either: no shell
+                    // events, no protocol traffic, no reply to the host's ping.
+                    // The host reports "application not responding" and every
+                    // remote client dies with it. Being on a hidden workspace at
+                    // startup is enough to trigger it, which is exactly where
+                    // the `workspace N silent` rule puts us.
+                    //
+                    // `pre_present_notify` above is what replaces this: it takes
+                    // a frame callback, and winit re-emits `RedrawRequested`
+                    // when the host fires it. So while the window is visible
+                    // this loop runs at the display's rate, driven by the host,
+                    // and while it is hidden it simply stops, which is correct.
+                    // The stall timer below keeps the remote path alive
+                    // meanwhile.
                 }
 
                 WinitEvent::CloseRequested => state.loop_signal.stop(),
@@ -249,9 +321,39 @@ pub fn init_winit(
     // The stall fallback. See the comment above for why this exists at all.
     let tick = data.config.render.tick();
     let redraw_stall = data.config.render.redraw_stall();
+
+    // Heartbeat, so that "it hung" is a diagnosis rather than the start of one.
+    //
+    // Both hangs this backend has had looked identical from outside: a live
+    // process, an unresponsive window, and no way to tell whether the event
+    // loop was spinning, idle, or blocked inside a syscall. This counts what
+    // actually happened. Off unless LWFA_HEARTBEAT is set, because it logs
+    // once a second forever.
+    if std::env::var_os("LWFA_HEARTBEAT").is_some() {
+        let redraws = Rc::clone(&redraws);
+        let ticks = Rc::clone(&ticks);
+        event_loop.handle().insert_source(
+            Timer::from_duration(Duration::from_secs(1)),
+            move |_, _, data: &mut CalloopData| {
+                // A live loop with 0 redraws is a hidden window working
+                // correctly. 0 of *both* means the loop is not running at all,
+                // and this line stopping is itself the signal.
+                tracing::info!(
+                    "heartbeat: {} redraws/s, {} ticks/s, {} streaming, shell {}",
+                    redraws.replace(0),
+                    ticks.replace(0),
+                    data.streaming.len(),
+                    if data.shell.is_some() { "up" } else { "down" },
+                );
+                TimeoutAction::ToDuration(Duration::from_secs(1))
+            },
+        )?;
+    }
+
     event_loop
         .handle()
         .insert_source(Timer::from_duration(tick), move |_, _, data| {
+            ticks.set(ticks.get() + 1);
             let stalled = last_redraw.get().elapsed() >= redraw_stall;
             // Only worth doing for someone actually watching. With no shell
             // connected there is nobody to send frames to, and letting an

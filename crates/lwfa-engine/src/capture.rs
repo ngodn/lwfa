@@ -38,7 +38,10 @@ use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Bind, Color32F, ExportMem, Frame, Offscreen, Renderer};
 use smithay::desktop::Window;
-use smithay::utils::{Buffer as BufferCoord, Physical, Rectangle, Scale, Size, Transform};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::utils::{
+    Buffer as BufferCoord, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
+};
 use smithay::wayland::seat::WaylandFocus;
 
 /// A captured window image, tightly packed RGBA.
@@ -94,12 +97,18 @@ impl SurfaceCapture {
     /// Capture one window, or return `None` if nothing changed since last time.
     ///
     /// `size` is the window's current size in physical pixels.
+    ///
+    /// `overlays` are surfaces to draw on top of it, at offsets relative to the
+    /// window's own origin: menus, tooltips, combo box drop-downs. They are part
+    /// of *this* capture rather than streams of their own because a remote frame
+    /// is addressed by window id and a popup has none. See `Lwfa::overlays_for`.
     pub fn capture(
         &mut self,
         renderer: &mut GlesRenderer,
         id: WindowId,
         window: &Window,
         size: Size<i32, Physical>,
+        overlays: &[(WlSurface, Point<i32, Logical>)],
     ) -> Option<CapturedFrame> {
         if size.w <= 0 || size.h <= 0 {
             return None;
@@ -113,7 +122,7 @@ impl SurfaceCapture {
         // Building elements is CPU-only and cheap. Doing it before the skip
         // check is what lets the commit counters be read at all: they live on
         // the elements.
-        let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+        let mut elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
             render_elements_from_surface_tree(
                 renderer,
                 &surface,
@@ -122,6 +131,27 @@ impl SurfaceCapture {
                 1.0,
                 Kind::Unspecified,
             );
+
+        // Prepended, because this list is drawn back to front in reverse: the
+        // popup has to end up in front of the window it belongs to.
+        //
+        // Their commit counters join the damage set below, which is what makes a
+        // menu appearing count as damage. Without that the window would look
+        // unchanged and the menu would never be sent.
+        for (overlay, offset) in overlays {
+            let mut popup: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                render_elements_from_surface_tree(
+                    renderer,
+                    overlay,
+                    offset.to_physical(1),
+                    Scale::from(1.0),
+                    1.0,
+                    Kind::Unspecified,
+                );
+            popup.append(&mut elements);
+            elements = popup;
+        }
+
         let commits: Vec<CommitCounter> = elements.iter().map(Element::current_commit).collect();
 
         // Recreate the buffer when the window resizes; reuse it otherwise, so

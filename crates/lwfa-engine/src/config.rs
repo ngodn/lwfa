@@ -163,6 +163,7 @@ impl Default for Stream {
 pub struct Render {
     pub tick_ms: u64,
     pub redraw_stall_ms: u64,
+    pub min_present_ms: u64,
 }
 
 impl Default for Render {
@@ -170,6 +171,7 @@ impl Default for Render {
         Self {
             tick_ms: 16,
             redraw_stall_ms: 50,
+            min_present_ms: 4,
         }
     }
 }
@@ -181,6 +183,10 @@ impl Render {
 
     pub fn redraw_stall(&self) -> Duration {
         Duration::from_millis(self.redraw_stall_ms)
+    }
+
+    pub fn min_present(&self) -> Duration {
+        Duration::from_millis(self.min_present_ms)
     }
 }
 

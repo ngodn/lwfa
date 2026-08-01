@@ -130,6 +130,20 @@ tick_ms = 16
 # looking at the host screen. Three frames at 60Hz.
 redraw_stall_ms = 50
 
+# Shortest gap between two presentations to the host's display.
+#
+# This is a safety interlock, not a performance knob. A host drives a nested
+# compositor through frame callbacks, so a real request cannot arrive sooner
+# than one display interval: 16ms at 60Hz, 5.5ms at 180Hz. Anything faster came
+# from somewhere else, in practice a burst of configures when a window rule
+# places or full-screens the window.
+#
+# Presenting on those hangs the compositor outright, because the host has not
+# released the previous buffer and never will for a surface it has not shown, so
+# the call blocks on the event loop thread forever. 4ms is below any real
+# display's interval, so nothing genuine is ever skipped.
+min_present_ms = 4
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------

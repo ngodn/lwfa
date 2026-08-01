@@ -19,7 +19,7 @@ use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, LoopSignal, M
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::seat::WaylandFocus;
@@ -487,7 +487,8 @@ impl Lwfa {
                 continue;
             };
             let size = window.geometry().size.to_physical(1);
-            let Some(frame) = self.capture.capture(renderer, id, &window, size) else {
+            let overlays = self.overlays_for(&window, (0, 0).into());
+            let Some(frame) = self.capture.capture(renderer, id, &window, size, &overlays) else {
                 continue; // unchanged since last capture
             };
             let Some(png) = frame.to_png() else { continue };
@@ -503,6 +504,74 @@ impl Lwfa {
                 );
             }
         }
+    }
+
+    /// Surfaces that visually belong to a window but are not part of it.
+    ///
+    /// Menus, tooltips, combo box drop-downs. On the local display these are
+    /// ordinary scene elements and need nothing special. A remote frame is
+    /// addressed by window id, though, and none of these have one, so left
+    /// alone they simply never reach the browser: a menu that opens on the
+    /// physical screen and nowhere else.
+    ///
+    /// Rather than invent ids for them, they are drawn into the frame of the
+    /// window they belong to, at an offset relative to its origin. That keeps
+    /// the protocol unchanged and makes them behave like part of the window,
+    /// which for compositing purposes is what they are.
+    ///
+    /// The cost is clipping: the parts of a menu that hang outside the window's
+    /// bounds are cut off, because the capture buffer is the window's size.
+    /// Under scrollable tiling that is usually invisible, since columns are tall
+    /// and menus open inside them. Growing the buffer to `bbox_with_popups`
+    /// would fix it properly, but the stream's dimensions would stop matching
+    /// the window's and the shell would need an offset to place it: a protocol
+    /// change, worth doing when a real menu is seen to be cut off.
+    ///
+    /// `loc` is the window's position in the space, needed to work out where an
+    /// override-redirect X11 window sits relative to it.
+    fn overlays_for(
+        &self,
+        window: &Window,
+        loc: Point<i32, Logical>,
+    ) -> Vec<(WlSurface, Point<i32, Logical>)> {
+        let mut overlays = Vec::new();
+
+        // Wayland: xdg popups, which the popup manager already tracks against
+        // their parent surface and gives us an offset for.
+        if let Some(surface) = window.wl_surface() {
+            for (popup, offset) in PopupManager::popups_for_surface(&surface) {
+                // `popups_for_surface` measures to the popup's *window*
+                // geometry, which excludes its shadow; the surface starts
+                // earlier. Subtracting puts the surface where it belongs.
+                overlays.push((popup.wl_surface().clone(), offset - popup.geometry().loc));
+            }
+        }
+
+        // X11: override-redirect windows, which opt out of window management
+        // and place themselves in absolute coordinates. They have no parent
+        // link worth trusting (plenty of toolkits never set WM_TRANSIENT_FOR),
+        // so ownership is decided geometrically, by which window the popup's
+        // top-left corner lands in. That gives exactly one owner, which
+        // matters: shared ownership would draw the same menu into two streams.
+        let bounds = Rectangle::new(loc, window.geometry().size);
+        for other in self.space.elements() {
+            let Some(x11) = other.x11_surface() else {
+                continue;
+            };
+            if !x11.is_override_redirect() {
+                continue;
+            }
+            let Some(surface) = other.wl_surface() else {
+                continue;
+            };
+            let at = x11.geometry().loc;
+            if !bounds.contains(at) {
+                continue;
+            }
+            overlays.push((surface.into_owned(), at - loc));
+        }
+
+        overlays
     }
 
     /// Capture the streaming windows and queue them for the shell.
@@ -530,17 +599,17 @@ impl Lwfa {
             return;
         }
 
-        let targets: Vec<(WindowId, Window)> = self
+        let targets: Vec<(WindowId, Window, Point<i32, Logical>)> = self
             .layout
             .placements()
             .into_iter()
-            .filter_map(|(window, _)| {
+            .filter_map(|(window, loc)| {
                 let id = self.layout.id_of(&window)?;
-                self.streaming.contains(&id).then_some((id, window))
+                self.streaming.contains(&id).then_some((id, window, loc))
             })
             .collect();
 
-        for (id, window) in targets {
+        for (id, window, loc) in targets {
             // Re-checked per window: one large frame can fill either queue.
             let (Some(shell), Some(worker)) = (self.shell.as_ref(), self.encoders.as_ref()) else {
                 return;
@@ -553,7 +622,8 @@ impl Lwfa {
             let profile = std::env::var_os("LWFA_PROFILE").is_some();
             let t0 = profile.then(std::time::Instant::now);
 
-            let Some(frame) = self.capture.capture(renderer, id, &window, size) else {
+            let overlays = self.overlays_for(&window, loc);
+            let Some(frame) = self.capture.capture(renderer, id, &window, size, &overlays) else {
                 continue;
             };
 
