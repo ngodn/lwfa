@@ -21,7 +21,11 @@ import {
   savePassword,
 } from "./credentials.js"
 import { FrameDecoder, supportsH264 } from "./decode.js"
-import { WindowSurface, type SurfaceInput } from "./WindowSurface.js"
+import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
+import { ShellChrome } from "@/components/ShellChrome"
+import { Desktop } from "@/components/Desktop"
+import { SessionBadge } from "@/components/SessionBadge"
+import type { SurfaceInput } from "./WindowSurface.js"
 import { evdevFromCode, isShellKey } from "./input.js"
 import {
   DEFAULT_CONFIG,
@@ -30,7 +34,6 @@ import {
   type StripState,
   addWindow,
   consumeIntoColumn,
-  currentWorkspace,
   cycleWidth,
   expelFromColumn,
   focusDown,
@@ -43,7 +46,6 @@ import {
   intersectsViewport,
   layout,
   moveToWorkspace,
-  presetWidth,
   reflow,
   removeWindow,
 } from "./strip.js"
@@ -89,8 +91,7 @@ export function App(): React.ReactElement {
   const [output, setOutput] = useState<Output>({ width: 0, height: 0 })
   const [windows, setWindows] = useState<Map<WindowId, WindowInfo>>(new Map())
   const [strip, setStrip] = useState<StripState>(EMPTY)
-  const [frames, setFrames] = useState<Map<WindowId, ImageBitmap>>(new Map())
-  const [streaming, setStreaming] = useState(true)
+  const [streaming] = useState(true)
 
   const connection = useRef<Connection | null>(null)
   const decoderRef = useRef<FrameDecoder | null>(null)
@@ -224,12 +225,7 @@ export function App(): React.ReactElement {
             next.delete(message.id)
             return next
           })
-          setFrames((prev) => {
-            const next = new Map(prev)
-            prev.get(message.id)?.close()
-            next.delete(message.id)
-            return next
-          })
+          dropFrame(message.id)
           decoderRef.current?.forget(message.id)
           update((state, out) => removeWindow(state, message.id, out, DEFAULT_CONFIG))
           break
@@ -271,16 +267,9 @@ export function App(): React.ReactElement {
       }
     }
 
-    const decoder = new FrameDecoder((id, bitmap) => {
-      setFrames((prev) => {
-        const next = new Map(prev)
-        // Bitmaps hold GPU memory and are not garbage collected promptly, so
-        // the one being replaced is closed explicitly.
-        prev.get(id)?.close()
-        next.set(id, bitmap)
-        return next
-      })
-    })
+    // Straight into the frame store: no React state, so an arriving frame
+    // re-renders exactly the one surface showing it. See lib/frames.ts.
+    const decoder = new FrameDecoder(publishFrame)
     decoderRef.current = decoder
 
     const handleFrame = (frame: DecodedFrame) => {
@@ -307,6 +296,7 @@ export function App(): React.ReactElement {
     return () => {
       conn.close()
       decoder.close()
+      clearFrames()
       connection.current = null
       decoderRef.current = null
     }
@@ -353,16 +343,27 @@ export function App(): React.ReactElement {
     }
   }, [status])
 
-  const workspace = currentWorkspace(strip)
-  const focusedColumn = workspace.columns[workspace.focus]
-  const width =
-    output.width > 0 && focusedColumn
-      ? presetWidth(focusedColumn.width, output, DEFAULT_CONFIG)
-      : 0
   const placed = useMemo(
     () => (output.width > 0 ? layout(strip, output, DEFAULT_CONFIG) : []),
     [strip, output],
   )
+
+  // Stable across renders, so every WindowSurface keeps its memo. Building
+  // these inline would hand each surface a fresh function on every frame and
+  // undo the whole point of the per-window frame store.
+  const focusById = useCallback(
+    (id: WindowId) => update((s, o) => focusWindow(s, id, o, DEFAULT_CONFIG)),
+    [update],
+  )
+
+  const streamedIds = useMemo(() => {
+    if (!streaming) return new Set<WindowId>()
+    return new Set(
+      placed.filter((w) => intersectsViewport(w.rect, output.width)).map((w) => w.id),
+    )
+  }, [streaming, placed, output.width])
+
+  const focusedId = focusedWindow(strip)
 
   if (!password) {
     return (
@@ -379,191 +380,32 @@ export function App(): React.ReactElement {
   }
 
   return (
-    <main>
-      <header>
-        <h1>lwfa shell</h1>
-        <p className={`status status-${status}`}>
-          {status}
-          {statusDetail ? `: ${statusDetail}` : ""} · <code>{ENGINE_BASE}</code>
-          <button
-            className="signout"
-            onClick={() => {
-              clearPassword()
-              setPassword(null)
-            }}
-          >
-            forget password
-          </button>
-        </p>
-      </header>
-
-      <section>
-        <h2>Viewport</h2>
-        <p>
-          {output.width} × {output.height} · workspace {strip.focus + 1} of{" "}
-          {strip.workspaces.length} · column width {width} · offset{" "}
-          {Math.round(workspace.viewOffset)}
-        </p>
-      </section>
-
-      <section>
-        <h2>
-          Strip · workspace {strip.focus + 1}/{strip.workspaces.length} ·{" "}
-          {workspace.columns.length} column(s)
-        </h2>
-        <div className="controls">
-          <button onClick={() => update(focusLeftAt)} disabled={workspace.focus === 0}>
-            ← column
-          </button>
-          <button
-            onClick={() => update(focusRightAt)}
-            disabled={workspace.focus >= workspace.columns.length - 1}
-          >
-            column →
-          </button>
-          <button onClick={() => update(focusUpAt)}>↑ in stack</button>
-          <button onClick={() => update(focusDownAt)}>↓ in stack</button>
-          <button onClick={() => update(consumeAt)}>consume ←</button>
-          <button onClick={() => update(expelAt)}>expel →</button>
-          <button onClick={() => update(cycleWidthAt)}>width</button>
-          <button onClick={() => update(workspaceUpAt)} disabled={strip.focus === 0}>
-            ↑ workspace
-          </button>
-          <button
-            onClick={() => update(workspaceDownAt)}
-            disabled={strip.focus >= strip.workspaces.length - 1}
-          >
-            ↓ workspace
-          </button>
-          <button onClick={() => connection.current?.send({ type: "spawn", command: "alacritty" })}>
-            spawn terminal
-          </button>
-        </div>
-
-        <ol className="columns">
-          {workspace.columns.map((column, columnIndex) => (
-            <li key={columnIndex} className="column">
-              <span className="column-width">{WIDTH_LABELS[column.width]}</span>
-              <ol className="stack">
-                {column.windows.map((id, row) => {
-                  const info = windows.get(id)
-                  const rect = placed.find((w) => w.id === id)?.rect
-                  const isFocused =
-                    columnIndex === workspace.focus && row === column.focus
-                  return (
-                    <li key={id} className={isFocused ? "focused" : undefined}>
-                      <button
-                        className="pick"
-                        onClick={() => update((s, o) => focusWindow(s, id, o, DEFAULT_CONFIG))}
-                      >
-                        <span className="id">w{id}</span>
-                        <span className="title">
-                          {info?.title ?? info?.appId ?? "(untitled)"}
-                        </span>
-                        {rect ? (
-                          <span className="rect">
-                            x {Math.round(rect.x)} · {Math.round(rect.width)}×
-                            {Math.round(rect.height)}
-                          </span>
-                        ) : null}
-                      </button>
-                      <button
-                        className="close"
-                        onClick={() => connection.current?.send({ type: "closeWindow", id })}
-                        aria-label={`close window ${id}`}
-                      >
-                        ×
-                      </button>
-                    </li>
-                  )
-                })}
-              </ol>
-            </li>
-          ))}
-        </ol>
-        {workspace.columns.length === 0 ? (
-          <p className="empty">This workspace is empty.</p>
-        ) : null}
-      </section>
-
-      {/* The actual remote desktop: one DOM element per window, composited
-          by the browser. This is what whole-screen streaming cannot do. */}
-      <section>
-        <h2>
-          Windows{" "}
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={streaming}
-              onChange={(e) => {
-                setStreaming(e.target.checked)
-                // Re-push so the engine hears about it immediately.
-                setTimeout(() => push(stripRef.current, outputRef.current, false), 0)
-              }}
-            />
-            stream pixels
-          </label>
-        </h2>
-        <div
-          className="viewport"
-          style={{
-            aspectRatio: `${output.width || 16} / ${output.height || 9}`,
-            // The engine's output is scaled to fit this box. Windows are
-            // positioned in engine coordinates inside it, so one CSS variable
-            // rescales the whole composited scene.
-            ["--scale" as string]: output.width ? `${1 / output.width}` : "0",
-          }}
-        >
-          <div
-            className="scene"
-            style={{
-              width: `${output.width}px`,
-              height: `${output.height}px`,
-              transform: `scale(var(--fit))`,
-            }}
-            ref={(el) => {
-              if (!el?.parentElement || !output.width) return
-              const fit = el.parentElement.clientWidth / output.width
-              el.style.setProperty("--fit", String(fit))
-            }}
-          >
-            {placed.map((w, index) => (
-              <WindowSurface
-                key={w.id}
-                id={w.id}
-                rect={w.rect}
-                z={w.z}
-                focused={index === strip.focus}
-                label={windows.get(w.id)?.title ?? windows.get(w.id)?.appId ?? `w${w.id}`}
-                frame={frames.get(w.id) ?? null}
-                // A column scrolled off the strip is deliberately not
-                // streamed, so it is not "waiting" for anything.
-                streamed={streaming && intersectsViewport(w.rect, output.width)}
-                onFocus={() => update((s, o) => focusWindow(s, w.id, o, DEFAULT_CONFIG))}
-                onInput={(event) => sendInput(w.id, event)}
-              />
-            ))}
-          </div>
-        </div>
-        {!streaming ? (
-          <p className="empty">
-            Streaming off. The engine is not capturing, so no pixels are being sent.
-          </p>
-        ) : null}
-        {streaming && !supportsH264() ? (
-          <p className="empty">
-            Using JPEG: WebCodecs needs a secure context, and this page is on plain HTTP.
-            It works, but uses far more bandwidth than H.264. Serving over HTTPS (Tailscale
-            does this for free) enables hardware decoding.
-          </p>
-        ) : null}
-      </section>
-    </main>
+    <ShellChrome>
+      <Desktop
+        output={output}
+        placed={placed}
+        windows={windows}
+        focused={focusedId}
+        streamedIds={streamedIds}
+        onFocus={focusById}
+        onInput={sendInput}
+      />
+      <SessionBadge
+        status={status}
+        detail={statusDetail}
+        endpoint={ENGINE_BASE}
+        workspace={strip.focus + 1}
+        workspaces={strip.workspaces.length}
+        streaming={streaming}
+        hardwareDecode={supportsH264()}
+        onSignOut={() => {
+          clearPassword()
+          setPassword(null)
+        }}
+      />
+    </ShellChrome>
   )
 }
-
-/** Human labels for the width presets, matching WIDTH_PRESETS order. */
-const WIDTH_LABELS = ["⅓", "½", "⅔"] as const
 
 // Declared outside the component so `update` gets a stable reference.
 const focusLeftAt = (s: StripState, o: Output) => focusLeft(s, o, DEFAULT_CONFIG)
@@ -573,7 +415,5 @@ const focusDownAt = (s: StripState) => focusDown(s)
 const consumeAt = (s: StripState, o: Output) => consumeIntoColumn(s, o, DEFAULT_CONFIG)
 const expelAt = (s: StripState, o: Output) => expelFromColumn(s, o, DEFAULT_CONFIG)
 const cycleWidthAt = (s: StripState, o: Output) => cycleWidth(s, o, DEFAULT_CONFIG)
-const workspaceUpAt = (s: StripState, o: Output) => focusWorkspace(s, -1, o, DEFAULT_CONFIG)
-const workspaceDownAt = (s: StripState, o: Output) => focusWorkspace(s, 1, o, DEFAULT_CONFIG)
 const moveWorkspaceUpAt = (s: StripState, o: Output) => moveToWorkspace(s, -1, o, DEFAULT_CONFIG)
 const moveWorkspaceDownAt = (s: StripState, o: Output) => moveToWorkspace(s, 1, o, DEFAULT_CONFIG)

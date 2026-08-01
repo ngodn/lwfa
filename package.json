@@ -15,7 +15,7 @@
     "test:watch": "vitest",
     "test:rust": "cargo test --workspace",
     "test:all": "pnpm test && pnpm run test:rust",
-    "typecheck": "pnpm run config && tsc --noEmit"
+    "typecheck": "pnpm run config && tsc --noEmit && tsc --noEmit -p packages/shell/tsconfig.ui.json"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

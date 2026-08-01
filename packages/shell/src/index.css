@@ -1,0 +1,191 @@
+/*
+ * The shell's design tokens.
+ *
+ * shadcn/ui conventions, Tailwind v4: everything is a CSS variable in oklch,
+ * `@theme inline` maps them onto Tailwind's colour scale, and `.dark` swaps the
+ * values rather than the classes. Components then say `bg-card` and are correct
+ * in both themes without a single `dark:` prefix.
+ *
+ * # Why the palette is this cold and this dark
+ *
+ * The shell is chrome around someone else's pixels. Whatever you are actually
+ * looking at is a window belonging to another application, and the UI's job is
+ * to stay out of its way, so the surfaces are near-neutral and the only strong
+ * colour is on things you can act on.
+ *
+ * The engine's own backdrop is `[window].backdrop` in configs/defaults.toml.
+ * `--backdrop` below matches it, so the browser and the physical display agree
+ * about what the space behind the strip looks like.
+ */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.65rem;
+
+  /* Light. Used far less than dark, but a tablet in daylight wants it. */
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.62 0.19 259.8);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.955 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.955 0 0);
+  --muted-foreground: oklch(0.51 0 0);
+  --accent: oklch(0.955 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.9 0 0);
+  --input: oklch(0.9 0 0);
+  --ring: oklch(0.62 0.19 259.8);
+
+  --success: oklch(0.62 0.16 149);
+  --warning: oklch(0.72 0.17 70);
+
+  /* Behind the strip. Kept in step with [window].backdrop in the engine. */
+  --backdrop: oklch(0.22 0.012 275);
+
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-accent: oklch(0.955 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.9 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0.008 275);
+  --foreground: oklch(0.96 0 0);
+  --card: oklch(0.185 0.009 275);
+  --card-foreground: oklch(0.96 0 0);
+  --popover: oklch(0.195 0.009 275);
+  --popover-foreground: oklch(0.96 0 0);
+  --primary: oklch(0.7 0.16 258);
+  --primary-foreground: oklch(0.16 0.01 275);
+  --secondary: oklch(0.25 0.009 275);
+  --secondary-foreground: oklch(0.96 0 0);
+  --muted: oklch(0.25 0.009 275);
+  --muted-foreground: oklch(0.68 0.006 275);
+  --accent: oklch(0.28 0.011 275);
+  --accent-foreground: oklch(0.96 0 0);
+  --destructive: oklch(0.62 0.21 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.7 0.16 258);
+
+  --success: oklch(0.7 0.15 150);
+  --warning: oklch(0.78 0.15 75);
+
+  --backdrop: oklch(0.16 0.01 275);
+
+  --sidebar: oklch(0.175 0.009 275);
+  --sidebar-foreground: oklch(0.96 0 0);
+  --sidebar-accent: oklch(0.26 0.01 275);
+  --sidebar-accent-foreground: oklch(0.96 0 0);
+  --sidebar-border: oklch(1 0 0 / 11%);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-backdrop: var(--backdrop);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Self-hosted. The machine this runs on is often not on the internet, and a
+     shell that waits on a font CDN before painting is a shell that never
+     paints. */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    /* A desktop does not bounce. Rubber-banding the page while dragging a
+       window on a tablet is disorienting and makes precise input impossible. */
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Chrome around a live desktop: selecting it is never what you meant, and on
+     touch a long press would pop the magnifier over the window you are using.
+     Re-enabled on the specific things that are genuinely text. */
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  [data-selectable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+@layer utilities {
+  /* Safe areas, because this runs full-screen on a tablet with a home
+     indicator and under a notch. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
+}

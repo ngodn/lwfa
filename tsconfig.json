@@ -28,8 +28,13 @@
     // the Node end-to-end scripts import the shell's source directly, so the
     // usual ".js" convention would break them. Safe here because nothing is
     // emitted.
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+
+    // Matches components.json, so registry components paste in unedited.
+    "baseUrl": ".",
+    "paths": { "@/*": ["packages/shell/src/*"] }
   },
+  "exclude": ["packages/shell/src/components/ui"],
   "include": [
     "packages/*/src/**/*.ts",
     "packages/*/src/**/*.tsx",

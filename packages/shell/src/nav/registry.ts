@@ -1,0 +1,224 @@
+/**
+ * What the navigation can contain, and what survives when it runs out of room.
+ *
+ * The rail is one strip of buttons along an edge the user chooses. On a 27"
+ * display every button fits with space to spare; on a phone in portrait, along
+ * the bottom, roughly four do. Rather than scroll the rail, which hides
+ * controls behind a gesture nobody will discover, buttons merge into grouped
+ * ones that open a panel containing what was merged.
+ *
+ * The merge order is a priority decision, not a layout one, so it lives here
+ * next to the catalogue instead of inside the component that measures pixels.
+ */
+
+import type { LucideIcon } from "lucide-react"
+import {
+  AppWindow,
+  Gamepad2,
+  Grid3x3,
+  Info,
+  KeyboardIcon,
+  MoreHorizontal,
+  Network,
+  Settings,
+  SlidersHorizontal,
+  SunMoon,
+  Users,
+} from "lucide-react"
+import type { NavItemId } from "@/lib/prefs"
+
+export interface NavItem {
+  id: NavItemId
+  label: string
+  /** Shown in the tooltip under the label. Says what the panel is *for*. */
+  hint: string
+  icon: LucideIcon
+}
+
+export const NAV_ITEMS: Record<NavItemId, NavItem> = {
+  info: {
+    id: "info",
+    label: "Session",
+    hint: "Connection health, stream stats and the engine log",
+    icon: Info,
+  },
+  connections: {
+    id: "connections",
+    label: "Connections",
+    hint: "Machines you can reach, and which one you are on",
+    icon: Network,
+  },
+  access: {
+    id: "access",
+    label: "Access",
+    hint: "Who may connect, and what they are allowed to do",
+    icon: Users,
+  },
+  theme: {
+    id: "theme",
+    label: "Appearance",
+    hint: "Light, dark, or follow the device",
+    icon: SunMoon,
+  },
+  settings: {
+    id: "settings",
+    label: "Settings",
+    hint: "Navigation, input and stream preferences",
+    icon: Settings,
+  },
+  apps: {
+    id: "apps",
+    label: "Apps",
+    hint: "Launch something on the remote machine",
+    icon: Grid3x3,
+  },
+  gamepad: {
+    id: "gamepad",
+    label: "Gamepad",
+    hint: "On-screen controller, with an editable layout",
+    icon: Gamepad2,
+  },
+  keyboard: {
+    id: "keyboard",
+    label: "Keyboard",
+    hint: "On-screen keyboard, including held modifier combos",
+    icon: KeyboardIcon,
+  },
+  workspaces: {
+    id: "workspaces",
+    label: "Windows",
+    hint: "Workspaces, window arrangement and focus",
+    icon: AppWindow,
+  },
+}
+
+/**
+ * Buttons that stand for several others once the rail is short.
+ *
+ * `input` and `more` are not items the user can reorder; they appear only when
+ * their members have been folded away, and opening one shows those members.
+ */
+export type NavGroupId = "input" | "more"
+
+export interface NavGroup {
+  id: NavGroupId
+  label: string
+  hint: string
+  icon: LucideIcon
+  members: NavItemId[]
+}
+
+export const NAV_GROUPS: Record<NavGroupId, NavGroup> = {
+  input: {
+    id: "input",
+    label: "Input",
+    hint: "Keyboard and gamepad",
+    icon: SlidersHorizontal,
+    members: ["keyboard", "gamepad"],
+  },
+  more: {
+    id: "more",
+    label: "More",
+    hint: "Everything else",
+    icon: MoreHorizontal,
+    // Order matters: this is the order they appear inside the panel.
+    members: ["info", "connections", "access", "theme", "settings"],
+  },
+}
+
+/**
+ * Which end of the rail a slot belongs to.
+ *
+ * A group inherits the zone of its members: `input` holds the keyboard and
+ * gamepad, which are anchored, so the button that replaces them is anchored
+ * too. Collapsing the rail must not move a control out from under the thumb.
+ */
+export function zoneOf(slot: NavSlot, anchored: NavItemId[]): "start" | "end" {
+  const pinned = new Set(anchored)
+  if (slot.kind === "item") return pinned.has(slot.id) ? "end" : "start"
+  return slot.members.some((id) => pinned.has(id)) ? "end" : "start"
+}
+
+/** Anything the rail can show: a single item, or a group standing for several. */
+export type NavSlot =
+  | { kind: "item"; id: NavItemId; item: NavItem }
+  | { kind: "group"; id: NavGroupId; group: NavGroup; members: NavItemId[] }
+
+/**
+ * The tiers, roomiest first.
+ *
+ * Tier 0 is everything laid out individually. Each subsequent tier gives up one
+ * more distinction, ending with the three things you cannot operate the machine
+ * without: launch something, manage what is open, and type into it.
+ *
+ * These are exactly the priorities in the design sketch, written down where the
+ * layout code can consult them rather than reimplementing them.
+ */
+const TIERS: ReadonlyArray<ReadonlyArray<NavItemId | NavGroupId>> = [
+  // Everything, in the user's own order. Filled in by `slotsForTier`.
+  [],
+  // Keyboard and gamepad share a button; the rest stay put.
+  ["info", "connections", "access", "theme", "settings", "apps", "input", "workspaces"],
+  // The management panels collapse together.
+  ["apps", "workspaces", "input", "more"],
+  // The floor. Losing any of these makes the session unusable rather than
+  // merely inconvenient, so the rail never collapses further; it scrolls.
+  ["apps", "workspaces", "more"],
+]
+
+export const TIER_COUNT = TIERS.length
+
+function isGroup(id: NavItemId | NavGroupId): id is NavGroupId {
+  return id === "input" || id === "more"
+}
+
+/**
+ * The slots for one tier, honouring the user's order and hidden set.
+ *
+ * A group only appears if at least one of its members is actually present;
+ * hiding both the keyboard and the gamepad should remove the Input button
+ * rather than leave a button that opens an empty panel.
+ */
+export function slotsForTier(
+  tier: number,
+  order: NavItemId[],
+  hidden: NavItemId[],
+): NavSlot[] {
+  const isHidden = new Set(hidden)
+  const visible = order.filter((id) => !isHidden.has(id))
+
+  if (tier <= 0) {
+    return visible.map((id) => ({ kind: "item", id, item: NAV_ITEMS[id] }))
+  }
+
+  const allowed = TIERS[Math.min(tier, TIERS.length - 1)]!
+  const slots: NavSlot[] = []
+  const emitted = new Set<string>()
+
+  // Walk the *user's* order so a collapsed rail still reads left-to-right the
+  // way they arranged it. A group takes the position of its first member.
+  for (const id of visible) {
+    const owner = allowed.find((slot) => {
+      if (slot === id) return true
+      return isGroup(slot) && NAV_GROUPS[slot].members.includes(id)
+    })
+    if (!owner || emitted.has(owner)) continue
+    emitted.add(owner)
+
+    if (isGroup(owner)) {
+      const members = NAV_GROUPS[owner].members.filter((m) => !isHidden.has(m))
+      if (members.length === 0) continue
+      // One surviving member does not need a menu wrapped round it.
+      if (members.length === 1) {
+        const only = members[0]!
+        slots.push({ kind: "item", id: only, item: NAV_ITEMS[only] })
+        continue
+      }
+      slots.push({ kind: "group", id: owner, group: NAV_GROUPS[owner], members })
+    } else {
+      slots.push({ kind: "item", id: owner, item: NAV_ITEMS[owner] })
+    }
+  }
+
+  return slots
+}

@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { parse } from "smol-toml"
 import { defineConfig } from "vite"
@@ -33,7 +35,12 @@ function setting(key: string, fallback: string): string {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  resolve: {
+    // "@/..." is what shadcn generates, and keeping it means components can be
+    // pasted from the registry without rewriting every import.
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+  },
+  plugins: [react(), tailwindcss()],
   server: {
     // Reachable from a phone or tablet on the LAN, which is the entire point
     // of the project. The engine's socket is gated by AUTH_PASS.

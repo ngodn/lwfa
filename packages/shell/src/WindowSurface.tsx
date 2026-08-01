@@ -16,9 +16,11 @@
  * good one on screen instead of flashing empty.
  */
 
-import { useEffect, useRef } from "react"
+import { memo, useCallback, useEffect, useRef } from "react"
 import type { Rect, WindowId } from "@lwfa/proto"
 import { evdevFromButton, wheelDelta, windowPoint } from "./input.js"
+import { useFrame } from "@/lib/frames"
+import { cn } from "@/lib/utils"
 
 export interface WindowSurfaceProps {
   id: WindowId
@@ -26,8 +28,6 @@ export interface WindowSurfaceProps {
   z: number
   focused: boolean
   label: string
-  /** Most recent decoded frame, or null before the first one arrives. */
-  frame: ImageBitmap | null
   /**
    * Whether pixels are being requested for this window at all.
    *
@@ -36,9 +36,14 @@ export interface WindowSurfaceProps {
    * wrong: nothing is coming, and nothing should be.
    */
   streamed: boolean
-  onFocus: () => void
+  /**
+   * Both take the window id, so one callback instance serves every surface.
+   * A per-window closure would change identity on each parent render and defeat
+   * the memo below, which is the whole reason this component is cheap.
+   */
+  onFocus: (id: WindowId) => void
   /** Input headed for the window itself, in window-relative logical pixels. */
-  onInput: (event: SurfaceInput) => void
+  onInput: (id: WindowId, event: SurfaceInput) => void
 }
 
 /** Input aimed at a specific window, already in its coordinate space. */
@@ -50,18 +55,21 @@ export type SurfaceInput =
   | { kind: "touchMotion"; id: number; x: number; y: number }
   | { kind: "touchUp"; id: number }
 
-export function WindowSurface({
+export const WindowSurface = memo(function WindowSurface({
   id,
   rect,
   z,
   focused,
   label,
-  frame,
   streamed,
   onFocus,
   onInput,
 }: WindowSurfaceProps): React.ReactElement {
   const canvas = useRef<HTMLCanvasElement>(null)
+  // Subscribed per window, so a frame for another window does not re-render
+  // this one. See lib/frames.ts.
+  const frame = useFrame(id)
+  const send = useCallback((event: SurfaceInput) => onInput(id, event), [onInput, id])
 
   useEffect(() => {
     if (!frame) return
@@ -83,7 +91,11 @@ export function WindowSurface({
 
   return (
     <div
-      className={`surface${focused ? " focused" : ""}`}
+      className={cn(
+        "absolute top-0 left-0 overflow-hidden rounded-xl bg-black/40 shadow-lg ring-1 transition-shadow",
+        "ring-white/10",
+        focused && "ring-2 ring-primary shadow-2xl",
+      )}
       style={{
         // `translate` rather than `left`/`top`: transforms are composited and
         // do not trigger layout, which matters when several windows animate at
@@ -96,7 +108,7 @@ export function WindowSurface({
       role="application"
       aria-label={label}
       onPointerDown={(event) => {
-        onFocus()
+        onFocus(id)
         const point = windowPoint(event, event.currentTarget, rect)
         if (!point) return
         // Capture, so a drag that leaves the element still delivers its
@@ -104,17 +116,17 @@ export function WindowSurface({
         event.currentTarget.setPointerCapture(event.pointerId)
 
         if (event.pointerType === "touch") {
-          onInput({ kind: "touchDown", id: event.pointerId, ...point })
+          send({ kind: "touchDown", id: event.pointerId, ...point })
           return
         }
         const button = evdevFromButton(event.button)
-        onInput({ kind: "motion", ...point })
-        if (button !== null) onInput({ kind: "button", button, pressed: true })
+        send({ kind: "motion", ...point })
+        if (button !== null) send({ kind: "button", button, pressed: true })
       }}
       onPointerMove={(event) => {
         const point = windowPoint(event, event.currentTarget, rect)
         if (!point) return
-        onInput(
+        send(
           event.pointerType === "touch"
             ? { kind: "touchMotion", id: event.pointerId, ...point }
             : { kind: "motion", ...point },
@@ -122,28 +134,30 @@ export function WindowSurface({
       }}
       onPointerUp={(event) => {
         if (event.pointerType === "touch") {
-          onInput({ kind: "touchUp", id: event.pointerId })
+          send({ kind: "touchUp", id: event.pointerId })
           return
         }
         const button = evdevFromButton(event.button)
-        if (button !== null) onInput({ kind: "button", button, pressed: false })
+        if (button !== null) send({ kind: "button", button, pressed: false })
       }}
       onPointerCancel={(event) => {
-        if (event.pointerType === "touch") onInput({ kind: "touchUp", id: event.pointerId })
+        if (event.pointerType === "touch") send({ kind: "touchUp", id: event.pointerId })
       }}
-      onWheel={(event) => onInput({ kind: "axis", ...wheelDelta(event.nativeEvent) })}
+      onWheel={(event) => send({ kind: "axis", ...wheelDelta(event.nativeEvent) })}
       onContextMenu={(event) => {
         // Right-click belongs to the application, not to the browser's menu.
         event.preventDefault()
       }}
     >
-      <canvas ref={canvas} />
+      <canvas ref={canvas} className="block h-full w-full" />
       {frame ? null : (
-        <span className={streamed ? "waiting" : "offscreen"}>
-          {streamed ? `w${id} waiting for pixels…` : `w${id} off screen`}
+        <span className="absolute inset-0 grid place-items-center px-4 text-center text-sm text-white/50">
+          {streamed ? "Waiting for pixels\u2026" : "Off screen"}
         </span>
       )}
-      <span className="surface-label">{label}</span>
+      <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-3 pt-6 pb-2 text-xs text-white/80">
+        {label}
+      </span>
     </div>
   )
-}
+})
