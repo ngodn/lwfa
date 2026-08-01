@@ -14,6 +14,7 @@
 //! Everything else modified with Alt is forwarded to the shell, which decides
 //! what it means. Focus order is layout policy, and policy lives in the shell.
 
+mod auth;
 mod capture;
 mod encode;
 mod handlers;
@@ -74,7 +75,17 @@ fn init_shell_link(
     let addr = std::env::var("LWFA_SHELL_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
     let (events_tx, events_rx) = channel::channel::<ShellEvent>();
 
-    let (link, bound) = match ShellLink::bind(&addr, events_tx) {
+    let token = match auth::resolve_token() {
+        Ok(token) => token,
+        Err(err) => {
+            // Refusing to start beats starting without authentication on a
+            // socket that can spawn processes.
+            tracing::error!("could not establish a shell token: {err}");
+            return Err(err.into());
+        }
+    };
+
+    let (link, bound) = match ShellLink::bind(&addr, token.clone(), events_tx) {
         Ok(bound) => bound,
         Err(err) => {
             // Not fatal. Safe mode still gives a usable compositor, and a bad
@@ -94,7 +105,7 @@ fn init_shell_link(
         }
     }
     data.state.shell = Some(link);
-    tracing::info!("shell protocol listening on ws://{bound}");
+    announce(bound, &token);
 
     event_loop
         .handle()
@@ -107,6 +118,39 @@ fn init_shell_link(
         .map_err(|err| format!("failed to insert the shell event source: {err}"))?;
 
     Ok(())
+}
+
+/// Tell the user where to connect, and warn if the socket left this machine.
+fn announce(bound: std::net::SocketAddr, token: &str) {
+    tracing::info!("shell protocol listening on ws://{bound}");
+
+    if auth::is_exposed(&bound) {
+        // Worth being blunt about: the token stops casual access, but there is
+        // no transport encryption, so anyone who can watch the traffic can
+        // replay it and read every keystroke.
+        tracing::warn!(
+            "the shell socket is reachable from the network. The token gates access, \
+             but there is NO encryption: keystrokes and frames are readable on the wire, \
+             and the token itself can be replayed by anyone watching. Only do this on a \
+             network you trust."
+        );
+    }
+
+    // A URL that can be pasted into a tablet, rather than three values to
+    // assemble by hand.
+    let host = if bound.ip().is_unspecified() {
+        auth::lan_address().map(|ip| ip.to_string())
+    } else {
+        Some(bound.ip().to_string())
+    };
+    if let Some(host) = host {
+        tracing::info!(
+            "open the shell at:  http://{host}:5173/?token={token}   (engine on port {})",
+            bound.port()
+        );
+    } else {
+        tracing::info!("shell token: {token}");
+    }
 }
 
 fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {

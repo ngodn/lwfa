@@ -47,9 +47,25 @@ import {
  */
 const SCROLL_SPRING = { stiffness: 220, damping: 26, mass: 1 }
 
-const ENGINE_URL =
-  new URLSearchParams(location.search).get("engine") ??
-  `ws://${location.hostname || "localhost"}:9843`
+/**
+ * Where the engine is, and the token to reach it with.
+ *
+ * The host defaults to whatever served this page, so opening the shell at
+ * `http://192.168.1.x:5173/?token=...` from a tablet finds the engine on the
+ * same machine without any configuration.
+ *
+ * The token is required: the engine rejects the handshake without it. It rides
+ * in the query string because a browser cannot set headers on a WebSocket
+ * handshake, which does mean it lands in history and logs.
+ */
+const params = new URLSearchParams(location.search)
+const ENGINE_TOKEN = params.get("token") ?? ""
+const ENGINE_URL = (() => {
+  const base = params.get("engine") ?? `ws://${location.hostname || "localhost"}:9843`
+  const url = new URL(base)
+  if (ENGINE_TOKEN) url.searchParams.set("token", ENGINE_TOKEN)
+  return url.toString()
+})()
 
 export function App(): React.ReactElement {
   const [status, setStatus] = useState<Status>("connecting")
@@ -325,8 +341,15 @@ export function App(): React.ReactElement {
         <h1>lwfa shell</h1>
         <p className={`status status-${status}`}>
           {status}
-          {statusDetail ? `: ${statusDetail}` : ""} · <code>{ENGINE_URL}</code>
+          {statusDetail ? `: ${statusDetail}` : ""} ·{" "}
+          <code>{ENGINE_URL.replace(/token=[^&]*/, "token=…")}</code>
         </p>
+        {!ENGINE_TOKEN ? (
+          <p className="empty">
+            No <code>?token=</code> in the URL. The engine rejects connections without one; it
+            prints a ready-made link on startup.
+          </p>
+        ) : null}
       </header>
 
       <section>

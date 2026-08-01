@@ -29,7 +29,7 @@ Milestone 4 of 7 complete. See the build order in the architecture doc.
 - [x] **4. Per-surface streaming and the remote backend** — hardware H.264 via
       NVENC, decoded with WebCodecs, composited in the browser DOM
 - [x] **Remote input** — pointer, keyboard and touch from the browser into the
-      compositor. **Localhost only, no auth yet** (see the warning below)
+      compositor, gated by a shared token. Reachable over the LAN; **no TLS yet**
 - [ ] 5. Appearance vocabulary in both backends
 - [ ] 6. iPad: WebCodecs, gestures, responsive breakpoints
 - [ ] 7. Clipboard, audio, multi-monitor, DPI, reconnect, auth, packaging
@@ -95,13 +95,38 @@ Environment:
 
 - `LWFA_TERMINAL` — which terminal to spawn (default `alacritty`)
 - `LWFA_NO_AUTOSTART` — set to skip opening a terminal on launch
-- `LWFA_SHELL_ADDR` — where to listen for a shell (default `127.0.0.1:9843`)
+- `LWFA_SHELL_ADDR` — where to listen for a shell (default `127.0.0.1:9843`;
+  use `0.0.0.0:9843` to reach it from other devices)
+- `LWFA_SHELL_TOKEN` — the shared token. Generated per run if unset
+- `LWFA_PROFILE` — log per-window capture timings
 - `RUST_LOG=debug` — Smithay is chatty at `info`; `warn` is usually the useful level
 
-> **The shell socket has no authentication.** It accepts input injection and
-> can spawn processes, so anything that reaches the port has full control of
-> the session. It is bound to localhost and must stay there until auth exists.
-> Do not set `LWFA_SHELL_ADDR` to a non-loopback address.
+### Using it from another device
+
+The engine prints a ready-made URL on startup. To reach it from a phone or
+tablet on the same network:
+
+```sh
+LWFA_SHELL_ADDR=0.0.0.0:9843 LWFA_SHELL_TOKEN=$(openssl rand -hex 16) cargo run -p lwfa-engine
+pnpm --filter @lwfa/shell dev    # already binds 0.0.0.0
+```
+
+Then open the printed `http://<ip>:5173/?token=…` link. The shell finds the
+engine on whatever host served the page, so nothing else needs configuring.
+
+> **Security, plainly.** The shell protocol injects keystrokes and spawns
+> processes, so whoever can open the socket controls the session. A shared
+> token is required on every connection, which stops casual access.
+>
+> There is **no encryption**. The token and everything after it cross the
+> network in the clear, so anyone who can watch the traffic can read your
+> keystrokes and replay the token. That is an acceptable trade on a home
+> network you control. It is not acceptable on café wifi, a shared office, or
+> anywhere reachable from the internet — tunnel it over SSH or WireGuard until
+> TLS exists.
+>
+> Set `LWFA_SHELL_TOKEN` to keep the token stable across restarts, otherwise a
+> fresh one is generated each run and bookmarked URLs stop working.
 
 On Hyprland, `scripts/dev-nested.sh` launches the engine pinned to a specific
 workspace (default 2, override with `LWFA_DEV_WORKSPACE`) so it never lands on

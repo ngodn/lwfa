@@ -16,13 +16,18 @@
 //!
 //! # Security
 //!
-//! Binds to localhost only. There is no authentication, so this must not be
-//! exposed off the machine as it stands: anything that can reach the port can
-//! move windows and spawn processes. Auth and TLS are milestone 7, and are
-//! listed as a hard requirement in docs/architecture.md section 6.
+//! The protocol can inject keystrokes and spawn processes, so anything that can
+//! open this socket controls the session. A shared token is therefore required
+//! on every connection, whether the socket is on loopback or not. See `auth.rs`.
+//!
+//! There is still **no TLS**. The token and everything after it cross the
+//! network in the clear, so this is safe on a home LAN and not safe on an
+//! untrusted one. Tunnel it until TLS exists.
 
+use std::cell::Cell;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -31,6 +36,8 @@ use std::time::Duration;
 
 use lwfa_proto::{ToEngine, ToShell};
 use smithay::reexports::calloop::channel::Sender as LoopSender;
+
+use crate::auth;
 
 /// Where the shell connects. Localhost by design; see the security note above.
 pub const DEFAULT_ADDR: &str = "127.0.0.1:9843";
@@ -120,6 +127,7 @@ impl ShellLink {
     /// Start listening. Returns the link plus a calloop event source to insert.
     pub fn bind(
         addr: &str,
+        token: String,
         events: LoopSender<ShellEvent>,
     ) -> std::io::Result<(Self, std::net::SocketAddr)> {
         let listener = TcpListener::bind(addr)?;
@@ -135,6 +143,7 @@ impl ShellLink {
             .spawn(move || {
                 accept_loop(
                     listener,
+                    token,
                     events,
                     outgoing_rx,
                     thread_in_flight,
@@ -194,6 +203,7 @@ impl ShellLink {
 /// always the one being served.
 fn accept_loop(
     listener: TcpListener,
+    token: String,
     events: LoopSender<ShellEvent>,
     outgoing: Receiver<Outgoing>,
     in_flight: Arc<AtomicUsize>,
@@ -212,7 +222,7 @@ fn accept_loop(
         // been replaced.
         loop {
             match listener.accept() {
-                Ok((stream, peer)) => match handshake(stream) {
+                Ok((stream, peer)) => match handshake(stream, &token) {
                     Some(socket) => {
                         if let Some(old) = current.take() {
                             tracing::info!(
@@ -264,17 +274,50 @@ fn accept_loop(
 /// The handshake itself needs a blocking socket, but a client that connects and
 /// then says nothing would stall the whole loop, so it is bounded by a read
 /// timeout rather than trusted.
-fn handshake(stream: TcpStream) -> Option<tungstenite::WebSocket<TcpStream>> {
+fn handshake(stream: TcpStream, token: &str) -> Option<tungstenite::WebSocket<TcpStream>> {
     // Nagle would add up to 40ms to a small layout message, which is a visible
     // hitch on something the user just triggered.
     let _ = stream.set_nodelay(true);
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
 
-    let socket = match tungstenite::accept(stream) {
+    // The token rides in the query string because a browser cannot set headers
+    // on a WebSocket handshake. Rejecting during the handshake means an
+    // unauthenticated peer never reaches the protocol at all.
+    // A shared cell rather than a captured `&mut`: `accept_hdr`'s error
+    // variant holds the callback, so a borrow would outlive the call and the
+    // result could not be inspected afterwards.
+    let authorized = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&authorized);
+
+    let accepted = tungstenite::accept_hdr(
+        stream,
+        |request: &tungstenite::handshake::server::Request, response| {
+            let uri = request.uri().to_string();
+            let ok = auth::token_from_query(&uri).is_some_and(|t| auth::token_matches(token, t));
+            flag.set(ok);
+            if ok {
+                Ok(response)
+            } else {
+                Err(tungstenite::http::Response::builder()
+                    .status(tungstenite::http::StatusCode::UNAUTHORIZED)
+                    .body(Some("missing or invalid token".to_string()))
+                    .expect("static response should build"))
+            }
+        },
+    );
+
+    let socket = match accepted {
         Ok(socket) => socket,
         Err(err) => {
-            tracing::warn!("shell websocket handshake failed: {err}");
+            if authorized.get() {
+                tracing::warn!("shell websocket handshake failed: {err}");
+            } else {
+                // Expected whenever someone opens the port without the token.
+                // Logged so a genuine misconfiguration is visible, but at debug
+                // so a scanner cannot flood the log.
+                tracing::debug!("rejected an unauthenticated shell connection");
+            }
             return None;
         }
     };

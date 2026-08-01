@@ -29,6 +29,13 @@ fi
 
 cargo build -p lwfa-engine || exit 1
 
+# A stable token means a tablet's bookmarked URL keeps working across restarts.
+# Without this the engine generates a fresh one each run.
+if [ -z "${LWFA_SHELL_TOKEN:-}" ]; then
+  echo "note: LWFA_SHELL_TOKEN is unset, so the engine will generate a new token"
+  echo "      and any bookmarked shell URL will stop working. Export one to pin it."
+fi
+
 "$BIN" "$@" &
 PID=$!
 trap 'kill $PID 2>/dev/null' EXIT

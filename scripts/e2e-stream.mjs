@@ -22,7 +22,11 @@ import {
 } from "../packages/shell/src/strip.ts"
 import { FrameFormat, decodeFrame, decodeToShell, encode } from "../packages/proto/src/index.ts"
 
-const URL = process.argv[2] ?? "ws://127.0.0.1:9843"
+// The engine requires a token. Tests set LWFA_SHELL_TOKEN when launching it
+// so both sides agree; see scripts/dev-nested.sh.
+const TOKEN = process.env.LWFA_SHELL_TOKEN ?? ""
+const URL =
+  process.argv[2] ?? `ws://127.0.0.1:9843${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ""}`
 const OUT = new global.URL("../target/stream-frames", import.meta.url).pathname
 
 let failures = 0
