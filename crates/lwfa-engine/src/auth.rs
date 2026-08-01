@@ -184,17 +184,69 @@ pub fn token_matches(expected: &str, presented: &str) -> bool {
     diff == 0
 }
 
-/// Pull the token out of a request URI's query string.
+/// Pull the token out of a request URI's query string, percent-decoded.
 ///
 /// A query parameter rather than a header because browsers cannot set headers
 /// on a `WebSocket` handshake. The cost is that the token can end up in logs and
 /// browser history, which is another reason it is not a long-term answer.
-pub fn token_from_query(uri: &str) -> Option<&str> {
+///
+/// # Decoding is not optional
+///
+/// The browser percent-encodes anything outside the unreserved set, so a
+/// password of `!!hunter2!!` arrives as `%21%21hunter2%21%21`. Comparing the
+/// raw query value rejects every password that is not purely alphanumeric,
+/// which is easy to miss when the only password ever tested is hex.
+pub fn token_from_query(uri: &str) -> Option<String> {
     let query = uri.split_once('?')?.1;
     query.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=')?;
-        (key == TOKEN_PARAM).then_some(value)
+        (key == TOKEN_PARAM).then(|| percent_decode(value))
     })
+}
+
+/// Decode `%XX` escapes and `+` as space.
+///
+/// `+` because `URLSearchParams` serialises a space that way, which is
+/// application/x-www-form-urlencoded rather than strict RFC 3986. A password
+/// containing a space would otherwise fail for the same reason `!` did.
+///
+/// Invalid escapes are passed through untouched rather than dropped: mangling
+/// a password into something that silently never matches is worse than
+/// comparing it verbatim and failing honestly.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+
+    // Lossy so a mangled escape cannot make this return None and turn a wrong
+    // password into an indistinguishable "no password".
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// True when this address is reachable from outside the machine.
@@ -309,8 +361,11 @@ mod tests {
 
     #[test]
     fn extracts_the_token_from_a_query() {
-        assert_eq!(token_from_query("/?token=abc"), Some("abc"));
-        assert_eq!(token_from_query("/ws?a=1&token=abc&b=2"), Some("abc"));
+        assert_eq!(token_from_query("/?token=abc").as_deref(), Some("abc"));
+        assert_eq!(
+            token_from_query("/ws?a=1&token=abc&b=2").as_deref(),
+            Some("abc")
+        );
         assert_eq!(token_from_query("/?other=abc"), None);
         assert_eq!(token_from_query("/"), None);
         assert_eq!(token_from_query(""), None);
@@ -321,6 +376,72 @@ mod tests {
         // "tokenish=x" must not be read as the token.
         assert_eq!(token_from_query("/?tokenish=x"), None);
         assert_eq!(token_from_query("/?mytoken=x"), None);
+    }
+
+    #[test]
+    fn decodes_percent_escapes() {
+        // The bug that made every non-alphanumeric password fail. A browser
+        // sends "!!secret!!" as "%21%21secret%21%21", and comparing the raw
+        // query value rejected it. Only hex passwords had ever been tested,
+        // and hex needs no encoding, so nothing caught it.
+        assert_eq!(
+            token_from_query("/?token=%21%21secret%21%21").as_deref(),
+            Some("!!secret!!"),
+        );
+    }
+
+    #[test]
+    fn decodes_the_characters_a_password_actually_contains() {
+        let cases = [
+            ("%21", "!"),
+            ("%40", "@"),
+            ("%23", "#"),
+            ("%24", "$"),
+            ("%25", "%"),
+            ("%5E", "^"),
+            ("%26", "&"),
+            ("%2A", "*"),
+            ("%3F", "?"),
+            ("%2F", "/"),
+            ("%3D", "="),
+            ("%2B", "+"),
+            ("+", " "),
+            ("%20", " "),
+        ];
+        for (encoded, decoded) in cases {
+            assert_eq!(
+                token_from_query(&format!("/?token={encoded}")).as_deref(),
+                Some(decoded),
+                "{encoded} should decode to {decoded}",
+            );
+        }
+    }
+
+    #[test]
+    fn handles_lowercase_hex_escapes() {
+        // Not every client uppercases them.
+        assert_eq!(token_from_query("/?token=%2a%2f").as_deref(), Some("*/"));
+    }
+
+    #[test]
+    fn passes_through_a_malformed_escape_rather_than_dropping_it() {
+        // A password ending in a bare % must fail honestly, not silently
+        // become a different string or vanish.
+        assert_eq!(token_from_query("/?token=abc%").as_deref(), Some("abc%"));
+        assert_eq!(token_from_query("/?token=a%zzb").as_deref(), Some("a%zzb"));
+    }
+
+    #[test]
+    fn a_decoded_password_still_has_to_match_exactly() {
+        // Decoding must not become a way to smuggle a near-miss through.
+        assert!(token_matches(
+            "!!a!!",
+            &token_from_query("/?token=%21%21a%21%21").unwrap()
+        ));
+        assert!(!token_matches(
+            "!!a!!",
+            &token_from_query("/?token=%21%21b%21%21").unwrap()
+        ));
     }
 
     #[test]

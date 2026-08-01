@@ -298,7 +298,7 @@ fn handshake(stream: TcpStream, token: &str) -> Option<tungstenite::WebSocket<Tc
         stream,
         |request: &tungstenite::handshake::server::Request, response| {
             let uri = request.uri().to_string();
-            let ok = auth::token_from_query(&uri).is_some_and(|t| auth::token_matches(token, t));
+            let ok = auth::token_from_query(&uri).is_some_and(|t| auth::token_matches(token, &t));
             flag.set(ok);
             if ok {
                 Ok(response)
