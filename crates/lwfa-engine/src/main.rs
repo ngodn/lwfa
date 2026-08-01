@@ -375,6 +375,7 @@ fn permitted(state: &Lwfa, message: &ToEngine) -> bool {
         | ToEngine::SetStreams { .. }
         | ToEngine::FocusWindow { .. }
         | ToEngine::ListApps
+        | ToEngine::SetViewport { .. }
         | ToEngine::RequestIcons { .. } => true,
 
         // Administering accounts is the owner's alone, and is refused out loud
@@ -385,7 +386,9 @@ fn permitted(state: &Lwfa, message: &ToEngine) -> bool {
         | ToEngine::DeleteAccount { .. } => true,
 
         // Launching is gated twice: on interact, and on the app list.
-        ToEngine::Spawn { command } => state.permissions.may_interact() && state.may_spawn(command),
+        ToEngine::Spawn { command, .. } => {
+            state.permissions.may_interact() && state.may_spawn(command)
+        }
 
         // Everything else drives the machine.
         _ => state.permissions.may_interact(),
@@ -422,6 +425,35 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             state.set_focus(Some(id), false);
         }
         ToEngine::CloseWindow { id } => state.request_close(id),
+        ToEngine::SetViewport {
+            width,
+            height,
+            scale,
+        } => {
+            // Guarded against nonsense, not against small. A hidden tab or a
+            // mid-rotation measurement can report zero, and resizing the
+            // compositor to nothing takes every window with it. The floor is
+            // deliberately far below any real device: the rail eats ~64px, so
+            // a 320px phone in portrait offers ~256, and a guard set at phone
+            // width would reject exactly the devices this project exists for.
+            if width < 160 || height < 160 {
+                tracing::debug!("ignoring an implausible viewport {width}x{height}");
+                return;
+            }
+            let scale = if scale.is_finite() && scale > 0.0 {
+                scale.clamp(1.0, 3.0)
+            } else {
+                1.0
+            };
+            if state.viewport_override == Some((width, height, scale)) {
+                return;
+            }
+            state.viewport_override = Some((width, height, scale));
+            if let Some(resize) = state.resize_output.clone() {
+                resize(state, width, height, scale);
+            }
+        }
+
         ToEngine::ListApps => {
             // Scanned on demand. A few hundred small files is a handful of
             // milliseconds, and doing it eagerly would cost every session
@@ -492,10 +524,10 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
         ToEngine::TouchDown { window, id, x, y } => state.remote_touch_down(window, id, x, y),
         ToEngine::TouchMotion { window, id, x, y } => state.remote_touch_motion(window, id, x, y),
         ToEngine::TouchUp { id } => state.remote_touch_up(id),
-        ToEngine::Spawn { command } => {
+        ToEngine::Spawn { command, terminal } => {
             // Reaching here means `permitted` already checked both interact and
             // the account's application list.
-            state.spawn(&command);
+            state.spawn(&command, terminal);
         }
 
         ToEngine::ListAccounts => match state.accounts_for_owner("listAccounts") {

@@ -33,6 +33,7 @@ export const NAV_ITEM_IDS = [
   "theme",
   "settings",
   "apps",
+  "escape",
   "gamepad",
   "keyboard",
   "workspaces",
@@ -49,15 +50,24 @@ export interface Prefs {
     /** Ids the user has switched off entirely. */
     hidden: NavItemId[]
     /**
-     * Ids pinned to the far end of the rail, with the free space above them.
+     * Ids pinned to the far end of the rail, with free space before them.
      *
      * This is a reachability decision, not decoration. On a held tablet or a
      * phone the far end of the rail is where the thumb rests, so the controls
-     * you use constantly while actually working (window management, keyboard,
-     * gamepad) belong there, and the ones you touch once a week (accounts,
-     * appearance, settings) belong at the other end, out of accidental reach.
+     * used constantly while actually working (window management, keyboard,
+     * gamepad, escape) belong there, and the ones touched once a week
+     * (accounts, appearance, settings) belong at the other end, out of
+     * accidental reach.
      */
     anchored: NavItemId[]
+    /**
+     * Ids pinned to the middle, with free space on both sides.
+     *
+     * The launcher is neither: it is not configuration you set once, and it is
+     * not something you reach for mid-task without looking. Its own zone keeps
+     * it findable without putting it under a thumb that is busy.
+     */
+    centred: NavItemId[]
     /** Bigger targets for touch, smaller for a mouse. */
     size: "sm" | "md" | "lg"
   }
@@ -82,7 +92,8 @@ export const DEFAULT_PREFS: Prefs = {
     edge: "left",
     order: [...NAV_ITEM_IDS],
     hidden: [],
-    anchored: ["gamepad", "keyboard", "workspaces"],
+    anchored: ["escape", "gamepad", "keyboard", "workspaces"],
+    centred: ["apps"],
     size: "md",
   },
   gamepad: {
@@ -111,9 +122,11 @@ function hydrate(raw: unknown): Prefs {
   if (typeof raw !== "object" || raw === null) return DEFAULT_PREFS
   const stored = raw as Partial<Prefs>
   const order = sanitiseOrder(stored.nav?.order)
+  const anchored = sanitiseZone(stored.nav?.order, stored.nav?.anchored, "anchored")
+  const centred = sanitiseZone(stored.nav?.order, stored.nav?.centred, "centred")
   return {
     theme: stored.theme ?? DEFAULT_PREFS.theme,
-    nav: { ...DEFAULT_PREFS.nav, ...stored.nav, order },
+    nav: { ...DEFAULT_PREFS.nav, ...stored.nav, order, anchored, centred },
     gamepad: { ...DEFAULT_PREFS.gamepad, ...stored.gamepad },
     keyboard: { ...DEFAULT_PREFS.keyboard, ...stored.keyboard },
     followEngineScroll: stored.followEngineScroll ?? DEFAULT_PREFS.followEngineScroll,
@@ -121,18 +134,67 @@ function hydrate(raw: unknown): Prefs {
 }
 
 /**
- * Make a stored order usable: drop ids that no longer exist, append ids that
+ * Make a stored order usable: drop ids that no longer exist, and place ids that
  * did not exist when it was saved.
  *
- * Without the second half, a new button would be invisible to everyone who had
- * ever opened the shell before it shipped, which is the kind of bug that gets
- * reported as "the feature does not work".
+ * The interesting half is placement. Appending is the obvious thing and it is
+ * wrong: a new button belongs where it was *designed* to go, not at the end.
+ * Escape shipped as "immediately before the gamepad", and appending put it
+ * after the window controls for everyone who had ever opened the shell before
+ * — which looks exactly like the feature being broken.
+ *
+ * So a new id is inserted after whichever of its default predecessors the user
+ * still has, which keeps their arrangement intact and still lands the newcomer
+ * next to the thing it belongs with.
  */
 function sanitiseOrder(stored: NavItemId[] | undefined): NavItemId[] {
   const known = new Set<string>(NAV_ITEM_IDS)
-  const kept = (stored ?? []).filter((id) => known.has(id))
-  const seen = new Set(kept)
-  return [...kept, ...NAV_ITEM_IDS.filter((id) => !seen.has(id))]
+  const result = (stored ?? []).filter((id) => known.has(id))
+  if (result.length === 0) return [...NAV_ITEM_IDS]
+
+  const present = new Set(result)
+  for (const [index, id] of NAV_ITEM_IDS.entries()) {
+    if (present.has(id)) continue
+    // The nearest earlier neighbour from the default order that survives in
+    // the user's list. Insert just after it; fall back to the front.
+    let at = 0
+    for (let before = index - 1; before >= 0; before--) {
+      const anchor = NAV_ITEM_IDS[before]!
+      const found = result.indexOf(anchor)
+      if (found !== -1) {
+        at = found + 1
+        break
+      }
+    }
+    result.splice(at, 0, id)
+    present.add(id)
+  }
+  return result
+}
+
+/**
+ * Keep the user's anchoring, and apply the default for buttons they have never
+ * seen.
+ *
+ * Same problem as the order: a new control that is anchored by design must not
+ * arrive un-anchored just because the saved list predates it, or it lands at
+ * the wrong end of the rail and out of thumb reach.
+ */
+function sanitiseZone(
+  storedOrder: NavItemId[] | undefined,
+  stored: NavItemId[] | undefined,
+  zone: "anchored" | "centred",
+): NavItemId[] {
+  const known = new Set<string>(NAV_ITEM_IDS)
+  if (!stored) return [...DEFAULT_PREFS.nav[zone]]
+
+  const kept = stored.filter((id) => known.has(id))
+  // "Never seen" means absent from the saved *order*, which lists every button
+  // the user has ever had. Absent from this zone alone would mean anything they
+  // deliberately moved out of it gets moved back on the next release.
+  const seen = new Set(storedOrder ?? [])
+  const fresh = DEFAULT_PREFS.nav[zone].filter((id) => !seen.has(id))
+  return [...new Set([...kept, ...fresh])]
 }
 
 function read(): Prefs {

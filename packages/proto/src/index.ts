@@ -178,7 +178,21 @@ export type ToEngine =
   | { type: "setLayout"; windows: WindowLayout[]; animate: Animation | null }
   | { type: "focusWindow"; id: WindowId }
   | { type: "closeWindow"; id: WindowId }
-  | { type: "spawn"; command: string }
+  /**
+   * Launch a command line.
+   *
+   * `terminal` mirrors the desktop entry's `Terminal=true`: the program writes
+   * to a tty and has no window, so the engine wraps it in one.
+   */
+  | { type: "spawn"; command: string; terminal: boolean }
+  /**
+   * Tell the engine how much room the shell actually has, in CSS pixels.
+   *
+   * The engine resizes its output to match rather than the shell scaling a
+   * fixed-size desktop down: scaling letterboxes, wastes the viewport, and
+   * makes every window the wrong physical size. Answered with `outputChanged`.
+   */
+  | { type: "setViewport"; width: number; height: number; scale: number }
   /** Ask for the installed applications. Answered with `apps`, without icons. */
   | { type: "listApps" }
   /**
@@ -583,10 +597,24 @@ export function decodeToEngine(text: string): ToEngine {
       noExtraKeys(o, ["type", "id"], where)
       return { type: t, id: int(o, "id", where) }
     }
+    case "setViewport": {
+      const where = `${at}.setViewport`
+      noExtraKeys(o, ["type", "width", "height", "scale"], where)
+      return {
+        type: "setViewport",
+        width: int(o, "width", where),
+        height: int(o, "height", where),
+        scale: num(o, "scale", where),
+      }
+    }
     case "spawn": {
       const where = `${at}.spawn`
-      noExtraKeys(o, ["type", "command"], where)
-      return { type: "spawn", command: str(o, "command", where) }
+      noExtraKeys(o, ["type", "command", "terminal"], where)
+      return {
+        type: "spawn",
+        command: str(o, "command", where),
+        terminal: bool(o, "terminal", where),
+      }
     }
     case "pointerMotion": {
       const where = `${at}.pointerMotion`

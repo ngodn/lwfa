@@ -51,7 +51,7 @@ export interface SessionActions {
 
   focusWindow: (id: WindowId) => void
   closeWindow: (id: WindowId) => void
-  spawn: (command: string) => void
+  spawn: (command: string, terminal?: boolean) => void
 
   focusColumn: (delta: -1 | 1) => void
   focusInStack: (delta: -1 | 1) => void

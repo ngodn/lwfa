@@ -79,7 +79,7 @@ function AppsPanel() {
                 key={app.id}
                 app={app}
                 icon={icons.get(app.id)}
-                onLaunch={() => actions.spawn(app.exec)}
+                onLaunch={() => actions.spawn(app.exec, app.terminal)}
               />
             ))}
           </ul>

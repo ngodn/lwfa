@@ -365,9 +365,40 @@ pub enum ToEngine {
     FocusWindow { id: WindowId },
     #[serde(rename_all = "camelCase")]
     CloseWindow { id: WindowId },
-    /// Launch a program. The engine sets `WAYLAND_DISPLAY` to its own socket.
+    /// Launch a command line. The engine sets `WAYLAND_DISPLAY` to its own
+    /// socket, splits the line into argv, and runs it.
+    ///
+    /// `terminal` mirrors the desktop entry's `Terminal=true`: the program
+    /// writes to a tty and has no window, so the engine wraps it in one.
+    /// Without that it runs, prints into the void, and never appears.
     #[serde(rename_all = "camelCase")]
-    Spawn { command: String },
+    Spawn { command: String, terminal: bool },
+
+    /// Tell the engine how much room the shell actually has.
+    ///
+    /// # Why the engine resizes rather than the shell scaling
+    ///
+    /// The alternative is what this used to do: the engine's output stays the
+    /// size of the machine's display and the browser scales it to fit. That
+    /// letterboxes, wastes the viewport, and makes every window the wrong
+    /// physical size, because a 2560x1440 desktop shrunk into an iPad is a
+    /// desktop with iPad-sized text rendered at half scale.
+    ///
+    /// Resizing the output instead means the strip lays out *for the device
+    /// holding it*: a tablet gets tablet-shaped columns, a phone gets one
+    /// column, and nothing is letterboxed. It is also the only version where
+    /// "responsive" means anything, since `strip.ts` computes column widths
+    /// from the output size.
+    ///
+    /// Answered with [`ToShell::OutputChanged`].
+    #[serde(rename_all = "camelCase")]
+    SetViewport {
+        /// Logical pixels, i.e. CSS pixels, not device pixels.
+        width: i32,
+        height: i32,
+        /// Device pixel ratio, so the engine can capture at native resolution.
+        scale: f64,
+    },
 
     /// Ask for the installed applications. Answered with [`ToShell::Apps`].
     ///

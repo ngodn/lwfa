@@ -66,6 +66,50 @@ fn keysym_name(raw: u32) -> Option<&'static str> {
     })
 }
 
+/// Split a desktop entry's `Exec` into argv.
+///
+/// The freedesktop spec's quoting rules, which are *not* the shell's: double
+/// quotes group, a backslash escapes the next character inside them, and there
+/// is no globbing, no variable expansion and no operators. Handing this to a
+/// shell instead would be both wrong and a way to turn a malformed `Exec` into
+/// arbitrary code.
+fn split_command_line(line: &str) -> Vec<String> {
+    let mut argv = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut started = false;
+    let mut chars = line.chars();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                // So `""` is an empty argument rather than nothing at all.
+                started = true;
+            }
+            '\\' if quoted => {
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            }
+            c if c.is_whitespace() && !quoted => {
+                if started {
+                    argv.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            c => {
+                current.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        argv.push(current);
+    }
+    argv
+}
+
 impl Lwfa {
     fn run_action(&mut self, action: Action) {
         match action {
@@ -149,8 +193,37 @@ impl Lwfa {
         }
     }
 
-    pub fn spawn(&self, command: &str) {
-        let mut cmd = std::process::Command::new(command);
+    /// Launch a command line, in the compositor's own session.
+    ///
+    /// `command` is a *command line*, not a program name: a desktop entry's
+    /// `Exec` is usually `code --open-url` or `libreoffice --math`, and 59 of
+    /// the 139 entries on this machine carry arguments. Passing the whole
+    /// string to `Command::new` asks the kernel for a binary literally called
+    /// "code --open-url", which does not exist, so every application with a
+    /// flag failed to start and only the bare ones worked.
+    ///
+    /// `in_terminal` reflects the entry's `Terminal=true`, which means the
+    /// program writes to a tty and has no window of its own. Launching one
+    /// without a terminal around it produces a process that runs, prints into
+    /// the void, and never appears.
+    pub fn spawn(&self, command: &str, in_terminal: bool) {
+        let argv = split_command_line(command);
+        let Some((program, args)) = argv.split_first() else {
+            tracing::warn!("refusing to spawn an empty command");
+            return;
+        };
+
+        let terminal = self.config.terminal();
+        let mut cmd = if in_terminal {
+            // `-e` is the one flag every terminal emulator agrees on.
+            let mut wrapper = std::process::Command::new(&terminal);
+            wrapper.arg("-e").arg(program).args(args);
+            wrapper
+        } else {
+            let mut direct = std::process::Command::new(program);
+            direct.args(args);
+            direct
+        };
         cmd.env("WAYLAND_DISPLAY", &self.socket_name);
 
         // Set per-process rather than with `set_var`, which is unsafe in
@@ -170,13 +243,13 @@ impl Lwfa {
         }
 
         match cmd.spawn() {
-            Ok(_) => tracing::info!("spawned {command}"),
+            Ok(child) => tracing::info!("spawned {command} as pid {}", child.id()),
             Err(err) => tracing::error!("failed to spawn {command}: {err}"),
         }
     }
 
     pub fn spawn_terminal(&self) {
-        self.spawn(&self.config.terminal());
+        self.spawn(&self.config.terminal(), false);
     }
 
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
@@ -338,5 +411,60 @@ impl Lwfa {
 
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_command_line;
+
+    #[test]
+    fn a_bare_program_is_one_argument() {
+        assert_eq!(split_command_line("alacritty"), vec!["alacritty"]);
+    }
+
+    #[test]
+    fn arguments_are_separated() {
+        // The case that was broken: 59 of 139 entries on the dev machine look
+        // like this, and passing the whole string to Command::new asked for a
+        // binary named "code --open-url".
+        assert_eq!(
+            split_command_line("code --open-url"),
+            vec!["code", "--open-url"],
+        );
+        assert_eq!(
+            split_command_line("libreoffice --math"),
+            vec!["libreoffice", "--math"],
+        );
+    }
+
+    #[test]
+    fn runs_of_whitespace_do_not_produce_empty_arguments() {
+        assert_eq!(split_command_line("  foo   bar  "), vec!["foo", "bar"]);
+    }
+
+    #[test]
+    fn quotes_group_and_are_removed() {
+        // Real entry shape: kde-geo-uri-handler passes URL templates like this.
+        assert_eq!(
+            split_command_line(r#"handler --template "https://example.com/a b""#),
+            vec!["handler", "--template", "https://example.com/a b"],
+        );
+    }
+
+    #[test]
+    fn a_backslash_escapes_inside_quotes() {
+        assert_eq!(split_command_line(r#"prog "a\"b""#), vec!["prog", r#"a"b"#],);
+    }
+
+    #[test]
+    fn an_empty_quoted_string_is_still_an_argument() {
+        // Dropping it would silently shift every later positional argument.
+        assert_eq!(split_command_line(r#"prog "" x"#), vec!["prog", "", "x"]);
+    }
+
+    #[test]
+    fn an_empty_line_yields_nothing() {
+        assert!(split_command_line("   ").is_empty());
     }
 }

@@ -181,6 +181,7 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
             "spawn",
             ToEngine::Spawn {
                 command: "alacritty".into(),
+                terminal: false,
             },
         ),
         (

@@ -9,6 +9,7 @@
 //! safe mode. See `layout.rs`.
 
 use std::ffi::OsString;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use lwfa_proto::{Modifiers, PROTOCOL_VERSION, ToShell, WindowId, WindowInfo};
@@ -79,6 +80,19 @@ pub struct Lwfa {
     /// so the engine has to notice and report. Diffing against this is what
     /// stops a `WindowChanged` being sent on every single commit.
     reported: std::collections::HashMap<WindowId, WindowInfo>,
+
+    /// The output the compositor presents, in logical pixels.
+    ///
+    /// Normally the nested window's own size, but a remote shell can replace it
+    /// with its own viewport (`SetViewport`), because the strip should lay out
+    /// for the device actually looking at it rather than for a monitor nobody
+    /// is in front of. When the two differ, the local view is scaled to fit;
+    /// see `winit.rs`.
+    ///
+    /// `None` means "follow the window", which is the local-only default.
+    pub viewport_override: Option<(i32, i32, f64)>,
+    /// Set by the winit backend so `SetViewport` can resize the real output.
+    pub resize_output: Option<Rc<dyn Fn(&mut Lwfa, i32, i32, f64)>>,
 
     /// The X11 window manager, once Xwayland has started and handed us a
     /// privileged connection. `None` before that, and for the whole run if
@@ -161,6 +175,8 @@ impl Lwfa {
             next_window_id: 1,
             reported: std::collections::HashMap::new(),
             socket_name,
+            viewport_override: None,
+            resize_output: None,
             xwm: None,
             xdisplay: None,
             compositor_state,

@@ -1,4 +1,5 @@
 {
   "type": "spawn",
-  "command": "alacritty"
+  "command": "alacritty",
+  "terminal": false
 }

@@ -478,6 +478,14 @@ export function App(): React.ReactElement {
     [update],
   );
 
+  // Stable, so the observer in Desktop is not torn down every render.
+  const reportViewport = useCallback(
+    (width: number, height: number, scale: number) => {
+      connection.current?.send({ type: "setViewport", width, height, scale })
+    },
+    [],
+  )
+
   const streamedIds = useMemo(() => {
     if (!streaming) return new Set<WindowId>();
     return new Set(
@@ -505,7 +513,7 @@ export function App(): React.ReactElement {
       focusWindow: (id) =>
         update((st, o) => focusWindow(st, id, o, DEFAULT_CONFIG)),
       closeWindow: (id) => send({ type: "closeWindow", id }),
-      spawn: (command) => send({ type: "spawn", command }),
+      spawn: (command, terminal = false) => send({ type: "spawn", command, terminal }),
       focusColumn: (delta) => update(delta < 0 ? focusLeftAt : focusRightAt),
       focusInStack: (delta) => update(delta < 0 ? focusUpAt : focusDownAt),
       consume: () => update(consumeAt),
@@ -554,7 +562,8 @@ export function App(): React.ReactElement {
         <ShellChrome>
           <Desktop
             output={output}
-            placed={placed}
+            onViewport={reportViewport}
+        placed={placed}
             windows={windows}
             focused={focusedId}
             streamedIds={streamedIds}

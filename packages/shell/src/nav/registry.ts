@@ -14,6 +14,7 @@
 import type { LucideIcon } from "lucide-react"
 import {
   AppWindow,
+  CornerUpLeft,
   Gamepad2,
   Grid3x3,
   Info,
@@ -30,9 +31,26 @@ import type { NavItemId } from "@/lib/prefs"
 export interface NavItem {
   id: NavItemId
   label: string
-  /** Shown in the tooltip under the label. Says what the panel is *for*. */
+  /** Shown in the tooltip under the label. Says what the button is *for*. */
   hint: string
   icon: LucideIcon
+  /**
+   * What this button does when pressed.
+   *
+   * Most open a panel. `dock` puts an input surface on screen instead, and
+   * `action` just does the thing, with no UI of its own. Encoded here rather
+   * than as a list of special cases in the rail, so adding another action is a
+   * table entry.
+   */
+  kind?: "panel" | "dock" | "action"
+  /**
+   * Rendered instead of the icon.
+   *
+   * For controls whose meaning *is* their legend. There is no icon for Escape
+   * that anyone would read as Escape, and a keycap is how every keyboard has
+   * labelled it for forty years.
+   */
+  glyph?: string
 }
 
 export const NAV_ITEMS: Record<NavItemId, NavItem> = {
@@ -72,17 +90,30 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
     hint: "Launch something on the remote machine",
     icon: Grid3x3,
   },
+  escape: {
+    id: "escape",
+    label: "Escape",
+    hint: "Send Escape. Closes menus and dialogs, and leaves vim's insert mode",
+    // Never drawn: `glyph` wins. Present because every item has an icon, and
+    // there is no icon anyone reads as "Escape" — a keycap is how keyboards
+    // have labelled it for forty years.
+    icon: CornerUpLeft,
+    kind: "action",
+    glyph: "ESC",
+  },
   gamepad: {
     id: "gamepad",
     label: "Gamepad",
     hint: "On-screen controller, with an editable layout",
     icon: Gamepad2,
+    kind: "dock",
   },
   keyboard: {
     id: "keyboard",
     label: "Keyboard",
     hint: "On-screen keyboard, including held modifier combos",
     icon: KeyboardIcon,
+    kind: "dock",
   },
   workspaces: {
     id: "workspaces",
@@ -127,16 +158,28 @@ export const NAV_GROUPS: Record<NavGroupId, NavGroup> = {
 }
 
 /**
- * Which end of the rail a slot belongs to.
+ * Which of the rail's three zones a slot belongs to.
+ *
+ * Three, not two, because the launcher is neither configuration nor a control
+ * you reach for mid-task: it sits in the middle with space either side.
  *
  * A group inherits the zone of its members: `input` holds the keyboard and
  * gamepad, which are anchored, so the button that replaces them is anchored
  * too. Collapsing the rail must not move a control out from under the thumb.
  */
-export function zoneOf(slot: NavSlot, anchored: NavItemId[]): "start" | "end" {
-  const pinned = new Set(anchored)
-  if (slot.kind === "item") return pinned.has(slot.id) ? "end" : "start"
-  return slot.members.some((id) => pinned.has(id)) ? "end" : "start"
+export type NavZone = "start" | "centre" | "end"
+
+export function zoneOf(
+  slot: NavSlot,
+  anchored: NavItemId[],
+  centred: NavItemId[],
+): NavZone {
+  const ends = new Set(anchored)
+  const middles = new Set(centred)
+  const ids = slot.kind === "item" ? [slot.id] : slot.members
+  if (ids.some((id) => ends.has(id))) return "end"
+  if (ids.some((id) => middles.has(id))) return "centre"
+  return "start"
 }
 
 /** Anything the rail can show: a single item, or a group standing for several. */
@@ -158,11 +201,23 @@ const TIERS: ReadonlyArray<ReadonlyArray<NavItemId | NavGroupId>> = [
   // Everything, in the user's own order. Filled in by `slotsForTier`.
   [],
   // Keyboard and gamepad share a button; the rest stay put.
-  ["info", "connections", "access", "theme", "settings", "apps", "input", "workspaces"],
-  // The management panels collapse together.
-  ["apps", "workspaces", "input", "more"],
+  [
+    "info",
+    "connections",
+    "access",
+    "theme",
+    "settings",
+    "apps",
+    "escape",
+    "input",
+    "workspaces",
+  ],
+  // The management panels collapse together. Escape survives this tier: it is
+  // one tap and it is what gets you out of whatever is in the way.
+  ["apps", "escape", "workspaces", "input", "more"],
   // The floor. Losing any of these makes the session unusable rather than
   // merely inconvenient, so the rail never collapses further; it scrolls.
+  // Escape goes here, because the keyboard always has one.
   ["apps", "workspaces", "more"],
 ]
 

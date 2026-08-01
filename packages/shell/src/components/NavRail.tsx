@@ -40,6 +40,13 @@ export type NavTarget = { kind: "item"; id: NavItemId } | { kind: "group"; id: N
 export interface NavRailProps {
   /** Which panel is open, so the matching button can read as selected. */
   active: NavItemId | NavGroupId | null
+  /**
+   * An action button that just fired, so it can flash.
+   *
+   * Actions change nothing on screen, and a button that looks inert after a
+   * press is a button people press again.
+   */
+  fired: NavItemId | null
   onSelect: (target: NavTarget) => void
 }
 
@@ -51,9 +58,9 @@ const SIZES = {
 
 const isVertical = (edge: NavEdge) => edge === "left" || edge === "right"
 
-export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps) {
+export const NavRail = memo(function NavRail({ active, fired, onSelect }: NavRailProps) {
   const { nav } = usePrefs()
-  const { edge, order, hidden, anchored, size } = nav
+  const { edge, order, hidden, anchored, centred, size } = nav
   const dock = useDock()
   const metrics = SIZES[size]
   const vertical = isVertical(edge)
@@ -83,13 +90,15 @@ export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps)
   const tier = pickTier(available, metrics, order, hidden)
   const slots = slotsForTier(tier, order, hidden)
 
-  // Two clusters with the slack between them, which is the whole point of the
-  // layout: the buttons you reach for constantly while working sit hard against
-  // the far edge, under the thumb of a hand holding the device, and the ones
-  // you touch once a week sit at the other end where they cannot be hit by
-  // accident. See `nav.anchored`.
-  const start = slots.filter((slot) => zoneOf(slot, anchored) === "start")
-  const end = slots.filter((slot) => zoneOf(slot, anchored) === "end")
+  // Three clusters with the slack shared between them, which is the whole point
+  // of the layout. The buttons reached for constantly while working sit hard
+  // against the far edge, under the thumb of a hand holding the device. The
+  // ones touched once a week sit at the other end where they cannot be hit by
+  // accident. The launcher sits in the middle, belonging to neither.
+  // See `nav.anchored` and `nav.centred`.
+  const start = slots.filter((slot) => zoneOf(slot, anchored, centred) === "start")
+  const centre = slots.filter((slot) => zoneOf(slot, anchored, centred) === "centre")
+  const end = slots.filter((slot) => zoneOf(slot, anchored, centred) === "end")
 
   // The keyboard and gamepad buttons dock a surface rather than open a panel,
   // so "active" for them means "on screen", not "its panel is open". Without
@@ -121,13 +130,30 @@ export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps)
           edge={edge}
           metrics={metrics}
           active={isActive(slot.id)}
+          fired={fired === slot.id}
           onSelect={onSelect}
         />
       ))}
 
-      {/* The gap. `flex-1` rather than a fixed margin, so it absorbs whatever
-          is left over at any rail length and the anchored cluster stays put. */}
-      {end.length > 0 ? <div className="flex-1" aria-hidden /> : null}
+      {/* The gaps. `flex-1` rather than fixed margins, so they share whatever
+          is left over at any rail length and each cluster stays put. Rendered
+          even when a cluster is empty, so the remaining ones do not slide: with
+          nothing centred, two equal gaps still push `end` to the far edge. */}
+      <div className="flex-1" aria-hidden />
+
+      {centre.map((slot) => (
+        <RailButton
+          key={slot.kind === "item" ? slot.id : `group:${slot.id}`}
+          slot={slot}
+          edge={edge}
+          metrics={metrics}
+          active={isActive(slot.id)}
+          fired={fired === slot.id}
+          onSelect={onSelect}
+        />
+      ))}
+
+      <div className="flex-1" aria-hidden />
 
       {end.map((slot) => (
         <RailButton
@@ -136,6 +162,7 @@ export const NavRail = memo(function NavRail({ active, onSelect }: NavRailProps)
           edge={edge}
           metrics={metrics}
           active={isActive(slot.id)}
+          fired={fired === slot.id}
           onSelect={onSelect}
         />
       ))}
@@ -148,6 +175,7 @@ interface RailButtonProps {
   edge: NavEdge
   metrics: (typeof SIZES)[keyof typeof SIZES]
   active: boolean
+  fired: boolean
   onSelect: (target: NavTarget) => void
 }
 
@@ -156,10 +184,12 @@ const RailButton = memo(function RailButton({
   edge,
   metrics,
   active,
+  fired,
   onSelect,
 }: RailButtonProps) {
   const meta = slot.kind === "item" ? slot.item : slot.group
   const Icon = meta.icon
+  const glyph = slot.kind === "item" ? slot.item.glyph : undefined
 
   const handle = useCallback(() => {
     onSelect(
@@ -180,10 +210,21 @@ const RailButton = memo(function RailButton({
               "relative shrink-0 rounded-lg text-sidebar-foreground/70 transition-colors",
               "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
               active && "bg-sidebar-accent text-sidebar-accent-foreground",
+              fired && "bg-primary text-primary-foreground",
             )}
             style={{ width: metrics.button, height: metrics.button }}
           >
-            <Icon size={metrics.icon} strokeWidth={1.9} aria-hidden />
+            {glyph ? (
+              <span
+                className="font-semibold tracking-tight"
+                style={{ fontSize: Math.round(metrics.icon * 0.62) }}
+                aria-hidden
+              >
+                {glyph}
+              </span>
+            ) : (
+              <Icon size={metrics.icon} strokeWidth={1.9} aria-hidden />
+            )}
             {/* A group is standing in for several buttons; the dot says the
                 panel behind it holds more than its label suggests. */}
             {slot.kind === "group" ? (

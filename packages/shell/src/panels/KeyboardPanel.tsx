@@ -8,7 +8,7 @@
 
 import { memo } from "react"
 import { Keyboard as KeyboardIcon } from "lucide-react"
-import { patchPrefs, usePrefs } from "@/lib/prefs"
+import { getPrefs, patchPrefs, usePrefs } from "@/lib/prefs"
 import { setDock, useDock } from "@/lib/dock"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -36,6 +36,27 @@ function KeyboardPanel() {
             <KeyboardIcon className="size-3.5" aria-hidden />
             {dock === "keyboard" ? "Hide" : "Show"}
           </Button>
+        </FieldRow>
+      </PanelSection>
+
+      <PanelSection
+        title="Shortcut in the navigation"
+        description="A one-tap Escape next to the gamepad button. Escape closes menus and dialogs and leaves vim's insert mode, and reaching it through the whole keyboard is a lot of taps for one key."
+      >
+        <FieldRow>
+          <Field label="Show the Escape button" />
+          <Switch
+            checked={!prefs.nav.hidden.includes("escape")}
+            onCheckedChange={(show) => {
+              // Written to the same `hidden` set the Settings panel edits, so
+              // there is one source of truth and the two cannot disagree about
+              // whether the button exists.
+              const hidden = new Set(getPrefs().nav.hidden)
+              if (show) hidden.delete("escape")
+              else hidden.add("escape")
+              patchPrefs("nav", { hidden: [...hidden] })
+            }}
+          />
         </FieldRow>
       </PanelSection>
 

@@ -200,6 +200,7 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
             "spawn",
             ToEngine::Spawn {
                 command: "alacritty".into(),
+                terminal: false,
             },
         ),
         (

@@ -29,7 +29,13 @@ const WindowsPanel = lazy(() => import("@/panels/WindowsPanel"))
 const KeyboardPanel = lazy(() => import("@/panels/KeyboardPanel"))
 const GamepadPanel = lazy(() => import("@/panels/GamepadPanel"))
 
-const PANELS: Record<NavItemId, React.LazyExoticComponent<React.ComponentType>> = {
+/**
+ * Partial on purpose: not every rail button has a panel.
+ *
+ * `escape` fires and is done, and the input surfaces dock rather than opening
+ * anything. See `NavItem.kind`.
+ */
+const PANELS: Partial<Record<NavItemId, React.LazyExoticComponent<React.ComponentType>>> = {
   theme: AppearancePanel,
   settings: SettingsPanel,
   info: SessionPanel,
@@ -144,6 +150,7 @@ function cnPanel(vertical: boolean): string {
 
 const PanelBody = memo(function PanelBody({ id }: { id: NavItemId }) {
   const Panel = PANELS[id]
+  if (!Panel) return null
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="px-4 pb-6" data-selectable>

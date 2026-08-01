@@ -119,6 +119,52 @@ pub fn init_winit(
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
+    // Applying a new output size is the same work whether the host resized the
+    // window or a remote shell declared its viewport, so both go through here.
+    // Having two copies is how they drift.
+    let apply_output_size = {
+        let output = output.clone();
+        move |state: &mut Lwfa, w: i32, h: i32, scale: f64| {
+            let size: smithay::utils::Size<i32, smithay::utils::Physical> = (w, h).into();
+            output.change_current_state(
+                Some(Mode {
+                    size,
+                    refresh: 60_000,
+                }),
+                None,
+                None,
+                None,
+            );
+            output.set_preferred(Mode {
+                size,
+                refresh: 60_000,
+            });
+            let logical = size.to_logical(1);
+            state.layout.set_output_size(logical);
+            state.send_to_shell(lwfa_proto::ToShell::OutputChanged {
+                output: lwfa_proto::Output {
+                    width: logical.w,
+                    height: logical.h,
+                    scale,
+                },
+            });
+            if state.layout.mode() == crate::layout::Mode::Safe {
+                state.apply_safe_mode();
+            }
+            state.apply_layout();
+        }
+    };
+
+    // Handed to the state so `SetViewport` can reach it from the message
+    // handler, which has no access to the output otherwise.
+    data.resize_output = Some(Rc::new({
+        let apply = apply_output_size.clone();
+        move |state: &mut Lwfa, w, h, scale| {
+            tracing::info!("shell viewport is {w}x{h} at scale {scale}; resizing the output");
+            apply(state, w, h, scale);
+        }
+    }));
+
     // Clients spawned from here inherit our socket rather than the host's.
     //
     // SAFETY: `set_var` is unsafe in edition 2024 because concurrent reads of
@@ -131,6 +177,7 @@ pub fn init_winit(
     }
 
     event_loop.handle().insert_source(winit_source, {
+        let apply_resize = apply_output_size.clone();
         let backend = Rc::clone(&backend);
         let last_redraw = Rc::clone(&last_redraw);
         let last_present = Rc::clone(&last_present);
@@ -143,30 +190,17 @@ pub fn init_winit(
 
             match event {
                 WinitEvent::Resized { size, .. } => {
-                    output.change_current_state(
-                        Some(Mode {
-                            size,
-                            refresh: 60_000,
-                        }),
-                        None,
-                        None,
-                        None,
-                    );
+                    // A remote shell's viewport wins over the host window's
+                    // size: the person looking at the session is looking at
+                    // *their* screen, and letting the host window's shape
+                    // reflow their layout would be reflowing it for a display
+                    // nobody is in front of.
+                    if state.viewport_override.is_some() {
+                        return;
+                    }
                     // Tell the shell and let it re-lay-out. The engine does
                     // not reflow on its own: that would be layout policy.
-                    let logical = size.to_logical(1);
-                    state.layout.set_output_size(logical);
-                    state.send_to_shell(lwfa_proto::ToShell::OutputChanged {
-                        output: lwfa_proto::Output {
-                            width: logical.w,
-                            height: logical.h,
-                            scale: 1.0,
-                        },
-                    });
-                    if state.layout.mode() == crate::layout::Mode::Safe {
-                        state.apply_safe_mode();
-                    }
-                    state.apply_layout();
+                    apply_resize(state, size.w, size.h, 1.0);
                 }
 
                 WinitEvent::Input(event) => state.process_input_event(event),
@@ -214,6 +248,17 @@ pub fn init_winit(
                     if present {
                         let size = backend.window_size();
                         let damage = Rectangle::from_size(size);
+                        // The output and the host window are the same size
+                        // until a remote shell declares a viewport, and then
+                        // they are not. Scaling here is what keeps the local
+                        // view a faithful preview of what the tablet sees,
+                        // letterboxed rather than cropped.
+                        let out = state.layout.output_size();
+                        let fit = if out.w > 0 && out.h > 0 {
+                            f32::min(size.w as f32 / out.w as f32, size.h as f32 / out.h as f32)
+                        } else {
+                            1.0
+                        };
                         tracing::trace!("redraw: binding");
                         {
                             let (renderer, mut framebuffer) = match backend.bind() {
@@ -232,7 +277,7 @@ pub fn init_winit(
                                 &output,
                                 renderer,
                                 &mut framebuffer,
-                                1.0,
+                                fit,
                                 0,
                                 [&state.space],
                                 &[],

@@ -15,11 +15,13 @@
  */
 
 import { memo, useCallback, useLayoutEffect, useState } from "react"
-import { usePrefs } from "@/lib/prefs"
+import { getPrefs, usePrefs } from "@/lib/prefs"
 import { NavRail, shellDirection, type NavTarget } from "@/components/NavRail"
 import { PanelHost } from "@/components/PanelHost"
 import { InputDock } from "@/components/InputDock"
 import { toggleDock } from "@/lib/dock"
+import { NAV_ITEMS } from "@/nav/registry"
+import { useSessionActions } from "@/session"
 import type { NavItemId } from "@/lib/prefs"
 import type { NavGroupId } from "@/nav/registry"
 import { cn } from "@/lib/utils"
@@ -32,18 +34,42 @@ export const ShellChrome = memo(function ShellChrome({
 }) {
   const { nav } = usePrefs()
   const [active, setActive] = useState<NavItemId | NavGroupId | null>(null)
+  /** The action button that just fired, so it can flash. */
+  const [fired, setFired] = useState<NavItemId | null>(null)
+  const actions = useSessionActions()
 
-  const select = useCallback((target: NavTarget) => {
-    // The keyboard and the gamepad are input devices, not settings screens, so
-    // their buttons put them on screen rather than opening a panel about them.
-    // Their settings live behind the gear inside the dock. See `lib/dock.ts`.
-    if (target.kind === "item" && (target.id === "keyboard" || target.id === "gamepad")) {
-      toggleDock(target.id)
-      return
-    }
-    // Everything else toggles its panel, so tapping the open one closes it.
-    setActive((current) => (current === target.id ? null : target.id))
-  }, [])
+  const select = useCallback(
+    (target: NavTarget) => {
+      // What a rail button does is a property of the button, not a list of
+      // special cases here. See `NavItem.kind`.
+      const kind = target.kind === "item" ? NAV_ITEMS[target.id].kind : "panel"
+
+      if (kind === "dock" && target.kind === "item") {
+        // Input devices go on screen rather than opening a panel about
+        // themselves; their settings live behind the gear in the dock.
+        toggleDock(target.id as "keyboard" | "gamepad")
+        return
+      }
+
+      if (kind === "action" && target.id === "escape") {
+        // Down then up, like every other key path. Sending only the press
+        // leaves the far end holding Escape, which some applications treat as
+        // a repeat.
+        actions.send({ type: "key", key: ESCAPE, pressed: true })
+        actions.send({ type: "key", key: ESCAPE, pressed: false })
+        if (getPrefs().keyboard.haptics) globalThis.navigator?.vibrate?.(8)
+        // A flash, because nothing else on screen changes and a button that
+        // looks inert is a button people press twice.
+        setFired(target.id)
+        globalThis.setTimeout(() => setFired(null), 180)
+        return
+      }
+
+      // Everything else toggles its panel, so tapping the open one closes it.
+      setActive((current) => (current === target.id ? null : target.id))
+    },
+    [actions],
+  )
 
   const close = useCallback(() => setActive(null), [])
 
@@ -58,7 +84,7 @@ export const ShellChrome = memo(function ShellChrome({
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <div className={cn("flex h-full w-full overflow-hidden bg-backdrop", shellDirection(nav.edge))}>
-        <NavRail active={active} onSelect={select} />
+        <NavRail active={active} fired={fired} onSelect={select} />
         {/* A column, so a docked keyboard takes space from the desktop rather
             than covering the line being typed into. The gamepad positions
             itself absolutely inside this same box and takes none. */}
@@ -71,6 +97,9 @@ export const ShellChrome = memo(function ShellChrome({
     </TooltipProvider>
   )
 })
+
+/** evdev `KEY_ESC`. */
+const ESCAPE = 1
 
 /** Rail thickness, matching `SIZES` in NavRail: button plus padding both sides. */
 function railSize(size: "sm" | "md" | "lg"): string {
