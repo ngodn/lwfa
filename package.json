@@ -9,15 +9,17 @@
     "node": ">=24.15.0"
   },
   "scripts": {
+    "config": "node scripts/gen-config.mjs",
     "fixtures": "cargo run -q -p lwfa-spring --bin gen-fixtures && cargo run -q -p lwfa-proto --bin gen-proto-fixtures",
-    "test": "pnpm run fixtures && vitest run",
+    "test": "pnpm run config && pnpm run fixtures && vitest run",
     "test:watch": "vitest",
     "test:rust": "cargo test --workspace",
     "test:all": "pnpm test && pnpm run test:rust",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "pnpm run config && tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "smol-toml": "^1.7.1",
     "typescript": "5.9.3",
     "vitest": "3.2.4"
   }

@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs"
 import react from "@vitejs/plugin-react"
+import { parse } from "smol-toml"
 import { defineConfig } from "vite"
+
+/** Shared defaults, so the port here and the engine's cannot disagree. */
+const defaults = parse(
+  readFileSync(new URL("../../configs/defaults.toml", import.meta.url), "utf8"),
+) as { net?: { shell_port?: number } }
 
 /**
  * Read a setting the same way the engine does: environment first, then `.env`.
@@ -32,7 +38,7 @@ export default defineConfig({
     // Reachable from a phone or tablet on the LAN, which is the entire point
     // of the project. The engine's socket is gated by AUTH_PASS.
     host: true,
-    port: Number(setting("SHELL_PORT", "6733")),
+    port: Number(setting("SHELL_PORT", String(defaults.net?.shell_port ?? 6733))),
     // Fail loudly rather than silently picking another port: the whole point
     // is that a bookmarked URL keeps working.
     strictPort: true,

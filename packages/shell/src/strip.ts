@@ -41,15 +41,11 @@ export interface Output {
   height: number
 }
 
-/**
- * Column widths, as fractions of the viewport.
- *
- * Presets rather than free resizing, because a column width change is an
- * `xdg_shell configure` and native apps re-layout from scratch rather than
- * reflowing. Cycling between three known sizes keeps that rare and predictable;
- * a drag handle would fire one per frame.
- */
-export const WIDTH_PRESETS = [1 / 3, 1 / 2, 2 / 3] as const
+// Layout defaults come from configs/defaults.toml, via a generated module, so
+// the engine and the shell cannot disagree about them. See scripts/gen-config.mjs.
+export { WIDTH_PRESETS } from "./generated/config.ts"
+import { DEFAULT_WIDTH, GAP, MIN_WIDTH, WIDTH_PRESETS } from "./generated/config.ts"
+
 export type WidthPreset = 0 | 1 | 2
 
 export interface StripConfig {
@@ -62,9 +58,9 @@ export interface StripConfig {
 }
 
 export const DEFAULT_CONFIG: StripConfig = {
-  gap: 12,
-  defaultWidth: 1,
-  minWidth: 240,
+  gap: GAP,
+  defaultWidth: DEFAULT_WIDTH as WidthPreset,
+  minWidth: MIN_WIDTH,
 }
 
 /** A vertical stack of windows sharing one slot on the strip. */

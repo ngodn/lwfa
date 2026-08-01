@@ -11,16 +11,23 @@
 # verified by PID afterwards and corrected if it drifted. Do not simplify this
 # to just the exec rule.
 #
+# On a host with the window rules from the README installed, placement is
+# already handled and this check simply finds nothing to correct. It stays
+# because the script has to work on a host without them too.
+#
 # Usage:
 #   scripts/dev-nested.sh            # run until Ctrl+C
 #   scripts/dev-nested.sh --smoke    # run briefly, verify, screenshot, exit
 set -uo pipefail
 
-WORKSPACE="${LWFA_DEV_WORKSPACE:-2}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/target/debug/lwfa-engine"
 SMOKE=0
 [ "${1:-}" = "--smoke" ] && SMOKE=1
+
+# From configs/defaults.toml, so this script and the compositor config agree
+# about where lwfa lives. LWFA_DEV_WORKSPACE still wins for a one-off.
+WORKSPACE="${LWFA_DEV_WORKSPACE:-$(node "$ROOT/scripts/config.mjs" host.workspace 2>/dev/null || echo 10)}"
 
 if ! command -v hyprctl >/dev/null; then
   echo "hyprctl not found. This script is Hyprland-specific; use 'cargo run -p lwfa-engine' instead." >&2

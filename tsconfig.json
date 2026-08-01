@@ -21,7 +21,14 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
 
-    "noEmit": true
+    "noEmit": true,
+
+    // The generated config module is imported as "./generated/config.ts".
+    // Node's type stripping resolves the real extension and nothing else, and
+    // the Node end-to-end scripts import the shell's source directly, so the
+    // usual ".js" convention would break them. Safe here because nothing is
+    // emitted.
+    "allowImportingTsExtensions": true
   },
   "include": [
     "packages/*/src/**/*.ts",
