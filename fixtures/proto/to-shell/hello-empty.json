@@ -9,8 +9,10 @@
   "windows": [],
   "focused": null,
   "permissions": {
-    "mode": "interact",
-    "allowedApps": null
+    "mode": "view",
+    "allowedApps": [
+      "org.example.Thing"
+    ]
   },
-  "account": "owner"
+  "account": "guest"
 }

@@ -71,6 +71,8 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                     },
                 ],
                 focused: Some(WindowId(1)),
+                permissions: Permissions::owner(),
+                account: "owner".into(),
             },
         ),
         (
@@ -80,6 +82,13 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                 output,
                 windows: vec![],
                 focused: None,
+                // A view-only session, so the fixture covers the restrictive
+                // shape as well as the permissive one.
+                permissions: Permissions {
+                    mode: SessionMode::View,
+                    allowed_apps: Some(vec!["org.example.Thing".into()]),
+                },
+                account: "guest".into(),
             },
         ),
         ("output-changed", ToShell::OutputChanged { output }),

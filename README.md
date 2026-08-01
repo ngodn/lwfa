@@ -342,6 +342,11 @@ others.
 
 ## Tests
 
+Use `test:all` and check its **exit code**. Grepping the output for `FAILED` is
+not enough: a Rust *compile* error never prints that word, so a broken build
+reads as green. That has already happened once, when a field was added to
+`Hello` and `crates/lwfa-proto/tests/from_ts.rs` was not updated.
+
 ```sh
 pnpm run test:all     # Rust unit tests, then cross-language parity
 pnpm run test:rust    # cargo test --workspace
@@ -362,6 +367,12 @@ node --experimental-strip-types scripts/e2e-stream.mjs   # per-surface streaming
 `LWFA_CAPTURE_DUMP=/some/dir` makes the engine write a PNG per window each
 frame, which is how per-surface capture gets checked against what is actually
 on screen.
+
+The protocol fixtures round-trip in both directions, and each half regenerates
+the other's input: `cargo run -p lwfa-proto --bin gen-proto-fixtures` writes
+`fixtures/proto`, and `pnpm test` writes `fixtures/proto-from-ts` from it. After
+changing a protocol message, run **both**, in that order, or the Rust side
+compares against a stale TypeScript round trip and fails confusingly.
 
 `pnpm test` regenerates `fixtures/rust.*.tsv` from the Rust implementation
 before running. Those files are gitignored on purpose: a committed copy would

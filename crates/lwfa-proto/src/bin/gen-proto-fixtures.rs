@@ -58,8 +58,14 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         (
             "hello-empty",
             ToShell::Hello {
-                permissions: lwfa_proto::Permissions::owner(),
-                account: "owner".to_string(),
+                // A restricted session, so the fixtures cover both permission
+                // shapes: `allowed_apps: None` meaning everything, and an
+                // explicit list meaning only those.
+                permissions: lwfa_proto::Permissions {
+                    mode: lwfa_proto::SessionMode::View,
+                    allowed_apps: Some(vec!["org.example.Thing".to_string()]),
+                },
+                account: "guest".to_string(),
                 protocol_version: PROTOCOL_VERSION,
                 output,
                 windows: vec![],
