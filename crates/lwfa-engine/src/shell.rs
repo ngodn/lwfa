@@ -24,7 +24,7 @@
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::thread;
 use std::time::Duration;
@@ -71,13 +71,42 @@ enum Outgoing {
     Frame(Vec<u8>),
 }
 
+/// A cloneable handle for queueing encoded frames.
+///
+/// Separate from [`ShellLink`] so the encoder thread can send frames without
+/// borrowing compositor state. Everything in it is shared, so a clone talks to
+/// the same connection.
+#[derive(Clone)]
+pub struct FrameSink {
+    outgoing: Sender<Outgoing>,
+    in_flight: Arc<AtomicUsize>,
+    connected: Arc<AtomicBool>,
+}
+
+impl FrameSink {
+    /// True when the write queue has room for another frame.
+    ///
+    /// Checked *before* capturing rather than after encoding, so a shell that
+    /// cannot keep up costs no GPU work at all.
+    pub fn can_accept_frame(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+            && self.in_flight.load(Ordering::Relaxed) < MAX_FRAMES_IN_FLIGHT
+    }
+
+    pub fn send_frame(&self, bytes: Vec<u8>) {
+        if !self.connected.load(Ordering::Relaxed) {
+            return;
+        }
+        self.in_flight.fetch_add(1, Ordering::Relaxed);
+        if self.outgoing.send(Outgoing::Frame(bytes)).is_err() {
+            self.in_flight.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Handle the compositor uses to talk to whatever shell is connected.
 pub struct ShellLink {
-    outgoing: Sender<Outgoing>,
-    connected: bool,
-    /// Frames queued but not yet written, so the compositor can stop capturing
-    /// when the shell cannot keep up.
-    in_flight: Arc<AtomicUsize>,
+    sink: FrameSink,
 }
 
 /// How many encoded frames may be queued before capture backs off.
@@ -97,51 +126,56 @@ impl ShellLink {
         let local = listener.local_addr()?;
         let (outgoing_tx, outgoing_rx) = channel::<Outgoing>();
         let in_flight = Arc::new(AtomicUsize::new(0));
+        let connected = Arc::new(AtomicBool::new(false));
         let thread_in_flight = Arc::clone(&in_flight);
+        let thread_connected = Arc::clone(&connected);
 
         thread::Builder::new()
             .name("lwfa-shell".into())
-            .spawn(move || accept_loop(listener, events, outgoing_rx, thread_in_flight))?;
+            .spawn(move || {
+                accept_loop(
+                    listener,
+                    events,
+                    outgoing_rx,
+                    thread_in_flight,
+                    thread_connected,
+                )
+            })?;
 
         Ok((
             Self {
-                outgoing: outgoing_tx,
-                connected: false,
-                in_flight,
+                sink: FrameSink {
+                    outgoing: outgoing_tx,
+                    in_flight,
+                    connected,
+                },
             },
             local,
         ))
     }
 
     pub fn set_connected(&mut self, connected: bool) {
-        self.connected = connected;
+        self.sink.connected.store(connected, Ordering::Relaxed);
+    }
+
+    /// A handle the encoder thread can keep.
+    pub fn sink(&self) -> FrameSink {
+        self.sink.clone()
     }
 
     /// Queue a message for the shell. Cheap, never blocks the compositor, and
     /// silently drops when nothing is connected, which is the normal state.
     pub fn send(&self, message: ToShell) {
-        if self.connected {
-            let _ = self.outgoing.send(Outgoing::Control(Box::new(message)));
+        if self.sink.connected.load(Ordering::Relaxed) {
+            let _ = self
+                .sink
+                .outgoing
+                .send(Outgoing::Control(Box::new(message)));
         }
     }
 
-    /// True when the write queue has room for another frame.
-    ///
-    /// Checked *before* capturing rather than after encoding, so a shell that
-    /// cannot keep up costs no GPU read-back at all.
     pub fn can_accept_frame(&self) -> bool {
-        self.connected && self.in_flight.load(Ordering::Relaxed) < MAX_FRAMES_IN_FLIGHT
-    }
-
-    /// Queue an encoded frame.
-    pub fn send_frame(&self, bytes: Vec<u8>) {
-        if !self.connected {
-            return;
-        }
-        self.in_flight.fetch_add(1, Ordering::Relaxed);
-        if self.outgoing.send(Outgoing::Frame(bytes)).is_err() {
-            self.in_flight.fetch_sub(1, Ordering::Relaxed);
-        }
+        self.sink.can_accept_frame()
     }
 }
 
@@ -163,6 +197,7 @@ fn accept_loop(
     events: LoopSender<ShellEvent>,
     outgoing: Receiver<Outgoing>,
     in_flight: Arc<AtomicUsize>,
+    connected: Arc<AtomicBool>,
 ) {
     if listener.set_nonblocking(true).is_err() {
         tracing::error!("could not set the shell listener non-blocking; no shell can connect");
@@ -212,6 +247,10 @@ fn accept_loop(
             if !pump(socket, &events, &outgoing, &in_flight) {
                 tracing::info!("shell disconnected");
                 current = None;
+                // Stop the encoder thread queueing into a dead socket
+                // immediately, rather than waiting for the compositor to
+                // process the event.
+                connected.store(false, Ordering::Relaxed);
                 let _ = events.send(ShellEvent::Disconnected);
             }
         }

@@ -387,3 +387,137 @@ mod tests {
         assert!(encoders.sessions.is_empty());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Running the encoder off the render loop
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::thread;
+
+use crate::shell::FrameSink;
+
+/// How many captured frames may wait to be encoded.
+///
+/// Small on purpose. A backlog here is latency the user sees as the remote view
+/// lagging behind reality, and for an interactive desktop a fresh frame is worth
+/// more than a complete history. Dropping is the correct response to a
+/// consumer that cannot keep up.
+const QUEUE_DEPTH: usize = 2;
+
+/// Encoding, moved onto its own thread.
+///
+/// # Why this exists
+///
+/// Measured on this machine, capture and read-back cost about 1ms per window,
+/// but *opening* an NVENC session costs **90-160ms**. A session has to be
+/// rebuilt whenever a window resizes, because H.264 cannot change resolution
+/// mid-stream, and windows resize whenever the layout changes.
+///
+/// With encoding inline that stall lands squarely in the render loop: up to
+/// eight dropped frames every time you change a column width or switch
+/// workspace. Off the render loop it stalls only this thread, and the
+/// compositor keeps painting.
+///
+/// That measurement is also why zero-copy capture is not the priority it looked
+/// like. Removing the read-back would save around a millisecond; this saves two
+/// orders of magnitude more.
+pub struct EncodeWorker {
+    frames: SyncSender<Job>,
+    /// Signals sent alongside frames, so ordering with them is preserved.
+    control: SyncSender<Control>,
+    /// Frames submitted but not yet encoded.
+    ///
+    /// `SyncSender` exposes no depth, and `try_send` is the only real test, but
+    /// knowing the queue is backed up lets the caller skip capturing at all
+    /// rather than doing GPU work and then throwing it away.
+    queued: Arc<AtomicUsize>,
+}
+
+struct Job {
+    frame: CapturedFrame,
+}
+
+enum Control {
+    Forget(WindowId),
+    RequestKeyframes,
+}
+
+impl EncodeWorker {
+    pub fn spawn(sink: FrameSink) -> std::io::Result<Self> {
+        let (frames_tx, frames_rx) = sync_channel::<Job>(QUEUE_DEPTH);
+        let (control_tx, control_rx) = sync_channel::<Control>(16);
+        let queued = Arc::new(AtomicUsize::new(0));
+        let worker_queued = Arc::clone(&queued);
+
+        thread::Builder::new()
+            .name("lwfa-encode".into())
+            .spawn(move || {
+                let mut encoders = Encoders::new();
+                loop {
+                    // Control first, so a "forget" cannot be overtaken by a
+                    // frame for a window that has just closed.
+                    while let Ok(message) = control_rx.try_recv() {
+                        match message {
+                            Control::Forget(id) => encoders.forget(id),
+                            Control::RequestKeyframes => encoders.request_keyframes(),
+                        }
+                    }
+
+                    let Ok(job) = frames_rx.recv() else {
+                        return; // compositor is gone
+                    };
+                    worker_queued.fetch_sub(1, Ordering::Relaxed);
+
+                    let Some(encoded) = encoders.encode(&job.frame) else {
+                        continue;
+                    };
+
+                    let header = lwfa_proto::FrameHeader {
+                        window: job.frame.id,
+                        width: job.frame.width,
+                        height: job.frame.height,
+                        format: encoded.format,
+                        keyframe: encoded.keyframe,
+                    };
+                    sink.send_frame(header.encode_with_payload(&encoded.bytes));
+                }
+            })?;
+
+        Ok(Self {
+            frames: frames_tx,
+            control: control_tx,
+            queued,
+        })
+    }
+
+    /// Queue a frame, or drop it if the encoder is behind.
+    ///
+    /// Returns false when dropped, so the caller can leave the capture's damage
+    /// state untouched and try again next frame rather than losing the update.
+    pub fn submit(&self, frame: CapturedFrame) -> bool {
+        self.queued.fetch_add(1, Ordering::Relaxed);
+        match self.frames.try_send(Job { frame }) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
+                self.queued.fetch_sub(1, Ordering::Relaxed);
+                false
+            }
+        }
+    }
+
+    /// Room for another frame without blocking.
+    pub fn has_capacity(&self) -> bool {
+        self.queued.load(Ordering::Relaxed) < QUEUE_DEPTH
+    }
+
+    pub fn forget(&self, id: WindowId) {
+        let _ = self.control.try_send(Control::Forget(id));
+    }
+
+    pub fn request_keyframes(&self) {
+        let _ = self.control.try_send(Control::RequestKeyframes);
+    }
+}

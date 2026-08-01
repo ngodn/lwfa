@@ -77,7 +77,9 @@ impl XdgShellHandler for Lwfa {
         self.layout.forget(id);
         self.forget_reported(id);
         self.capture.forget(id);
-        self.encoders.forget(id);
+        if let Some(worker) = self.encoders.as_ref() {
+            worker.forget(id);
+        }
 
         if self.focused() == Some(id) {
             // Focus something else rather than leaving the seat pointing at a

@@ -28,7 +28,7 @@ use smithay::wayland::shm::ShmState;
 use smithay::wayland::socket::ListeningSocketSource;
 
 use crate::capture::SurfaceCapture;
-use crate::encode::Encoders;
+use crate::encode::EncodeWorker;
 
 use crate::layout::{self, Layout};
 use crate::shell::ShellLink;
@@ -47,8 +47,9 @@ pub struct Lwfa {
     pub shell: Option<ShellLink>,
     /// Per-surface capture. Only does work when something asks it to.
     pub capture: SurfaceCapture,
-    /// Per-window hardware encoders, with a JPEG fallback.
-    pub encoders: Encoders,
+    /// Encoding runs on its own thread. Opening an NVENC session costs
+    /// 90-160ms, which must not land in the render loop. See `encode.rs`.
+    pub encoders: Option<EncodeWorker>,
     /// Windows the shell has asked for pixels of.
     ///
     /// Empty is the normal case for a local shell, which composites natively
@@ -113,7 +114,7 @@ impl Lwfa {
             layout: Layout::new((0, 0).into()),
             shell: None,
             capture: SurfaceCapture::default(),
-            encoders: Encoders::new(),
+            encoders: None,
             streaming: std::collections::HashSet::new(),
             space: Space::default(),
             loop_signal,
@@ -420,7 +421,10 @@ impl Lwfa {
         let Some(shell) = self.shell.as_ref() else {
             return;
         };
-        if !shell.can_accept_frame() {
+        let Some(worker) = self.encoders.as_ref() else {
+            return;
+        };
+        if !shell.can_accept_frame() || !worker.has_capacity() {
             return;
         }
 
@@ -435,31 +439,43 @@ impl Lwfa {
             .collect();
 
         for (id, window) in targets {
-            // Re-checked per window: one large window can fill the queue.
-            let Some(shell) = self.shell.as_ref() else {
+            // Re-checked per window: one large frame can fill either queue.
+            let (Some(shell), Some(worker)) = (self.shell.as_ref(), self.encoders.as_ref()) else {
                 return;
             };
-            if !shell.can_accept_frame() {
+            if !shell.can_accept_frame() || !worker.has_capacity() {
                 return;
             }
 
             let size = window.geometry().size.to_physical(1);
+            let profile = std::env::var_os("LWFA_PROFILE").is_some();
+            let t0 = profile.then(std::time::Instant::now);
+
             let Some(frame) = self.capture.capture(renderer, id, &window, size) else {
                 continue;
             };
-            let Some(encoded) = self.encoders.encode(&frame) else {
-                continue;
-            };
 
-            let header = lwfa_proto::FrameHeader {
-                window: id,
-                width: frame.width,
-                height: frame.height,
-                format: encoded.format,
-                keyframe: encoded.keyframe,
-            };
-            if let Some(shell) = self.shell.as_ref() {
-                shell.send_frame(header.encode_with_payload(&encoded.bytes));
+            if let Some(t0) = t0 {
+                tracing::info!(
+                    "profile {id} {}x{}: capture+readback {:.2}ms",
+                    frame.width,
+                    frame.height,
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                );
+            }
+
+            // Hand off. Encoding, and in particular opening an NVENC session,
+            // happens on the encoder thread so a 160ms session build cannot
+            // stall compositing.
+            if let Some(worker) = self.encoders.as_ref() {
+                if !worker.submit(frame) {
+                    // Dropped because the encoder is behind. The capture's
+                    // damage state was already advanced, so this update is
+                    // lost; the next commit will produce another. Losing a
+                    // frame under load is preferable to unbounded latency.
+                    tracing::trace!("encoder busy, dropped a frame for {id}");
+                    return;
+                }
             }
         }
     }

@@ -336,10 +336,27 @@ non-NVIDIA smoke test.
    Not the NVENC SDK directly: `nvidia-video-codec-sdk`'s `cudarc` dependency
    hard-panics at build time on CUDA 13.3, which is what this machine has.
 
-   **Still one readback per frame.** `capture.rs` copies the GPU texture to
-   host memory and the encoder uploads it back. Removing that needs CUDA/GL
-   interop and is the obvious next optimisation; only `encode.rs` and
-   `capture.rs` change.
+   **Encoding runs on its own thread**, and the reason is worth recording
+   because it overturned an assumption. Measured with `LWFA_PROFILE=1`, per
+   window per frame:
+
+   | Stage | Cost |
+   |---|---|
+   | capture + GPU-to-CPU readback | 0.6-1.1ms |
+   | encode, steady state | 1.6-1.9ms |
+   | encode, **opening an NVENC session** | **90-160ms** |
+
+   The readback was assumed to be the bottleneck and is not. Opening a session
+   is, and it happens on every window resize, because H.264 cannot change
+   resolution mid-stream and the layout resizes windows whenever a column width
+   or workspace changes. Inline, that put an up-to-160ms stall (eight dropped
+   frames) into the render loop every time you touched the layout. Moving
+   encoding to a worker took the render loop's share to a mean of 2.2ms.
+
+   **Zero-copy capture is deprioritised as a result.** It would save around a
+   millisecond. Fixing where encoding runs saved two orders of magnitude more,
+   and doing zero-copy first would have meant a fight with CUDA/GL interop for
+   the smaller win. Worth revisiting only once something else makes 1ms matter.
 5. **Appearance vocabulary** in both backends, with a visual diff test comparing
    a local screenshot against a remote screenshot of the same state.
 6. **iPad.** WebCodecs, gesture arbitration, responsive breakpoints, on-screen

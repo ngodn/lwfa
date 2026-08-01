@@ -84,6 +84,15 @@ fn init_shell_link(
             return Ok(());
         }
     };
+    // The encoder needs a frame sink, so it is spawned once the link exists.
+    match crate::encode::EncodeWorker::spawn(link.sink()) {
+        Ok(worker) => data.state.encoders = Some(worker),
+        Err(err) => {
+            // Not fatal: the compositor still works, there is just nothing to
+            // send a remote shell.
+            tracing::error!("could not start the encoder thread: {err}. Streaming disabled.");
+        }
+    }
     data.state.shell = Some(link);
     tracing::info!("shell protocol listening on ws://{bound}");
 
@@ -110,7 +119,9 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // A browser attaching mid-stream cannot decode until it sees an
             // IDR, so ask every live encoder for one now rather than making it
             // wait up to a whole GOP.
-            state.encoders.request_keyframes();
+            if let Some(worker) = state.encoders.as_ref() {
+                worker.request_keyframes();
+            }
             // And force a capture of every window, because an idle one would
             // otherwise never produce a frame for the new client to decode.
             state.capture.invalidate_all();
@@ -172,7 +183,9 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 for id in &next {
                     state.capture.invalidate(*id);
                 }
-                state.encoders.request_keyframes();
+                if let Some(worker) = state.encoders.as_ref() {
+                    worker.request_keyframes();
+                }
                 state.streaming = next;
                 tracing::debug!("streaming {} window(s)", state.streaming.len());
             }
