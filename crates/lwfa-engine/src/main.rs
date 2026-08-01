@@ -124,6 +124,10 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 shell.set_connected(false);
             }
             state.layout.set_mode(Mode::Safe);
+            // Forget what the departed shell wanted streamed. Otherwise the
+            // next one receives frames for windows it never asked about,
+            // before it has had a chance to say what its viewport shows.
+            state.streaming.clear();
             // Fall back immediately rather than leaving the last shell-declared
             // layout frozen on screen, which would look like a hang.
             state.apply_safe_mode();

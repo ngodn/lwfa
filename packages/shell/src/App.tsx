@@ -22,13 +22,21 @@ import {
   type Output,
   type StripState,
   addWindow,
-  columnWidth,
+  consumeIntoColumn,
+  currentWorkspace,
+  cycleWidth,
+  expelFromColumn,
+  focusDown,
   focusLeft,
   focusRight,
+  focusUp,
   focusWindow,
+  focusWorkspace,
   focusedWindow,
   intersectsViewport,
   layout,
+  moveToWorkspace,
+  presetWidth,
   reflow,
   removeWindow,
 } from "./strip.js"
@@ -197,12 +205,26 @@ export function App(): React.ReactElement {
           break
 
         case "keyBinding": {
-          // Focus order is layout policy, which is why the engine forwards
-          // these instead of acting on them.
-          const { key } = message
-          if (key === "h" || key === "Left") update(focusLeftAt)
-          else if (key === "l" || key === "Right") update(focusRightAt)
-          else if (key === "w") {
+          // Every one of these is layout policy, which is why the engine
+          // forwards them rather than acting on them itself.
+          const { key, modifiers } = message
+          const shifted = modifiers.shift
+
+          if (key === "h" || key === "Left") {
+            update(shifted ? consumeAt : focusLeftAt)
+          } else if (key === "l" || key === "Right") {
+            update(shifted ? expelAt : focusRightAt)
+          } else if (key === "k" || key === "Up") {
+            update(shifted ? moveWorkspaceUpAt : focusUpAt)
+          } else if (key === "j" || key === "Down") {
+            update(shifted ? moveWorkspaceDownAt : focusDownAt)
+          } else if (key === "1" || key === "2" || key === "3") {
+            // Jump straight to a workspace by number.
+            const target = Number(key) - 1
+            update((st, o) => focusWorkspace(st, target - st.focus, o, DEFAULT_CONFIG))
+          } else if (key === "4") {
+            update(cycleWidthAt)
+          } else if (key === "w") {
             const focused = focusedWindow(stripRef.current)
             if (focused !== null) connection.current?.send({ type: "closeWindow", id: focused })
           }
@@ -286,7 +308,12 @@ export function App(): React.ReactElement {
     }
   }, [status])
 
-  const width = output.width > 0 ? columnWidth(output, DEFAULT_CONFIG) : 0
+  const workspace = currentWorkspace(strip)
+  const focusedColumn = workspace.columns[workspace.focus]
+  const width =
+    output.width > 0 && focusedColumn
+      ? presetWidth(focusedColumn.width, output, DEFAULT_CONFIG)
+      : 0
   const placed = useMemo(
     () => (output.width > 0 ? layout(strip, output, DEFAULT_CONFIG) : []),
     [strip, output],
@@ -305,22 +332,40 @@ export function App(): React.ReactElement {
       <section>
         <h2>Viewport</h2>
         <p>
-          {output.width} × {output.height} · column width {width} · offset{" "}
-          {Math.round(strip.viewOffset)}
+          {output.width} × {output.height} · workspace {strip.focus + 1} of{" "}
+          {strip.workspaces.length} · column width {width} · offset{" "}
+          {Math.round(workspace.viewOffset)}
         </p>
       </section>
 
       <section>
-        <h2>Strip ({strip.columns.length})</h2>
+        <h2>
+          Strip · workspace {strip.focus + 1}/{strip.workspaces.length} ·{" "}
+          {workspace.columns.length} column(s)
+        </h2>
         <div className="controls">
-          <button onClick={() => update(focusLeftAt)} disabled={strip.focus === 0}>
-            ← focus left
+          <button onClick={() => update(focusLeftAt)} disabled={workspace.focus === 0}>
+            ← column
           </button>
           <button
             onClick={() => update(focusRightAt)}
-            disabled={strip.focus >= strip.columns.length - 1}
+            disabled={workspace.focus >= workspace.columns.length - 1}
           >
-            focus right →
+            column →
+          </button>
+          <button onClick={() => update(focusUpAt)}>↑ in stack</button>
+          <button onClick={() => update(focusDownAt)}>↓ in stack</button>
+          <button onClick={() => update(consumeAt)}>consume ←</button>
+          <button onClick={() => update(expelAt)}>expel →</button>
+          <button onClick={() => update(cycleWidthAt)}>width</button>
+          <button onClick={() => update(workspaceUpAt)} disabled={strip.focus === 0}>
+            ↑ workspace
+          </button>
+          <button
+            onClick={() => update(workspaceDownAt)}
+            disabled={strip.focus >= strip.workspaces.length - 1}
+          >
+            ↓ workspace
           </button>
           <button onClick={() => connection.current?.send({ type: "spawn", command: "alacritty" })}>
             spawn terminal
@@ -328,32 +373,49 @@ export function App(): React.ReactElement {
         </div>
 
         <ol className="columns">
-          {strip.columns.map((id, index) => {
-            const info = windows.get(id)
-            const rect = placed[index]?.rect
-            return (
-              <li key={id} className={index === strip.focus ? "focused" : undefined}>
-                <button className="pick" onClick={() => update((s, o) => focusWindow(s, id, o, DEFAULT_CONFIG))}>
-                  <span className="id">w{id}</span>
-                  <span className="title">{info?.title ?? info?.appId ?? "(untitled)"}</span>
-                  {rect ? (
-                    <span className="rect">
-                      x {Math.round(rect.x)} · {Math.round(rect.width)}×{Math.round(rect.height)}
-                    </span>
-                  ) : null}
-                </button>
-                <button
-                  className="close"
-                  onClick={() => connection.current?.send({ type: "closeWindow", id })}
-                  aria-label={`close window ${id}`}
-                >
-                  ×
-                </button>
-              </li>
-            )
-          })}
+          {workspace.columns.map((column, columnIndex) => (
+            <li key={columnIndex} className="column">
+              <span className="column-width">{WIDTH_LABELS[column.width]}</span>
+              <ol className="stack">
+                {column.windows.map((id, row) => {
+                  const info = windows.get(id)
+                  const rect = placed.find((w) => w.id === id)?.rect
+                  const isFocused =
+                    columnIndex === workspace.focus && row === column.focus
+                  return (
+                    <li key={id} className={isFocused ? "focused" : undefined}>
+                      <button
+                        className="pick"
+                        onClick={() => update((s, o) => focusWindow(s, id, o, DEFAULT_CONFIG))}
+                      >
+                        <span className="id">w{id}</span>
+                        <span className="title">
+                          {info?.title ?? info?.appId ?? "(untitled)"}
+                        </span>
+                        {rect ? (
+                          <span className="rect">
+                            x {Math.round(rect.x)} · {Math.round(rect.width)}×
+                            {Math.round(rect.height)}
+                          </span>
+                        ) : null}
+                      </button>
+                      <button
+                        className="close"
+                        onClick={() => connection.current?.send({ type: "closeWindow", id })}
+                        aria-label={`close window ${id}`}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  )
+                })}
+              </ol>
+            </li>
+          ))}
         </ol>
-        {strip.columns.length === 0 ? <p className="empty">No windows yet.</p> : null}
+        {workspace.columns.length === 0 ? (
+          <p className="empty">This workspace is empty.</p>
+        ) : null}
       </section>
 
       {/* The actual remote desktop: one DOM element per window, composited
@@ -432,6 +494,18 @@ export function App(): React.ReactElement {
   )
 }
 
+/** Human labels for the width presets, matching WIDTH_PRESETS order. */
+const WIDTH_LABELS = ["⅓", "½", "⅔"] as const
+
 // Declared outside the component so `update` gets a stable reference.
-const focusLeftAt = (state: StripState, out: Output) => focusLeft(state, out, DEFAULT_CONFIG)
-const focusRightAt = (state: StripState, out: Output) => focusRight(state, out, DEFAULT_CONFIG)
+const focusLeftAt = (s: StripState, o: Output) => focusLeft(s, o, DEFAULT_CONFIG)
+const focusRightAt = (s: StripState, o: Output) => focusRight(s, o, DEFAULT_CONFIG)
+const focusUpAt = (s: StripState) => focusUp(s)
+const focusDownAt = (s: StripState) => focusDown(s)
+const consumeAt = (s: StripState, o: Output) => consumeIntoColumn(s, o, DEFAULT_CONFIG)
+const expelAt = (s: StripState, o: Output) => expelFromColumn(s, o, DEFAULT_CONFIG)
+const cycleWidthAt = (s: StripState, o: Output) => cycleWidth(s, o, DEFAULT_CONFIG)
+const workspaceUpAt = (s: StripState, o: Output) => focusWorkspace(s, -1, o, DEFAULT_CONFIG)
+const workspaceDownAt = (s: StripState, o: Output) => focusWorkspace(s, 1, o, DEFAULT_CONFIG)
+const moveWorkspaceUpAt = (s: StripState, o: Output) => moveToWorkspace(s, -1, o, DEFAULT_CONFIG)
+const moveWorkspaceDownAt = (s: StripState, o: Output) => moveToWorkspace(s, 1, o, DEFAULT_CONFIG)

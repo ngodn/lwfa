@@ -71,9 +71,22 @@ that layout policy exists in exactly one place. See `crates/lwfa-engine/src/layo
 | `Alt+Q` | engine | quit |
 | `Alt+H` / `Alt+Left` | shell | focus the column to the left |
 | `Alt+L` / `Alt+Right` | shell | focus the column to the right |
+| `Alt+K` / `Alt+Up` | shell | focus up within a column's stack |
+| `Alt+J` / `Alt+Down` | shell | focus down within a column's stack |
+| `Alt+Shift+H` | shell | consume: pull this window into the column on its left |
+| `Alt+Shift+L` | shell | expel: push this window out into its own column |
+| `Alt+Shift+K` / `Alt+Shift+J` | shell | move this window to the workspace above/below |
+| `Alt+1` … `Alt+3` | shell | jump to a workspace |
+| `Alt+4` | shell | cycle the focused column's width (⅓, ½, ⅔) |
 | `Alt+W` | shell | close the focused window |
 
-Focus order is layout policy, so the engine forwards those keys to the shell
+Layout follows [niri](https://github.com/niri-wm/niri): windows live in columns
+on an infinite horizontal strip, a column can hold a vertical stack, and
+workspaces stack vertically. Workspaces need no protocol support at all, because
+`SetLayout` is total: the shell omits the windows on other workspaces and the
+engine hides whatever it is not told about.
+
+All of that is layout policy, so the engine forwards those keys to the shell
 rather than acting on them. Alt rather than Super, because the host compositor
 sees keys first and usually has Super bound. The TTY backend will move these to
 Super.

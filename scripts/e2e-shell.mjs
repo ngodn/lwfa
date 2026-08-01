@@ -18,6 +18,8 @@ import {
   DEFAULT_CONFIG,
   EMPTY,
   addWindow,
+  allWindows,
+  currentWorkspace,
   focusLeft,
   focusRight,
   focusedWindow,
@@ -40,6 +42,11 @@ const inbox = []
 const waiters = []
 
 socket.addEventListener("message", (event) => {
+  // This test covers the control plane. Pixels are binary frames and are
+  // checked by e2e-stream.mjs; feeding them to a JSON decoder would just be
+  // noise. See packages/proto for the split.
+  if (typeof event.data !== "string") return
+
   let message
   try {
     message = decodeToShell(event.data)
@@ -107,21 +114,21 @@ async function main() {
   // --- the engine obeys layout --------------------------------------------
   // Nothing echoes a layout back, so this is verified by consequence: spawn a
   // window, and the engine must report it and accept placement without error.
-  const before = strip.columns.length
+  const before = allWindows(strip).length
   send({ type: "spawn", command: process.env.LWFA_TERMINAL ?? "alacritty" })
 
   const opened = await expect((m) => m.type === "windowOpened", "windowOpened after spawn")
   check(true, "spawn produced a window", `w${opened.window.id}`)
 
   strip = addWindow(strip, opened.window.id, output, DEFAULT_CONFIG)
-  check(strip.columns.length === before + 1, "shell tracked the new column",
-    `${before} -> ${strip.columns.length}`)
+  check(allWindows(strip).length === before + 1, "shell tracked the new window",
+    `${before} -> ${allWindows(strip).length}`)
   check(focusedWindow(strip) === opened.window.id, "new window took focus")
   push()
 
   // The strip should have scrolled to reveal the new column.
   const placed = layout(strip, output, DEFAULT_CONFIG)
-  check(placed.length === strip.columns.length, "every column is in the layout")
+  check(placed.length === allWindows(strip).length, "every window is in the layout")
   const last = placed[placed.length - 1]
   check(
     last.rect.x + last.rect.width <= output.width - DEFAULT_CONFIG.gap + 1,
@@ -141,7 +148,7 @@ async function main() {
     named ? `${named.window.appId ?? "?"} / ${named.window.title ?? "?"}` : "none arrived")
 
   // --- focus round trip ----------------------------------------------------
-  if (strip.columns.length >= 2) {
+  if (currentWorkspace(strip).columns.length >= 2) {
     strip = focusLeft(strip, output, DEFAULT_CONFIG)
     const target = focusedWindow(strip)
     send({ type: "focusWindow", id: target })
@@ -168,7 +175,7 @@ async function main() {
 
   if (closed) {
     strip = removeWindow(strip, victim, output, DEFAULT_CONFIG)
-    check(!strip.columns.includes(victim), "shell dropped the closed column")
+    check(!allWindows(strip).includes(victim), "shell dropped the closed window")
     push()
   }
 

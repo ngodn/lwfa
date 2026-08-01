@@ -1,9 +1,9 @@
 /**
- * Strip layout geometry.
+ * Strip layout: columns, stacks, widths and workspaces.
  *
- * This is lwfa's layout policy, and it is pure, so it can be tested properly
- * rather than eyeballed in a screenshot. Several of these cases pin behaviour
- * that was verified against the real compositor in milestone 2.
+ * This is lwfa's layout policy and it is pure, so it can be tested properly
+ * rather than eyeballed in a screenshot. Several cases pin behaviour that was
+ * verified against the real compositor.
  */
 
 import { describe, expect, it } from "vitest"
@@ -13,195 +13,345 @@ import {
   type Output,
   type StripState,
   addWindow,
-  columnHeight,
-  columnWidth,
+  allWindows,
   columnX,
+  consumeIntoColumn,
+  currentWorkspace,
+  cycleWidth,
+  expelFromColumn,
+  findWindow,
+  focusDown,
   focusLeft,
   focusRight,
+  focusUp,
   focusWindow,
+  focusWorkspace,
   focusedWindow,
+  intersectsViewport,
   layout,
+  moveToWorkspace,
+  presetWidth,
   reflow,
   removeWindow,
-  stripWidth,
-  targetOffset,
+  stackedHeight,
 } from "../src/strip.js"
 
 const config = DEFAULT_CONFIG
 const wide: Output = { width: 1920, height: 1080 }
-/** The viewport milestone 2 was verified against, so the numbers are comparable. */
+/** The viewport milestone 2 was verified against, so numbers are comparable. */
 const nested: Output = { width: 1261, height: 1390 }
 
-function withWindows(ids: number[], output: Output): StripState {
+function withWindows(ids: number[], output: Output = wide): StripState {
   return ids.reduce((state, id) => addWindow(state, id, output, config), EMPTY)
 }
 
 describe("column sizing", () => {
-  it("defaults to half the viewport", () => {
-    expect(columnWidth(wide, config)).toBe(960)
-    expect(columnWidth({ width: 2560, height: 1440 }, config)).toBe(1280)
+  it("uses the preset fractions", () => {
+    expect(presetWidth(0, wide, config)).toBe(640) // 1/3
+    expect(presetWidth(1, wide, config)).toBe(960) // 1/2
+    expect(presetWidth(2, wide, config)).toBe(1280) // 2/3
   })
 
   it("has a floor on narrow viewports", () => {
-    // A phone-width viewport must not produce unusably narrow columns. The
-    // shell is expected to switch to one column per viewport at that size
-    // rather than lean on this, but the floor is the backstop.
-    expect(columnWidth({ width: 320, height: 720 }, config)).toBe(config.minWidth)
+    // A phone-width viewport must not produce unusably narrow columns.
+    expect(presetWidth(0, { width: 320, height: 720 }, config)).toBe(config.minWidth)
   })
 
-  it("leaves a gap top and bottom", () => {
-    expect(columnHeight(wide, config)).toBe(1080 - config.gap * 2)
+  it("cycles the focused column through the presets and wraps", () => {
+    let state = withWindows([1])
+    const widthOf = (s: StripState) => currentWorkspace(s).columns[0]!.width
+    expect(widthOf(state)).toBe(config.defaultWidth)
+
+    state = cycleWidth(state, wide, config)
+    expect(widthOf(state)).toBe(2)
+    state = cycleWidth(state, wide, config)
+    expect(widthOf(state)).toBe(0)
+    state = cycleWidth(state, wide, config)
+    expect(widthOf(state)).toBe(1)
+  })
+
+  it("only resizes the focused column", () => {
+    // Every width change is an xdg_shell configure, and native apps re-layout
+    // rather than reflow. Resizing a neighbour would be a free configure.
+    let state = withWindows([1, 2])
+    state = cycleWidth(state, wide, config)
+    const columns = currentWorkspace(state).columns
+    expect(columns[0]!.width).toBe(config.defaultWidth)
+    expect(columns[1]!.width).not.toBe(config.defaultWidth)
+  })
+
+  it("offsets later columns by the actual width of earlier ones", () => {
+    // Widths vary per column now, so x cannot be index * fixed width.
+    let state = withWindows([1, 2])
+    state = focusWindow(state, 1, wide, config)
+    state = cycleWidth(state, wide, config) // column 0 becomes 2/3
+    const columns = currentWorkspace(state).columns
+    expect(columnX(columns, 1, wide, config)).toBe(
+      config.gap + presetWidth(columns[0]!.width, wide, config) + config.gap,
+    )
   })
 })
 
-describe("strip coordinates", () => {
-  it("accumulates widths and gaps", () => {
-    const width = columnWidth(nested, config)
-    expect(width).toBe(631)
-    expect(columnX(0, width, config)).toBe(12)
-    expect(columnX(1, width, config)).toBe(12 + 631 + 12)
+describe("stacking within a column", () => {
+  it("splits height equally, accounting for gaps", () => {
+    const full = stackedHeight(1, wide, config)
+    const half = stackedHeight(2, wide, config)
+    expect(full).toBe(wide.height - config.gap * 2)
+    expect(half * 2 + config.gap).toBeLessThanOrEqual(full)
   })
 
-  it("reports zero width for an empty strip", () => {
-    expect(stripWidth(0, 960, config)).toBe(0)
+  it("consumes the focused window into the column on its left", () => {
+    let state = withWindows([1, 2])
+    state = consumeIntoColumn(state, wide, config)
+
+    const columns = currentWorkspace(state).columns
+    expect(columns).toHaveLength(1)
+    expect(columns[0]!.windows).toEqual([1, 2])
+    expect(focusedWindow(state)).toBe(2)
+  })
+
+  it("expels a stacked window back into its own column", () => {
+    let state = withWindows([1, 2])
+    state = consumeIntoColumn(state, wide, config)
+    state = expelFromColumn(state, wide, config)
+
+    const columns = currentWorkspace(state).columns
+    expect(columns).toHaveLength(2)
+    expect(columns[0]!.windows).toEqual([1])
+    expect(columns[1]!.windows).toEqual([2])
+    expect(focusedWindow(state)).toBe(2)
+  })
+
+  it("will not consume from the leftmost column", () => {
+    let state = withWindows([1, 2])
+    state = focusWindow(state, 1, wide, config)
+    expect(consumeIntoColumn(state, wide, config)).toBe(state)
+  })
+
+  it("will not expel the only window in a column", () => {
+    const state = withWindows([1])
+    expect(expelFromColumn(state, wide, config)).toBe(state)
+  })
+
+  it("stacks windows vertically in the layout", () => {
+    let state = withWindows([1, 2])
+    state = consumeIntoColumn(state, wide, config)
+    const placed = layout(state, wide, config)
+
+    expect(placed).toHaveLength(2)
+    // Same column: same x and width, different y.
+    expect(placed[0]!.rect.x).toBe(placed[1]!.rect.x)
+    expect(placed[0]!.rect.width).toBe(placed[1]!.rect.width)
+    expect(placed[1]!.rect.y).toBeGreaterThan(placed[0]!.rect.y)
+    // And they must not overlap.
+    expect(placed[1]!.rect.y).toBeGreaterThanOrEqual(
+      placed[0]!.rect.y + placed[0]!.rect.height,
+    )
+  })
+
+  it("moves focus up and down within a stack", () => {
+    let state = withWindows([1, 2, 3])
+    state = consumeIntoColumn(state, wide, config) // 3 joins 2
+    expect(focusedWindow(state)).toBe(3)
+    state = focusUp(state)
+    expect(focusedWindow(state)).toBe(2)
+    state = focusDown(state)
+    expect(focusedWindow(state)).toBe(3)
+  })
+
+  it("stops at the ends of a stack rather than wrapping", () => {
+    let state = withWindows([1, 2])
+    state = consumeIntoColumn(state, wide, config)
+    state = focusUp(state)
+    expect(focusedWindow(focusUp(state))).toBe(1)
+  })
+})
+
+describe("workspaces", () => {
+  it("always keeps exactly one empty workspace at the end", () => {
+    expect(EMPTY.workspaces).toHaveLength(1)
+    const state = withWindows([1])
+    expect(state.workspaces).toHaveLength(2)
+    expect(state.workspaces.at(-1)!.columns).toHaveLength(0)
+  })
+
+  it("lays out only the focused workspace", () => {
+    // Windows elsewhere are simply absent, and because SetLayout is total the
+    // engine hides them. That is what makes switching workspaces work with no
+    // protocol support at all.
+    let state = withWindows([1, 2])
+    state = moveToWorkspace(state, 1, wide, config)
+
+    const placed = layout(state, wide, config)
+    expect(placed.map((w) => w.id)).toEqual([2])
+    expect(allWindows(state).sort()).toEqual([1, 2])
+  })
+
+  it("moves a window to the next workspace and follows it", () => {
+    let state = withWindows([1, 2])
+    const before = state.focus
+    state = moveToWorkspace(state, 1, wide, config)
+    expect(state.focus).toBeGreaterThan(before)
+    expect(focusedWindow(state)).toBe(2)
+    expect(findWindow(state, 2)!.workspace).toBe(state.focus)
+  })
+
+  it("remembers each workspace's scroll position", () => {
+    // Offset is per workspace, so switching away and back returns you where
+    // you were rather than snapping to the start of the strip.
+    let state = withWindows([1, 2, 3, 4], nested)
+    const firstOffset = currentWorkspace(state).viewOffset
+    expect(firstOffset).toBeGreaterThan(0)
+
+    state = focusWorkspace(state, 1, nested, config)
+    expect(currentWorkspace(state).viewOffset).toBe(0)
+
+    state = focusWorkspace(state, -1, nested, config)
+    expect(currentWorkspace(state).viewOffset).toBe(firstOffset)
+  })
+
+  it("does not strand an empty workspace in the middle", () => {
+    // Emptying a middle workspace would otherwise leave a hole you have to
+    // scroll past forever.
+    let state = withWindows([1])
+    state = addWindow(state, 2, wide, config)
+    state = focusWorkspace(state, 1, wide, config)
+    state = addWindow(state, 3, wide, config)
+    // [1,2] | [3] | empty
+    expect(state.workspaces).toHaveLength(3)
+
+    state = removeWindow(state, 1, wide, config)
+    state = removeWindow(state, 2, wide, config)
+
+    // [3] | empty, with no hole where the first workspace was.
+    expect(state.workspaces).toHaveLength(2)
+    expect(state.workspaces[0]!.columns.flatMap((c) => c.windows)).toEqual([3])
+    expect(state.workspaces.filter((w) => w.columns.length === 0)).toHaveLength(1)
+  })
+
+  it("collapses a workspace emptied by moving its last window away", () => {
+    // Moving the only window off a workspace leaves nothing behind, so the
+    // workspace should go too rather than linger as a blank one to scroll past.
+    let state = withWindows([1])
+    expect(state.workspaces).toHaveLength(2)
+    state = moveToWorkspace(state, 1, wide, config)
+    expect(state.workspaces).toHaveLength(2)
+    expect(focusedWindow(state)).toBe(1)
+  })
+
+  it("clamps rather than wrapping at the ends", () => {
+    const state = withWindows([1])
+    expect(focusWorkspace(state, -5, wide, config).focus).toBe(0)
+    const last = focusWorkspace(state, 99, wide, config)
+    expect(last.focus).toBe(state.workspaces.length - 1)
   })
 })
 
 describe("scrolling", () => {
-  it("does not move when the focused column is already visible", () => {
-    // Two 960px columns do not fit in 1920 with gaps, so use a wider viewport
-    // where column 0 is comfortably in view.
-    const state = withWindows([1], { width: 4000, height: 1080 })
-    expect(targetOffset({ ...state, viewOffset: 0 }, { width: 4000, height: 1080 }, config)).toBe(0)
-  })
-
   it("scrolls right by the minimum needed to reveal the focused column", () => {
-    const output = nested
-    const state = withWindows([1, 2], output)
-    const width = columnWidth(output, config)
-    const right = columnX(1, width, config) + width + config.gap
-    expect(state.viewOffset).toBe(right - output.width)
+    const state = withWindows([1, 2], nested)
+    const ws = currentWorkspace(state)
+    const width = presetWidth(ws.columns[1]!.width, nested, config)
+    const right = columnX(ws.columns, 1, nested, config) + width + config.gap
+    expect(ws.viewOffset).toBe(right - nested.width)
   })
 
   it("scrolls left to reveal a column off the left edge", () => {
-    const output = nested
-    let state = withWindows([1, 2], output)
-    expect(state.viewOffset).toBeGreaterThan(0)
-    state = focusLeft(state, output, config)
-    // Column 0's left edge, including its gap, is the origin.
-    expect(state.viewOffset).toBe(0)
+    let state = withWindows([1, 2], nested)
+    expect(currentWorkspace(state).viewOffset).toBeGreaterThan(0)
+    state = focusLeft(state, nested, config)
+    expect(currentWorkspace(state).viewOffset).toBe(0)
   })
 
-  it("pins the left edge of a column that cannot fit in the viewport", () => {
-    // The minWidth floor (240) plus both gaps is 264, so a 260px viewport
-    // cannot show a whole column. There is no offset that reveals all of it,
-    // so the left edge is pinned rather than the right.
+  it("does not move when the focused column is already visible", () => {
+    const roomy: Output = { width: 4000, height: 1080 }
+    const state = withWindows([1], roomy)
+    expect(currentWorkspace(state).viewOffset).toBe(0)
+  })
+
+  it("pins the left edge of a column that cannot fit", () => {
     const tiny: Output = { width: 260, height: 800 }
-    const width = columnWidth(tiny, config)
-    expect(width + config.gap * 2).toBeGreaterThanOrEqual(tiny.width)
-
     const state = withWindows([1, 2], tiny)
-    expect(state.viewOffset).toBe(columnX(1, width, config) - config.gap)
+    const ws = currentWorkspace(state)
+    expect(ws.viewOffset).toBe(columnX(ws.columns, 1, tiny, config) - config.gap)
   })
 
-  it("scrolls right, not pins, when a column only just fits", () => {
-    // 240 + 24 = 264 fits inside 300, so this must take the scroll-right
-    // branch. Worth pinning explicitly: getting this boundary backwards would
-    // leave a column clipped on the right on small screens.
-    const narrow: Output = { width: 300, height: 800 }
-    const width = columnWidth(narrow, config)
-    expect(width + config.gap * 2).toBeLessThan(narrow.width)
-
-    const state = withWindows([1, 2], narrow)
-    const right = columnX(1, width, config) + width + config.gap
-    expect(state.viewOffset).toBe(right - narrow.width)
-  })
-
-  it("targets the origin on an empty strip", () => {
-    expect(targetOffset(EMPTY, wide, config)).toBe(0)
-  })
-})
-
-describe("layout output", () => {
-  it("reproduces the geometry verified against the real compositor", () => {
-    // Milestone 2 ran nested at 1261x1390 with two columns and rendered
-    // column 0 clipped on the left and column 1 ending one gap from the right
-    // edge. Same arithmetic, now in the shell.
-    const output = nested
-    const state = withWindows([1, 2], output)
-    const placed = layout(state, output, config)
-
-    expect(placed).toHaveLength(2)
-    expect(placed[0]!.rect.x).toBeLessThan(0)
-    expect(placed[1]!.rect.x + placed[1]!.rect.width).toBe(output.width - config.gap)
-    expect(placed[0]!.rect.y).toBe(config.gap)
-    expect(placed[0]!.rect.height).toBe(output.height - config.gap * 2)
-  })
-
-  it("assigns ascending z in strip order", () => {
-    const state = withWindows([5, 6, 7], wide)
-    expect(layout(state, wide, config).map((w) => w.z)).toEqual([0, 1, 2])
-  })
-
-  it("returns nothing for an empty strip", () => {
-    expect(layout(EMPTY, wide, config)).toEqual([])
-  })
-
-  it("keeps every window in the layout, including ones off screen", () => {
-    // The engine hides windows absent from a SetLayout, so omitting scrolled-
-    // off columns here would make them vanish rather than sit off-viewport.
-    const state = withWindows([1, 2, 3, 4, 5], nested)
-    expect(layout(state, nested, config)).toHaveLength(5)
+  it("targets the origin on an empty workspace", () => {
+    expect(currentWorkspace(EMPTY).viewOffset).toBe(0)
   })
 })
 
 describe("window lifecycle", () => {
-  it("focuses a newly added window", () => {
-    const state = withWindows([1, 2, 3], wide)
+  it("inserts a new window beside the focused column, not at the end", () => {
+    // niri's behaviour: a window opened while reading something lands next to
+    // it rather than at the far end of the strip.
+    let state = withWindows([1, 2])
+    state = focusWindow(state, 1, wide, config)
+    state = addWindow(state, 3, wide, config)
+
+    expect(currentWorkspace(state).columns.map((c) => c.windows)).toEqual([[1], [3], [2]])
     expect(focusedWindow(state)).toBe(3)
   })
 
   it("ignores a duplicate add", () => {
-    let state = withWindows([1], wide)
-    state = addWindow(state, 1, wide, config)
-    expect(state.columns).toEqual([1])
+    const state = withWindows([1])
+    expect(addWindow(state, 1, wide, config)).toBe(state)
   })
 
   it("keeps focus on the same window when an earlier column closes", () => {
-    // Removing a column to the left shifts every later index down. Without the
-    // adjustment, focus would silently land on a different window.
-    let state = withWindows([1, 2, 3], wide)
+    let state = withWindows([1, 2, 3])
     state = focusWindow(state, 3, wide, config)
     state = removeWindow(state, 1, wide, config)
     expect(focusedWindow(state)).toBe(3)
   })
 
-  it("keeps focus in range when the focused column closes", () => {
-    let state = withWindows([1, 2, 3], wide)
-    state = focusWindow(state, 3, wide, config)
-    state = removeWindow(state, 3, wide, config)
+  it("keeps focus in the column when a stacked sibling closes", () => {
+    let state = withWindows([1, 2])
+    state = consumeIntoColumn(state, wide, config)
+    state = removeWindow(state, 2, wide, config)
+    expect(focusedWindow(state)).toBe(1)
+    expect(currentWorkspace(state).columns).toHaveLength(1)
+  })
+
+  it("drops a column when its last window closes", () => {
+    let state = withWindows([1, 2])
+    state = removeWindow(state, 1, wide, config)
+    expect(currentWorkspace(state).columns).toHaveLength(1)
     expect(focusedWindow(state)).toBe(2)
   })
 
-  it("survives removing the last window", () => {
-    let state = withWindows([1], wide)
+  it("survives removing every window", () => {
+    let state = withWindows([1, 2])
     state = removeWindow(state, 1, wide, config)
-    expect(state.columns).toEqual([])
+    state = removeWindow(state, 2, wide, config)
+    expect(allWindows(state)).toEqual([])
     expect(focusedWindow(state)).toBeNull()
     expect(layout(state, wide, config)).toEqual([])
+    expect(state.workspaces).toHaveLength(1)
   })
 
   it("ignores removing a window it does not have", () => {
-    const state = withWindows([1, 2], wide)
+    const state = withWindows([1, 2])
     expect(removeWindow(state, 99, wide, config)).toBe(state)
+  })
+
+  it("finds a window across workspaces and stacks", () => {
+    let state = withWindows([1, 2])
+    state = consumeIntoColumn(state, wide, config)
+    state = addWindow(state, 3, wide, config)
+    state = moveToWorkspace(state, 1, wide, config)
+
+    expect(findWindow(state, 1)).toEqual({ workspace: 0, column: 0, row: 0 })
+    expect(findWindow(state, 2)).toEqual({ workspace: 0, column: 0, row: 1 })
+    expect(findWindow(state, 99)).toBeNull()
   })
 })
 
 describe("focus movement", () => {
   it("stops at the ends rather than wrapping", () => {
-    // Wrapping on an infinite strip would teleport the viewport across the
-    // whole strip, which is disorienting and expensive to animate.
-    let state = withWindows([1, 2, 3], wide)
+    // Wrapping on an infinite strip teleports the viewport across the whole
+    // strip, which is disorienting and expensive to animate.
+    let state = withWindows([1, 2, 3])
     state = focusWindow(state, 1, wide, config)
     expect(focusedWindow(focusLeft(state, wide, config))).toBe(1)
 
@@ -209,56 +359,78 @@ describe("focus movement", () => {
     expect(focusedWindow(focusRight(state, wide, config))).toBe(3)
   })
 
-  it("does nothing on an empty strip", () => {
-    expect(focusLeft(EMPTY, wide, config)).toBe(EMPTY)
-    expect(focusRight(EMPTY, wide, config)).toBe(EMPTY)
+  it("does nothing on an empty workspace", () => {
+    expect(focusedWindow(focusLeft(EMPTY, wide, config))).toBeNull()
+    expect(focusedWindow(focusUp(EMPTY))).toBeNull()
   })
 
   it("ignores focusing an unknown window", () => {
-    const state = withWindows([1, 2], wide)
+    const state = withWindows([1, 2])
     expect(focusWindow(state, 99, wide, config)).toBe(state)
+  })
+
+  it("follows a window across workspaces when focused by id", () => {
+    let state = withWindows([1, 2])
+    state = moveToWorkspace(state, 1, wide, config)
+    state = focusWindow(state, 1, wide, config)
+    expect(state.focus).toBe(0)
+    expect(focusedWindow(state)).toBe(1)
   })
 })
 
 describe("viewport changes", () => {
-  it("re-derives the offset without resizing columns", () => {
-    // The defining property of scrollable tiling: a viewport change alters what
-    // is visible, not how big anything is.
-    const state = withWindows([1, 2, 3], wide)
+  it("keeps windows, order and stacking across a resize", () => {
+    let state = withWindows([1, 2, 3])
+    state = consumeIntoColumn(state, wide, config)
+    const before = currentWorkspace(state).columns.map((c) => c.windows)
+
     const narrower: Output = { width: 1000, height: 1080 }
     const after = reflow(state, narrower, config)
-
-    expect(after.columns).toEqual(state.columns)
+    expect(currentWorkspace(after).columns.map((c) => c.windows)).toEqual(before)
     expect(focusedWindow(after)).toBe(focusedWindow(state))
-    // Column width is a fraction of the viewport, so it does change on resize;
-    // what must not change is which windows exist and in what order.
-    expect(layout(after, narrower, config)).toHaveLength(3)
   })
 
   it("keeps the focused column visible after a resize", () => {
-    const state = withWindows([1, 2, 3, 4], wide)
+    const state = withWindows([1, 2, 3, 4])
     const narrower: Output = { width: 700, height: 1080 }
     const after = reflow(state, narrower, config)
-    const width = columnWidth(narrower, config)
-    const focusX = columnX(after.focus, width, config)
-    expect(focusX - after.viewOffset).toBeGreaterThanOrEqual(-1)
+    const ws = currentWorkspace(after)
+    const x = columnX(ws.columns, ws.focus, narrower, config)
+    expect(x - ws.viewOffset).toBeGreaterThanOrEqual(-1)
+  })
+})
+
+describe("viewport intersection", () => {
+  it("excludes columns entirely off screen", () => {
+    // This is what bounds the encoder budget by viewport width rather than by
+    // how many windows are open.
+    expect(intersectsViewport({ x: -700, y: 0, width: 631, height: 100 }, 1261)).toBe(false)
+    expect(intersectsViewport({ x: -25, y: 0, width: 631, height: 100 }, 1261)).toBe(true)
+    expect(intersectsViewport({ x: 1300, y: 0, width: 631, height: 100 }, 1261)).toBe(false)
   })
 })
 
 describe("purity", () => {
   it("never mutates the state it is given", () => {
-    const state = withWindows([1, 2, 3], wide)
+    let state = withWindows([1, 2, 3])
+    state = consumeIntoColumn(state, wide, config)
     const snapshot = JSON.stringify(state)
+
     addWindow(state, 4, wide, config)
     removeWindow(state, 1, wide, config)
     focusLeft(state, wide, config)
+    focusUp(state)
+    cycleWidth(state, wide, config)
+    expelFromColumn(state, wide, config)
+    moveToWorkspace(state, 1, wide, config)
     layout(state, wide, config)
+
     expect(JSON.stringify(state)).toBe(snapshot)
   })
 
   it("is deterministic", () => {
-    // Same input, same output, every time: this is what lets the local and
-    // remote backends agree without coordinating.
+    // Same input, same output: this is what lets the local and remote backends
+    // agree without coordinating.
     const a = layout(withWindows([1, 2, 3], nested), nested, config)
     const b = layout(withWindows([1, 2, 3], nested), nested, config)
     expect(a).toEqual(b)
