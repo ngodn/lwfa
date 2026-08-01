@@ -21,13 +21,14 @@ import {
   PanelRight,
   PanelTop,
   RotateCcw,
+  Wand2,
 } from "lucide-react"
 import {
   getPrefs,
   patchPrefs,
   resetPrefs,
   usePrefs,
-  type NavEdge,
+  type NavEdgePref,
   type NavItemId,
 } from "@/lib/prefs"
 import { NAV_ITEMS } from "@/nav/registry"
@@ -36,7 +37,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
-const EDGES: { value: NavEdge; label: string; icon: typeof PanelLeft }[] = [
+const EDGES: { value: NavEdgePref; label: string; icon: typeof PanelLeft }[] = [
+  { value: "auto", label: "Auto", icon: Wand2 },
   { value: "left", label: "Left", icon: PanelLeft },
   { value: "top", label: "Top", icon: PanelTop },
   { value: "right", label: "Right", icon: PanelRight },
@@ -76,14 +78,14 @@ function SettingsPanel() {
     <div className="space-y-6 pt-2">
       <PanelSection
         title="Navigation edge"
-        description="Where the bar sits. A thumb reaches the bottom of a phone; a mouse prefers the side of a large display."
+        description="Where the bar sits. Auto puts it down the side in landscape, where height is plentiful and width is not, and along the bottom in portrait, where it is the other way round and a thumb is already there."
       >
         <ToggleGroup
           type="single"
           value={nav.edge}
-          onValueChange={(value) => value && patchPrefs("nav", { edge: value as NavEdge })}
+          onValueChange={(value) => value && patchPrefs("nav", { edge: value as NavEdgePref })}
           variant="outline"
-          className="grid w-full grid-cols-4"
+          className="grid w-full grid-cols-5"
         >
           {EDGES.map(({ value, label, icon: Icon }) => (
             <ToggleGroupItem

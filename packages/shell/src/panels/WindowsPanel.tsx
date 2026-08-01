@@ -32,13 +32,18 @@ import {
 import type { WindowId, WindowInfo } from "@lwfa/proto"
 import { useSessionActions, useSessionState } from "@/session"
 import { currentWorkspace, focusedWindow } from "@/strip"
+import { patchPrefs, usePrefs } from "@/lib/prefs"
+import { WIDTH_PRESETS } from "@/strip"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { PanelSection } from "@/panels/parts"
+import { Field, FieldRow, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
-const WIDTH_LABEL = ["1/3", "1/2", "2/3", "90%"] as const
+/** Column width labels, derived so a new preset needs no edit here. */
+const widthLabel = (preset: number) =>
+  `${Math.round((WIDTH_PRESETS[preset] ?? 0) * 100)}%`
 
 function WindowsPanel() {
   const { strip } = useSessionState()
@@ -118,6 +123,13 @@ function WindowsPanel() {
         </div>
       </PanelSection>
 
+      <PanelSection
+        title="Strip"
+        description="How the strip behaves on this device. Stored per device, because a phone and a monitor do not want the same thing."
+      >
+        <StripSettings />
+      </PanelSection>
+
       <PanelSection title="Layout">
         <ToggleGroup
           type="single"
@@ -158,6 +170,69 @@ function WindowsPanel() {
     </div>
   )
 }
+
+const ORIENTATIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "horizontal", label: "Rows" },
+  { value: "vertical", label: "Columns" },
+] as const
+
+const StripSettings = memo(function StripSettings() {
+  const { layout: prefs } = usePrefs()
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <Field
+          label="Direction"
+          hint="Auto follows the viewport's long axis: side by side in landscape, stacked in portrait."
+        />
+        <ToggleGroup
+          type="single"
+          value={prefs.orientation}
+          onValueChange={(v) =>
+            v && patchPrefs("layout", { orientation: v as typeof prefs.orientation })
+          }
+          variant="outline"
+          className="w-full"
+        >
+          {ORIENTATIONS.map(({ value, label }) => (
+            <ToggleGroupItem key={value} value={value} className="flex-1">
+              {label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </div>
+
+      <div className="space-y-1.5">
+        <Field label="New window size" hint="How much of the viewport an application gets when it opens." />
+        <ToggleGroup
+          type="single"
+          value={String(prefs.defaultWidth)}
+          onValueChange={(v) => v && patchPrefs("layout", { defaultWidth: Number(v) })}
+          variant="outline"
+          className="w-full"
+        >
+          {WIDTH_PRESETS.map((fraction, index) => (
+            <ToggleGroupItem key={index} value={String(index)} className="flex-1">
+              {Math.round(fraction * 100)}%
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </div>
+
+      <FieldRow>
+        <Field
+          label="Keep focus centred"
+          hint="Focus always lands in the same place, so moving along the strip is predictable."
+        />
+        <Switch
+          checked={prefs.centreFocused}
+          onCheckedChange={(centreFocused) => patchPrefs("layout", { centreFocused })}
+        />
+      </FieldRow>
+    </div>
+  )
+})
 
 /**
  * Columns as separated cards, reorderable by dragging.
@@ -234,7 +309,7 @@ const ArrangeView = memo(function ArrangeView({ focused }: { focused: WindowId |
         >
           <div className="mb-1.5 flex items-center gap-2 px-1">
             <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-              {WIDTH_LABEL[column.width]}
+              {widthLabel(column.width)}
             </Badge>
             <span className="text-xs text-muted-foreground">
               Column {index + 1} · {column.windows.length} window

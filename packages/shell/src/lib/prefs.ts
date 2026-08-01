@@ -20,8 +20,30 @@
  */
 
 import { useSyncExternalStore } from "react"
+import {
+  CENTRE_FOCUSED,
+  DEFAULT_WIDTH,
+  ORIENTATION,
+} from "@/generated/config.ts"
 
+/** A concrete edge. What the rail actually renders against. */
 export type NavEdge = "left" | "right" | "top" | "bottom"
+
+/**
+ * What the user asked for, which may be "work it out".
+ *
+ * `auto` follows the viewport: a side rail in landscape, where height is
+ * plentiful and width is not, and the bottom in portrait, where it is the other
+ * way round and the bottom is also where a thumb rests. Pinning a vertical rail
+ * on a phone held upright spends the one axis that is already scarce.
+ */
+export type NavEdgePref = NavEdge | "auto"
+
+/** Resolve `auto` against a viewport. */
+export function resolveEdge(pref: NavEdgePref, portrait: boolean): NavEdge {
+  if (pref !== "auto") return pref
+  return portrait ? "bottom" : "left"
+}
 export type ThemeMode = "light" | "dark" | "system"
 export type GamepadSkin = "playstation" | "xbox" | "neutral"
 
@@ -44,7 +66,7 @@ export type NavItemId = (typeof NAV_ITEM_IDS)[number]
 export interface Prefs {
   theme: ThemeMode
   nav: {
-    edge: NavEdge
+    edge: NavEdgePref
     /** Explicit order, so a reorder survives a reload. */
     order: NavItemId[]
     /** Ids the user has switched off entirely. */
@@ -82,6 +104,20 @@ export interface Prefs {
     stickyModifiers: boolean
     haptics: boolean
   }
+  /**
+   * Layout policy the user can change at runtime.
+   *
+   * Seeded from `configs/defaults.toml`, which is the machine's default, and
+   * then owned by the device. Two people on the same machine can want different
+   * things here, and one of them is holding a phone.
+   */
+  layout: {
+    /** `auto` follows the viewport's long axis. */
+    orientation: "auto" | "horizontal" | "vertical"
+    /** Index into the width presets. */
+    defaultWidth: number
+    centreFocused: boolean
+  }
   /** Show the engine's own strip scroll position rather than a fitted layout. */
   followEngineScroll: boolean
 }
@@ -89,7 +125,7 @@ export interface Prefs {
 export const DEFAULT_PREFS: Prefs = {
   theme: "system",
   nav: {
-    edge: "left",
+    edge: "auto",
     order: [...NAV_ITEM_IDS],
     hidden: [],
     anchored: ["escape", "gamepad", "keyboard", "workspaces"],
@@ -104,6 +140,11 @@ export const DEFAULT_PREFS: Prefs = {
   keyboard: {
     stickyModifiers: true,
     haptics: true,
+  },
+  layout: {
+    orientation: ORIENTATION,
+    defaultWidth: DEFAULT_WIDTH,
+    centreFocused: CENTRE_FOCUSED,
   },
   followEngineScroll: false,
 }
@@ -129,6 +170,7 @@ function hydrate(raw: unknown): Prefs {
     nav: { ...DEFAULT_PREFS.nav, ...stored.nav, order, anchored, centred },
     gamepad: { ...DEFAULT_PREFS.gamepad, ...stored.gamepad },
     keyboard: { ...DEFAULT_PREFS.keyboard, ...stored.keyboard },
+    layout: { ...DEFAULT_PREFS.layout, ...stored.layout },
     followEngineScroll: stored.followEngineScroll ?? DEFAULT_PREFS.followEngineScroll,
   }
 }

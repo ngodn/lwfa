@@ -47,6 +47,7 @@ export { WIDTH_PRESETS } from "./generated/config.ts"
 import {
   CENTRE_FOCUSED,
   DEFAULT_WIDTH,
+  ORIENTATION,
   GAP,
   MIN_WIDTH,
   WIDTH_PRESETS,
@@ -63,6 +64,8 @@ export interface StripConfig {
   minWidth: number
   /** Keep the focused column in the middle of the viewport. */
   centreFocused: boolean
+  /** Which way the strip runs. `auto` follows the viewport's long axis. */
+  orientation: OrientationPref
 }
 
 export const DEFAULT_CONFIG: StripConfig = {
@@ -70,6 +73,7 @@ export const DEFAULT_CONFIG: StripConfig = {
   defaultWidth: DEFAULT_WIDTH as WidthPreset,
   minWidth: MIN_WIDTH,
   centreFocused: CENTRE_FOCUSED,
+  orientation: ORIENTATION,
 }
 
 /** A vertical stack of windows sharing one slot on the strip. */
@@ -129,18 +133,22 @@ export const EMPTY: StripState = { workspaces: [emptyWorkspace()], focus: 0 }
  */
 export type Orientation = "horizontal" | "vertical"
 
-export function orientationOf(output: Output): Orientation {
+/** What the user asked for, which may be "work it out from the viewport". */
+export type OrientationPref = Orientation | "auto"
+
+export function orientationOf(output: Output, config: StripConfig): Orientation {
+  if (config.orientation !== "auto") return config.orientation
   return output.height > output.width ? "vertical" : "horizontal"
 }
 
 /** Viewport extent along the axis the strip scrolls. */
-export function mainLength(output: Output): number {
-  return orientationOf(output) === "horizontal" ? output.width : output.height
+export function mainLength(output: Output, config: StripConfig): number {
+  return orientationOf(output, config) === "horizontal" ? output.width : output.height
 }
 
 /** Viewport extent across the strip, which a column fills. */
-export function crossLength(output: Output): number {
-  return orientationOf(output) === "horizontal" ? output.height : output.width
+export function crossLength(output: Output, config: StripConfig): number {
+  return orientationOf(output, config) === "horizontal" ? output.height : output.width
 }
 
 function clampIndex(index: number, length: number): number {
@@ -153,7 +161,7 @@ export function presetWidth(
   output: Output,
   config: StripConfig,
 ): number {
-  return Math.max(Math.round(mainLength(output) * WIDTH_PRESETS[preset]!), config.minWidth)
+  return Math.max(Math.round(mainLength(output, config) * WIDTH_PRESETS[preset]!), config.minWidth)
 }
 
 export function columnWidth(column: Column, output: Output, config: StripConfig): number {
@@ -166,7 +174,7 @@ export function columnWidth(column: Column, output: Output, config: StripConfig)
  * Full height in landscape, full width in portrait.
  */
 export function columnHeight(output: Output, config: StripConfig): number {
-  return Math.max(crossLength(output) - config.gap * 2, 1)
+  return Math.max(crossLength(output, config) - config.gap * 2, 1)
 }
 
 /**
@@ -234,7 +242,7 @@ export function targetOffset(state: StripState, output: Output, config: StripCon
 
   // Wider than the viewport: pin the left edge, since no offset shows all of
   // it and centring would cut off both sides instead of one.
-  if (right - left >= mainLength(output)) return left
+  if (right - left >= mainLength(output, config)) return left
 
   if (config.centreFocused) {
     // The column's own centre, placed at the viewport's centre. Deliberately
@@ -242,11 +250,11 @@ export function targetOffset(state: StripState, output: Output, config: StripCon
     // sit centred, with empty space beyond them, keeps the position of focus
     // constant. Clamping would make the ends behave differently from the
     // middle, which is exactly the unpredictability this avoids.
-    return left + config.gap + width / 2 - mainLength(output) / 2
+    return left + config.gap + width / 2 - mainLength(output, config) / 2
   }
 
   if (left < ws.viewOffset) return left
-  if (right > ws.viewOffset + mainLength(output)) return right - mainLength(output)
+  if (right > ws.viewOffset + mainLength(output, config)) return right - mainLength(output, config)
   return ws.viewOffset
 }
 
@@ -265,7 +273,7 @@ export function layout(state: StripState, output: Output, config: StripConfig): 
   // Everything above is in main/cross terms. This is the one place that turns
   // those into screen coordinates, so portrait is a transpose rather than a
   // second implementation of the layout.
-  const vertical = orientationOf(output) === "vertical"
+  const vertical = orientationOf(output, config) === "vertical"
 
   ws.columns.forEach((column, index) => {
     const extent = columnWidth(column, output, config)
@@ -285,8 +293,12 @@ export function layout(state: StripState, output: Output, config: StripConfig): 
 }
 
 /** Does this column intersect the viewport, and so deserve pixels? */
-export function intersectsViewport(rect: Rect, output: Output): boolean {
-  return orientationOf(output) === "vertical"
+export function intersectsViewport(
+  rect: Rect,
+  output: Output,
+  config: StripConfig,
+): boolean {
+  return orientationOf(output, config) === "vertical"
     ? rect.y + rect.height > 0 && rect.y < output.height
     : rect.x + rect.width > 0 && rect.x < output.width
 }

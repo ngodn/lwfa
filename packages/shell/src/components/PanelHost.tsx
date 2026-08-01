@@ -13,8 +13,9 @@
 
 import { Suspense, lazy, memo, useMemo } from "react"
 import { Loader2 } from "lucide-react"
-import { usePrefs, type NavItemId } from "@/lib/prefs"
+import { resolveEdge, usePrefs, type NavItemId } from "@/lib/prefs"
 import { NAV_GROUPS, NAV_ITEMS, type NavGroupId } from "@/nav/registry"
+import { usePortrait } from "@/components/NavRail"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -69,7 +70,7 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
     return { kind: "item" as const, item: NAV_ITEMS[active as NavItemId] }
   }, [active, nav.hidden])
 
-  const side = nav.edge
+  const side = resolveEdge(nav.edge, usePortrait())
   const vertical = side === "left" || side === "right"
 
   // Inline, not Tailwind classes. The sheet's own variants set a width and the

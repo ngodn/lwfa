@@ -37,6 +37,7 @@ import {
 } from "./credentials.js";
 import { FrameDecoder, supportsH264 } from "./decode.js";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
+import { usePrefs } from "@/lib/prefs"
 import {
   appsRequested,
   clearApps,
@@ -66,6 +67,9 @@ import { evdevFromCode, isShellKey } from "./input.js";
 import {
   DEFAULT_CONFIG,
   EMPTY,
+  WIDTH_PRESETS,
+  type StripConfig,
+  type WidthPreset,
   type Output,
   type StripState,
   addWindow,
@@ -119,6 +123,27 @@ function engineUrl(password: string): string {
 const ADOPTED = adoptPasswordFromUrl();
 
 export function App(): React.ReactElement {
+  // Layout policy the user can change without a rebuild. Held in a ref as well
+  // as read here, because the update callbacks are stable and must see the
+  // current value rather than the one captured when they were created.
+  const prefs = usePrefs();
+  const stripConfig = useMemo<StripConfig>(
+    () => ({
+      ...DEFAULT_CONFIG,
+      orientation: prefs.layout.orientation,
+      centreFocused: prefs.layout.centreFocused,
+      // Stored as a plain number so a preferences blob written against a
+      // shorter preset list cannot produce an out-of-range index.
+      defaultWidth: Math.min(
+        Math.max(0, prefs.layout.defaultWidth),
+        WIDTH_PRESETS.length - 1,
+      ) as WidthPreset,
+    }),
+    [prefs.layout],
+  );
+  const configRef = useRef(stripConfig);
+  configRef.current = stripConfig;
+
   // Null until a password is available, which is what gates the whole shell.
   const [password, setPassword] = useState<string | null>(
     () => ADOPTED ?? loadPassword(),
@@ -198,7 +223,7 @@ export function App(): React.ReactElement {
 
   /** Push the current strip to the engine as a target plus a spring. */
   const push = useCallback((next: StripState, out: Output, animate = true) => {
-    const windows = layout(next, out, DEFAULT_CONFIG);
+    const windows = layout(next, out, configRef.current);
     connection.current?.send({
       type: "setLayout",
       windows,
@@ -216,7 +241,7 @@ export function App(): React.ReactElement {
       type: "setStreams",
       windows: streamingRef.current
         ? windows
-            .filter((w) => intersectsViewport(w.rect, out))
+            .filter((w) => intersectsViewport(w.rect, out, configRef.current))
             .map((w) => w.id)
         : [],
       // Tell the engine what this browser can actually decode. Over plain HTTP
@@ -227,9 +252,9 @@ export function App(): React.ReactElement {
   }, []);
 
   const update = useCallback(
-    (fn: (state: StripState, out: Output) => StripState, animate = true) => {
+    (fn: Transition, animate = true) => {
       const out = outputRef.current;
-      const next = fn(stripRef.current, out);
+      const next = fn(stripRef.current, out, configRef.current);
       stripRef.current = next;
       setStrip(next);
       push(next, out, animate);
@@ -257,11 +282,11 @@ export function App(): React.ReactElement {
           // trusting whatever this page had before. A reconnecting shell must
           // resync, not resurrect a stale layout.
           let next = message.windows.reduce(
-            (state, w) => addWindow(state, w.id, out, DEFAULT_CONFIG),
+            (state, w) => addWindow(state, w.id, out, configRef.current),
             EMPTY,
           );
           if (message.focused !== null) {
-            next = focusWindow(next, message.focused, out, DEFAULT_CONFIG);
+            next = focusWindow(next, message.focused, out, configRef.current);
           }
           stripRef.current = next;
           setStrip(next);
@@ -277,7 +302,7 @@ export function App(): React.ReactElement {
           };
           outputRef.current = out;
           setOutput(out);
-          update((state) => reflow(state, out, DEFAULT_CONFIG), false);
+          update((state) => reflow(state, out, configRef.current), false);
           break;
         }
 
@@ -287,7 +312,7 @@ export function App(): React.ReactElement {
             new Map(prev).set(message.window.id, message.window),
           );
           update((state, out) =>
-            addWindow(state, message.window.id, out, DEFAULT_CONFIG),
+            addWindow(state, message.window.id, out, configRef.current),
           );
           break;
 
@@ -306,7 +331,7 @@ export function App(): React.ReactElement {
           dropFrame(message.id);
           decoderRef.current?.forget(message.id);
           update((state, out) =>
-            removeWindow(state, message.id, out, DEFAULT_CONFIG),
+            removeWindow(state, message.id, out, configRef.current),
           );
           break;
 
@@ -347,7 +372,7 @@ export function App(): React.ReactElement {
           // us (a click, or a window closing), so follow it.
           if (message.id !== null) {
             update((state, out) =>
-              focusWindow(state, message.id!, out, DEFAULT_CONFIG),
+              focusWindow(state, message.id!, out, configRef.current),
             );
           }
           break;
@@ -370,7 +395,7 @@ export function App(): React.ReactElement {
             // Jump straight to a workspace by number.
             const target = Number(key) - 1;
             update((st, o) =>
-              focusWorkspace(st, target - st.focus, o, DEFAULT_CONFIG),
+              focusWorkspace(st, target - st.focus, o, configRef.current),
             );
           } else if (key === "4") {
             update(cycleWidthAt);
@@ -466,7 +491,7 @@ export function App(): React.ReactElement {
   }, [status]);
 
   const placed = useMemo(
-    () => (output.width > 0 ? layout(strip, output, DEFAULT_CONFIG) : []),
+    () => (output.width > 0 ? layout(strip, output, configRef.current) : []),
     [strip, output],
   );
 
@@ -474,7 +499,7 @@ export function App(): React.ReactElement {
   // these inline would hand each surface a fresh function on every frame and
   // undo the whole point of the per-window frame store.
   const focusById = useCallback(
-    (id: WindowId) => update((s, o) => focusWindow(s, id, o, DEFAULT_CONFIG)),
+    (id: WindowId) => update((s, o) => focusWindow(s, id, o, configRef.current)),
     [update],
   );
 
@@ -490,7 +515,7 @@ export function App(): React.ReactElement {
     if (!streaming) return new Set<WindowId>();
     return new Set(
       placed
-        .filter((w) => intersectsViewport(w.rect, output))
+        .filter((w) => intersectsViewport(w.rect, output, configRef.current))
         .map((w) => w.id),
     );
   }, [streaming, placed, output.width]);
@@ -511,7 +536,7 @@ export function App(): React.ReactElement {
         send(message)
       },
       focusWindow: (id) =>
-        update((st, o) => focusWindow(st, id, o, DEFAULT_CONFIG)),
+        update((st, o) => focusWindow(st, id, o, configRef.current)),
       closeWindow: (id) => send({ type: "closeWindow", id }),
       spawn: (command, terminal = false) => send({ type: "spawn", command, terminal }),
       focusColumn: (delta) => update(delta < 0 ? focusLeftAt : focusRightAt),
@@ -521,7 +546,7 @@ export function App(): React.ReactElement {
       cycleWidth: () => update(cycleWidthAt),
       focusWorkspace: (index) =>
         update((st, o) =>
-          focusWorkspace(st, index - st.focus, o, DEFAULT_CONFIG),
+          focusWorkspace(st, index - st.focus, o, configRef.current),
         ),
       moveToWorkspace: (delta) =>
         update(delta < 0 ? moveWorkspaceUpAt : moveWorkspaceDownAt),
@@ -589,20 +614,22 @@ export function App(): React.ReactElement {
   );
 }
 
+/**
+ * A strip transition.
+ *
+ * Takes the config rather than closing over it: layout policy is now a
+ * preference the user can change at runtime, and a helper defined at module
+ * scope would capture whatever it was when the file loaded.
+ */
+type Transition = (state: StripState, out: Output, config: StripConfig) => StripState;
+
 // Declared outside the component so `update` gets a stable reference.
-const focusLeftAt = (s: StripState, o: Output) =>
-  focusLeft(s, o, DEFAULT_CONFIG);
-const focusRightAt = (s: StripState, o: Output) =>
-  focusRight(s, o, DEFAULT_CONFIG);
-const focusUpAt = (s: StripState) => focusUp(s);
-const focusDownAt = (s: StripState) => focusDown(s);
-const consumeAt = (s: StripState, o: Output) =>
-  consumeIntoColumn(s, o, DEFAULT_CONFIG);
-const expelAt = (s: StripState, o: Output) =>
-  expelFromColumn(s, o, DEFAULT_CONFIG);
-const cycleWidthAt = (s: StripState, o: Output) =>
-  cycleWidth(s, o, DEFAULT_CONFIG);
-const moveWorkspaceUpAt = (s: StripState, o: Output) =>
-  moveToWorkspace(s, -1, o, DEFAULT_CONFIG);
-const moveWorkspaceDownAt = (s: StripState, o: Output) =>
-  moveToWorkspace(s, 1, o, DEFAULT_CONFIG);
+const focusLeftAt: Transition = (s, o, c) => focusLeft(s, o, c);
+const focusRightAt: Transition = (s, o, c) => focusRight(s, o, c);
+const focusUpAt: Transition = (s) => focusUp(s);
+const focusDownAt: Transition = (s) => focusDown(s);
+const consumeAt: Transition = (s, o, c) => consumeIntoColumn(s, o, c);
+const expelAt: Transition = (s, o, c) => expelFromColumn(s, o, c);
+const cycleWidthAt: Transition = (s, o, c) => cycleWidth(s, o, c);
+const moveWorkspaceUpAt: Transition = (s, o, c) => moveToWorkspace(s, -1, o, c);
+const moveWorkspaceDownAt: Transition = (s, o, c) => moveToWorkspace(s, 1, o, c);

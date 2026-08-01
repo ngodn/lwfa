@@ -22,7 +22,7 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
-import { usePrefs, type NavEdge, type NavItemId } from "@/lib/prefs"
+import { resolveEdge, usePrefs, type NavEdge, type NavItemId } from "@/lib/prefs"
 import { useDock } from "@/lib/dock"
 import {
   NAV_GROUPS,
@@ -60,7 +60,8 @@ const isVertical = (edge: NavEdge) => edge === "left" || edge === "right"
 
 export const NavRail = memo(function NavRail({ active, fired, onSelect }: NavRailProps) {
   const { nav } = usePrefs()
-  const { edge, order, hidden, anchored, centred, size } = nav
+  const { order, hidden, anchored, centred, size } = nav
+  const edge = resolveEdge(nav.edge, usePortrait())
   const dock = useDock()
   const metrics = SIZES[size]
   const vertical = isVertical(edge)
@@ -299,6 +300,26 @@ export { NAV_GROUPS }
 /** Guard for callers holding a `NavItemId | NavGroupId`. */
 export function isGroupId(id: string): id is NavGroupId {
   return id in NAV_GROUPS
+}
+
+/**
+ * Whether the viewport is taller than it is wide.
+ *
+ * A media query rather than a `ResizeObserver`: this is about the *window*, not
+ * about any element, and it changes exactly when a device is rotated.
+ */
+export function usePortrait(): boolean {
+  const [portrait, setPortrait] = useState(
+    () => globalThis.matchMedia?.("(orientation: portrait)").matches ?? false,
+  )
+  useEffect(() => {
+    const media = globalThis.matchMedia?.("(orientation: portrait)")
+    if (!media) return
+    const update = () => setPortrait(media.matches)
+    media.addEventListener("change", update)
+    return () => media.removeEventListener("change", update)
+  }, [])
+  return portrait
 }
 
 /** Kept out of the component so the effect above stays dependency-free. */

@@ -31,7 +31,6 @@ import {
   WIDTH_PRESETS,
   intersectsViewport,
   layout,
-  orientationOf,
   moveToWorkspace,
   presetWidth,
   reflow,
@@ -462,15 +461,15 @@ describe("viewport intersection", () => {
     // This is what bounds the encoder budget by viewport width rather than by
     // how many windows are open.
     const landscape = { width: 1261, height: 800 }
-    expect(intersectsViewport({ x: -700, y: 0, width: 631, height: 100 }, landscape)).toBe(false)
-    expect(intersectsViewport({ x: -25, y: 0, width: 631, height: 100 }, landscape)).toBe(true)
-    expect(intersectsViewport({ x: 1300, y: 0, width: 631, height: 100 }, landscape)).toBe(false)
+    expect(intersectsViewport({ x: -700, y: 0, width: 631, height: 100 }, landscape, config)).toBe(false)
+    expect(intersectsViewport({ x: -25, y: 0, width: 631, height: 100 }, landscape, config)).toBe(true)
+    expect(intersectsViewport({ x: 1300, y: 0, width: 631, height: 100 }, landscape, config)).toBe(false)
 
     // Portrait tests the other axis: the same rect is judged by y, not x.
     const portrait = { width: 800, height: 1261 }
-    expect(intersectsViewport({ x: 0, y: -700, width: 100, height: 631 }, portrait)).toBe(false)
-    expect(intersectsViewport({ x: 0, y: -25, width: 100, height: 631 }, portrait)).toBe(true)
-    expect(intersectsViewport({ x: 0, y: 1300, width: 100, height: 631 }, portrait)).toBe(false)
+    expect(intersectsViewport({ x: 0, y: -700, width: 100, height: 631 }, portrait, config)).toBe(false)
+    expect(intersectsViewport({ x: 0, y: -25, width: 100, height: 631 }, portrait, config)).toBe(true)
+    expect(intersectsViewport({ x: 0, y: 1300, width: 100, height: 631 }, portrait, config)).toBe(false)
   })
 })
 

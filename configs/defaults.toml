@@ -169,6 +169,13 @@ width_presets = [0.3333333333333333, 0.5, 0.6666666666666667, 0.9]
 # too small has to be fixed before it is useful.
 default_width = 3
 
+# Which way the strip runs: "auto", "horizontal" or "vertical".
+#
+# Auto follows the viewport's long axis, which is almost always what you want:
+# a row of columns on a monitor, a stack of rows on a phone held upright.
+# Pin it only if you specifically want one behaviour regardless of rotation.
+orientation = "auto"
+
 # Keep the focused column in the middle of the viewport.
 #
 # Focus then always lands in the same place, so moving along the strip is a

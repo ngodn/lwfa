@@ -15,8 +15,8 @@
  */
 
 import { memo, useCallback, useLayoutEffect, useState } from "react"
-import { getPrefs, usePrefs } from "@/lib/prefs"
-import { NavRail, shellDirection, type NavTarget } from "@/components/NavRail"
+import { getPrefs, resolveEdge, usePrefs } from "@/lib/prefs"
+import { NavRail, shellDirection, usePortrait, type NavTarget } from "@/components/NavRail"
 import { PanelHost } from "@/components/PanelHost"
 import { InputDock } from "@/components/InputDock"
 import { toggleDock } from "@/lib/dock"
@@ -76,14 +76,16 @@ export const ShellChrome = memo(function ShellChrome({
   // On the document element, not on the div below. Radix portals overlays to
   // `document.body`, so a variable set on a descendant is invisible to the
   // panel that needs it, and the panel silently lays itself out over the rail.
+  const edge = resolveEdge(nav.edge, usePortrait())
+
   useLayoutEffect(() => {
     document.documentElement.style.setProperty("--rail-size", railSize(nav.size))
-    document.documentElement.style.setProperty("--rail-edge", nav.edge)
-  }, [nav.size, nav.edge])
+    document.documentElement.style.setProperty("--rail-edge", edge)
+  }, [nav.size, edge])
 
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
-      <div className={cn("flex h-full w-full overflow-hidden bg-backdrop", shellDirection(nav.edge))}>
+      <div className={cn("flex h-full w-full overflow-hidden bg-backdrop", shellDirection(edge))}>
         <NavRail active={active} fired={fired} onSelect={select} />
         {/* A column, so a docked keyboard takes space from the desktop rather
             than covering the line being typed into. The gamepad positions

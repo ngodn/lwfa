@@ -28,6 +28,7 @@ const required = [
   "default_width",
   "min_width",
   "centre_focused",
+  "orientation",
 ]
 const missing = required.filter((key) => layout[key] === undefined)
 if (missing.length > 0) {
@@ -42,6 +43,13 @@ if (!Array.isArray(presets) || presets.length === 0) {
 }
 if (!presets.every((p) => typeof p === "number" && p > 0 && p <= 1)) {
   console.error("[layout].width_presets must all be fractions in (0, 1]")
+  process.exit(1)
+}
+if (!["auto", "horizontal", "vertical"].includes(layout.orientation)) {
+  console.error(
+    `[layout].orientation is ${JSON.stringify(layout.orientation)}; ` +
+      'expected "auto", "horizontal" or "vertical"',
+  )
   process.exit(1)
 }
 if (layout.default_width < 0 || layout.default_width >= presets.length) {
@@ -79,6 +87,12 @@ export const MIN_WIDTH = ${layout.min_width}
 
 /** Keep the focused column in the middle of the viewport. */
 export const CENTRE_FOCUSED = ${layout.centre_focused === true}
+
+/** Which way the strip runs. "auto" follows the viewport's long axis. */
+export const ORIENTATION = ${JSON.stringify(layout.orientation)} as
+  | "auto"
+  | "horizontal"
+  | "vertical"
 `
 
 mkdirSync(fileURLToPath(new URL("../packages/shell/src/generated/", import.meta.url)), {
