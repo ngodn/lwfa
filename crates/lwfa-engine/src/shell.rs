@@ -39,8 +39,12 @@ use smithay::reexports::calloop::channel::Sender as LoopSender;
 
 use crate::auth;
 
-/// Where the shell connects. Localhost by design; see the security note above.
-pub const DEFAULT_ADDR: &str = "127.0.0.1:9843";
+/// Where the shell connects, when `.env` does not say.
+///
+/// lwfa owns the 6733+ block: 6733 serves the shell page, 6734 is this socket.
+/// Loopback by default, so exposing it to the network is always a deliberate
+/// edit rather than something that happens by installing.
+pub const DEFAULT_ADDR: &str = "127.0.0.1:6734";
 
 /// How often the connection thread checks for outgoing messages while idle.
 ///

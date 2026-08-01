@@ -144,13 +144,25 @@ fn announce(bound: std::net::SocketAddr, token: &str) {
     } else {
         Some(bound.ip().to_string())
     };
+    let shell_port = auth::setting("SHELL_PORT").unwrap_or_else(|| "6733".to_string());
+
     if let Some(host) = host {
-        tracing::info!(
-            "open the shell at:  http://{host}:5173/?token={token}   (engine on port {})",
-            bound.port()
-        );
+        tracing::info!("open the shell at:  http://{host}:{shell_port}/?token={token}");
     } else {
-        tracing::info!("shell token: {token}");
+        tracing::info!("shell password: {token}");
+    }
+
+    // The best guess is a guess. On a machine with a VPN, Docker and VMware
+    // there are a dozen addresses and only one is the LAN, so show the
+    // alternatives rather than leaving someone poking at a dead link.
+    let others = auth::lan_addresses();
+    if others.len() > 1 {
+        let list = others
+            .iter()
+            .map(|(iface, ip)| format!("{ip} ({iface})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        tracing::info!("other addresses on this machine: {list}");
     }
 }
 

@@ -202,15 +202,80 @@ pub fn is_exposed(addr: &std::net::SocketAddr) -> bool {
     !addr.ip().is_loopback()
 }
 
-/// Best-effort LAN address, so the engine can print a URL worth copying.
+/// Interface name prefixes that are never the address another device uses.
 ///
-/// Found by asking the routing table which source address would be used to
-/// reach a public address. No packet is sent: connecting a UDP socket only
-/// selects a route.
+/// The route-to-the-internet trick gets this wrong on any machine with a VPN:
+/// it returns the tunnel address, which a phone on the same wifi cannot reach.
+/// This box has twelve addresses across Docker bridges, VMware, a VPN and
+/// Tailscale, and exactly one of them is the LAN.
+const VIRTUAL_PREFIXES: &[&str] = &[
+    "lo",
+    "docker",
+    "br-",
+    "veth",
+    "virbr",
+    "vmnet",
+    "tun",
+    "tap",
+    "tailscale",
+    "wg",
+    "zt",
+];
+
+/// Addresses another device on the network could plausibly reach, best first.
+///
+/// Parses `ip -4 -o addr show scope global`, which is part of iproute2 and
+/// present on any Linux that can run a Wayland compositor. Shelling out beats
+/// `getifaddrs` here because that needs unsafe FFI for a convenience feature.
+pub fn lan_addresses() -> Vec<(String, std::net::IpAddr)> {
+    let Ok(output) = std::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "scope", "global"])
+        .output()
+    else {
+        return fallback_address().into_iter().collect();
+    };
+
+    let mut found: Vec<(String, std::net::IpAddr)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.nth(1)?.to_string();
+            let addr = fields.nth(1)?.split('/').next()?;
+            let ip: std::net::IpAddr = addr.parse().ok()?;
+            (!VIRTUAL_PREFIXES.iter().any(|p| name.starts_with(p))).then_some((name, ip))
+        })
+        .collect();
+
+    // Private ranges first: a public address on a home machine is unusual and
+    // almost certainly not what the tablet should be pointed at.
+    found.sort_by_key(|(_, ip)| !is_private(ip));
+
+    if found.is_empty() {
+        return fallback_address().into_iter().collect();
+    }
+    found
+}
+
+/// The single best guess, for the URL printed at startup.
 pub fn lan_address() -> Option<std::net::IpAddr> {
+    lan_addresses().first().map(|(_, ip)| *ip)
+}
+
+fn is_private(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private(),
+        std::net::IpAddr::V6(_) => false,
+    }
+}
+
+/// Last resort when `ip` is unavailable: ask the routing table.
+///
+/// Known to return a tunnel address on a machine with a VPN, which is why it is
+/// the fallback rather than the primary.
+fn fallback_address() -> Option<(String, std::net::IpAddr)> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("192.0.2.1:9").ok()?; // TEST-NET-1, guaranteed unroutable
-    Some(socket.local_addr().ok()?.ip())
+    Some(("route".to_string(), socket.local_addr().ok()?.ip()))
 }
 
 #[cfg(test)]
@@ -320,6 +385,42 @@ mod tests {
         // Empty must be an error upstream, not a silently generated token:
         // a typo in the file should not quietly change the password.
         assert_eq!(parse_dotenv("AUTH_PASS=", "AUTH_PASS").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn virtual_interfaces_are_excluded() {
+        // The list this filters is not hypothetical: this machine has Docker
+        // bridges, VMware, a VPN tunnel and Tailscale, and a phone on the wifi
+        // can reach none of them.
+        for name in [
+            "docker0",
+            "br-4496345c5827",
+            "veth13de519",
+            "vmnet1",
+            "tun0",
+            "tailscale0",
+            "lo",
+        ] {
+            assert!(
+                VIRTUAL_PREFIXES.iter().any(|p| name.starts_with(p)),
+                "{name} should be treated as virtual"
+            );
+        }
+        for name in ["eno1", "wlan0", "enp3s0", "eth0"] {
+            assert!(
+                !VIRTUAL_PREFIXES.iter().any(|p| name.starts_with(p)),
+                "{name} should be treated as real"
+            );
+        }
+    }
+
+    #[test]
+    fn private_addresses_sort_first() {
+        assert!(is_private(&"192.168.1.51".parse().unwrap()));
+        assert!(is_private(&"10.0.0.5".parse().unwrap()));
+        assert!(is_private(&"172.17.0.1".parse().unwrap()));
+        // CGNAT, which is what a VPN tunnel often uses, is not RFC1918.
+        assert!(!is_private(&"100.64.100.6".parse().unwrap()));
     }
 
     #[test]

@@ -58,7 +58,7 @@ cargo run -p lwfa-engine
 Then start the shell, which is what actually lays windows out:
 
 ```sh
-pnpm --filter @lwfa/shell dev     # http://localhost:5173
+pnpm --filter @lwfa/shell dev     # http://localhost:6733
 ```
 
 Until a shell connects the engine runs in **safe mode**: focused window
@@ -95,8 +95,9 @@ Environment:
 
 - `LWFA_TERMINAL` — which terminal to spawn (default `alacritty`)
 - `LWFA_NO_AUTOSTART` — set to skip opening a terminal on launch
-- `LWFA_SHELL_ADDR` — where to listen for a shell (default `127.0.0.1:9843`;
-  use `0.0.0.0:9843` to reach it from other devices)
+- `LWFA_SHELL_ADDR` — where the engine listens (default `127.0.0.1:6734`;
+  use `0.0.0.0:6734` to reach it from other devices)
+- `SHELL_PORT` — port for the shell page (default `6733`)
 - `AUTH_PASS` — the shared password. Read from `.env` if not in the environment.
   A temporary one is generated if neither is set, which breaks bookmarked URLs
 - `LWFA_PROFILE` — log per-window capture timings
@@ -109,20 +110,32 @@ Settings live in `.env`, which is gitignored. Start from the template:
 ```sh
 cp .env.example .env
 sed -i "s|^AUTH_PASS=.*|AUTH_PASS=$(openssl rand -hex 16)|" .env
-sed -i "s|^LWFA_SHELL_ADDR=.*|LWFA_SHELL_ADDR=0.0.0.0:9843|" .env
+sed -i "s|^LWFA_SHELL_ADDR=.*|LWFA_SHELL_ADDR=0.0.0.0:6734|" .env
 chmod 600 .env
 ```
+
+lwfa uses the **6733+** port block:
+
+| Port | What | Typed by hand? |
+|---|---|---|
+| 6733 | shell page | **yes**, this is the one you open |
+| 6734 | engine protocol | no, the page finds it |
 
 Then run both halves and open the link the engine prints:
 
 ```sh
 cargo run -p lwfa-engine
-pnpm --filter @lwfa/shell dev    # already binds 0.0.0.0
+pnpm --filter @lwfa/shell dev    # binds 0.0.0.0 on SHELL_PORT
 ```
 
 ```
-open the shell at:  http://192.168.1.x:5173/?token=…
+open the shell at:  http://192.168.1.x:6733/?token=…
 ```
+
+The address is picked by filtering out virtual interfaces (Docker bridges,
+VMware, VPN tunnels, Tailscale, loopback) and preferring a private range. If
+the machine has several real interfaces the alternatives are printed too, since
+only one of them is the network the tablet is on.
 
 The shell connects to whatever host served the page, so nothing else needs
 configuring. Bookmark that URL on the tablet; it keeps working as long as
