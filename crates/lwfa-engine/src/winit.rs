@@ -8,7 +8,9 @@
 //! The DRM/KMS backend for the real display lands in a later milestone and will
 //! share everything below the backend boundary.
 
-use std::time::Duration;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
@@ -16,6 +18,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::winit::{self, WinitEvent};
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::utils::{Rectangle, Transform};
 
 use crate::state::{CalloopData, Lwfa};
@@ -29,14 +32,43 @@ fn capture_dump_dir() -> Option<std::path::PathBuf> {
 /// columns are visible and the strip reads as a strip.
 const BACKDROP: [f32; 4] = [0.06, 0.06, 0.08, 1.0];
 
+/// How often the fallback tick checks whether the on-screen loop has stalled.
+const TICK: Duration = Duration::from_millis(16);
+
+/// How long the on-screen loop may go quiet before the fallback takes over.
+///
+/// The nested backend redraws only when the host compositor hands it a frame
+/// callback, and a host stops doing that the moment our window is not visible:
+/// another workspace, a minimise, something full-screen on top. For an ordinary
+/// nested compositor that is correct, and it is the behaviour you want.
+///
+/// It is wrong for lwfa. The point of the whole project is that the session is
+/// usable from a tablet while nobody is looking at the host screen, so tying the
+/// remote frame rate to the host's redraw cadence means parking lwfa on another
+/// workspace freezes every remote client. It fails in a way that is genuinely
+/// hard to read, too: titles, geometry and layout keep working, because those
+/// are protocol traffic and owe nothing to rendering. The shell looks perfectly
+/// alive and shows nothing.
+///
+/// So when the host goes quiet and someone is still watching remotely, drive
+/// the streaming path from a timer instead. Three frames at 60Hz: long enough
+/// that a normally scheduled loop never trips it, short enough to be invisible.
+const REDRAW_STALL: Duration = Duration::from_millis(50);
+
 pub fn init_winit(
     event_loop: &mut EventLoop<CalloopData>,
     data: &mut CalloopData,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (mut backend, winit_source) = winit::init::<GlesRenderer>()?;
+    let (backend, winit_source) = winit::init::<GlesRenderer>()?;
+
+    // Shared because two sources need it: the winit event source for the
+    // on-screen path, and the stall timer for the remote one. They are both
+    // calloop callbacks on the same thread, so the two never borrow at once.
+    let backend = Rc::new(RefCell::new(backend));
+    let last_redraw = Rc::new(Cell::new(Instant::now()));
 
     let mode = Mode {
-        size: backend.window_size(),
+        size: backend.borrow().window_size(),
         refresh: 60_000,
     };
 
@@ -74,9 +106,11 @@ pub fn init_winit(
         std::env::set_var("WAYLAND_DISPLAY", &data.state.socket_name);
     }
 
-    event_loop
-        .handle()
-        .insert_source(winit_source, move |event, _, data| {
+    event_loop.handle().insert_source(winit_source, {
+        let backend = Rc::clone(&backend);
+        let last_redraw = Rc::clone(&last_redraw);
+        let output = output.clone();
+        move |event, _, data| {
             let display = &mut data.display_handle;
             let state = &mut data.state;
 
@@ -111,10 +145,15 @@ pub fn init_winit(
                 WinitEvent::Input(event) => state.process_input_event(event),
 
                 WinitEvent::Redraw => {
+                    // Tells the stall timer to stay out of the way: the host is
+                    // driving us, so the on-screen path owns this frame.
+                    last_redraw.set(Instant::now());
+
                     // Advance the scroll spring before rendering, so this frame
                     // shows the current position rather than the previous one.
                     state.tick_animations();
 
+                    let backend = &mut *backend.borrow_mut();
                     let size = backend.window_size();
                     let damage = Rectangle::from_size(size);
 
@@ -187,6 +226,50 @@ pub fn init_winit(
 
                 _ => {}
             }
+        }
+    })?;
+
+    // The stall fallback. See REDRAW_STALL for why this exists at all.
+    event_loop
+        .handle()
+        .insert_source(Timer::from_duration(TICK), move |_, _, data| {
+            let stalled = last_redraw.get().elapsed() >= REDRAW_STALL;
+            // Only worth doing for someone actually watching. With no shell
+            // connected there is nobody to send frames to, and letting an
+            // invisible nested compositor idle is the right behaviour.
+            if stalled && data.state.shell.is_some() {
+                let state = &mut data.state;
+                state.tick_animations();
+
+                {
+                    let backend = &mut *backend.borrow_mut();
+                    state.stream_frames(backend.renderer());
+                }
+
+                // Frame callbacks matter more than the capture here. A Wayland
+                // client waits for one before drawing again, so without this
+                // the windows would not just stop streaming, they would stop
+                // *running*: no clock ticking, no video playing, no cursor
+                // blinking, on a session someone is looking at right now.
+                state.space.elements().for_each(|window| {
+                    window.send_frame(
+                        &output,
+                        state.start_time.elapsed(),
+                        Some(Duration::ZERO),
+                        |_, _| Some(output.clone()),
+                    )
+                });
+
+                state.space.refresh();
+                state.popups.cleanup();
+                let _ = data.display_handle.flush_clients();
+
+                // Keep asking. The host ignores this while we are hidden, and
+                // honours it as soon as we are visible again, which is what
+                // hands control back to the on-screen path.
+                backend.borrow().window().request_redraw();
+            }
+            TimeoutAction::ToDuration(TICK)
         })?;
 
     Ok(())
