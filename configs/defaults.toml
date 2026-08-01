@@ -1,0 +1,151 @@
+# lwfa defaults.
+#
+# One legible place for the settings that were previously spread across a dozen
+# `const` declarations in Rust and a couple of object literals in TypeScript.
+#
+# Every value here also has a built-in fallback in the code, so a missing key,
+# a missing section, or a missing file are all fine. That is deliberate: the
+# engine must still start when this file is broken, because the thing you fix
+# it from may well be running inside it.
+#
+# Precedence, highest first:
+#
+#   1. environment variables   LWFA_SHELL_ADDR=0.0.0.0:6734 cargo run
+#   2. .env                    gitignored, machine-local
+#   3. this file               committed, shared
+#   4. built-in defaults       in the code
+#
+# NO SECRETS HERE. This file is committed. `AUTH_PASS` lives in `.env`, which
+# is gitignored and mode 600. See the README.
+
+# ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+[net]
+# Where the engine listens for a shell to connect.
+#
+# Loopback by default, because this socket injects keystrokes and spawns
+# processes, so opening it to the network is a decision to make on purpose.
+# Use "0.0.0.0:6734" to reach it from a tablet, and read the security note in
+# the README first: there is no TLS yet.
+shell_addr = "127.0.0.1:6734"
+
+# Where the shell page is served. This is the port you actually type.
+#
+# lwfa uses the 6733+ block, lowest port first, so 6733 is the page and 6734 is
+# the protocol behind it.
+shell_port = 6733
+
+# ---------------------------------------------------------------------------
+# How lwfa's own window is placed in a host compositor
+# ---------------------------------------------------------------------------
+#
+# Only the nested backend uses this: lwfa runs as an ordinary window inside
+# Hyprland (or whatever else) while it is being developed. The TTY backend
+# owns the display outright and ignores this section entirely.
+[host]
+# A workspace of its own, so lwfa never lands on top of what you are doing.
+workspace = 10
+
+# Full-screen on that workspace. A compositor showing a scrollable strip wants
+# the whole output; in a small floating window the strip is not usable.
+fullscreen = true
+
+# Place it *without* switching your view to that workspace. Without this,
+# starting the engine yanks your display over to it. See `scripts/dev-nested.sh`.
+silent = true
+
+# ---------------------------------------------------------------------------
+# The nested window itself
+# ---------------------------------------------------------------------------
+[window]
+# The app id lwfa reports to the host, and what a host window rule matches on.
+# Changing this means updating the rules in your compositor config too.
+app_id = "lwfa"
+title = "lwfa"
+
+# Size before anything full-screens it. Only ever seen for a frame or two when
+# `host.fullscreen` is set.
+width = 1280
+height = 800
+
+# Behind the strip. Slightly lighter than black so the gaps between columns are
+# visible and the strip reads as a strip. Linear RGBA, 0..1.
+backdrop = [0.06, 0.06, 0.08, 1.0]
+
+# ---------------------------------------------------------------------------
+# Session
+# ---------------------------------------------------------------------------
+[session]
+# Spawned by Alt+Return, and on startup unless `autostart_terminal` is false.
+terminal = "alacritty"
+
+# Open a terminal at startup, so a fresh session has something in it.
+autostart_terminal = true
+
+# Run Xwayland, so X11 clients work: Steam, anything under Proton, older
+# GTK2/Qt4 programs, Electron builds without the ozone flags. Costs ~30MB and
+# one child process. Without it those do not degrade, they fail to start.
+xwayland = true
+
+# ---------------------------------------------------------------------------
+# Streaming to a remote shell
+# ---------------------------------------------------------------------------
+[stream]
+# Concurrent NVENC sessions. Eight is the limit on consumer NVIDIA parts; the
+# ninth window degrades to JPEG rather than failing. Raise it on a card that
+# allows more, and see `crates/lwfa-engine/src/encode.rs`.
+max_h264_sessions = 8
+
+# Keyframe interval, in frames. Long, because the shell asks for a keyframe
+# explicitly whenever it needs one, so periodic ones are pure overhead.
+gop = 120
+
+# Quality of the JPEG fallback, 1-100. Used for clients with no H.264 decoder,
+# which in practice means any browser on a page served over plain HTTP:
+# WebCodecs requires a secure context.
+jpeg_quality = 70
+
+# How many captured frames may wait for the encoder thread. Small on purpose.
+# Dropping a frame under load beats building an unbounded queue of stale ones.
+encoder_queue_depth = 2
+
+# How many encoded frames may be queued for the socket before capture stops.
+# This is the backpressure that keeps a slow link from costing GPU read-back.
+max_frames_in_flight = 4
+
+# ---------------------------------------------------------------------------
+# Render loop
+# ---------------------------------------------------------------------------
+[render]
+# How often to check whether the on-screen loop has stalled. Roughly 60Hz.
+tick_ms = 16
+
+# How long the host may go without giving us a frame callback before the
+# streaming path is driven from a timer instead.
+#
+# A host stops sending frame callbacks the moment lwfa's window is not visible,
+# which for an ordinary nested compositor is correct. It is wrong here: the
+# whole point is that the session stays usable from a tablet while nobody is
+# looking at the host screen. Three frames at 60Hz.
+redraw_stall_ms = 50
+
+# ---------------------------------------------------------------------------
+# Layout
+# ---------------------------------------------------------------------------
+#
+# Read by the *shell*, which owns layout policy. The engine never reads this
+# section; it only reconciles what the shell tells it. See docs/architecture.md.
+[layout]
+# Gap between columns, between stacked windows, and at the output edge.
+gap = 12
+
+# Column widths as a fraction of the output, cycled by Alt+4.
+width_presets = [0.3333333333333333, 0.5, 0.6666666666666667]
+
+# Which of those a new column gets. An index into `width_presets`.
+default_width = 1
+
+# Floor in logical pixels, so a preset cannot make a column unusably narrow on
+# a small viewport. This is what stops ⅓ of a phone screen being 120px.
+min_width = 240

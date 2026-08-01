@@ -37,17 +37,12 @@ use lwfa_proto::{FrameFormat, WindowId};
 
 use crate::capture::CapturedFrame;
 
-/// Matches the documented NVENC concurrent session limit on consumer cards.
-///
-/// NVIDIA raised this from 3 to 5 in March 2023 and 5 to 8 in early 2024. It
-/// is a driver-enforced ceiling, not a guess, but creating a session can still
-/// fail for other reasons, so the fallback does not rely on this number being
-/// right.
-const MAX_SESSIONS: usize = 8;
-
-/// Keyframe interval. Also the worst-case wait before a newly attached browser
-/// can start decoding, so it trades startup latency against bandwidth.
-const GOP: u32 = 120;
+// `max_h264_sessions`, `gop` and `jpeg_quality` live in `[stream]` of
+// `configs/defaults.toml`. The session limit in particular is a property of the
+// card rather than of this code: NVIDIA raised the consumer ceiling from 3 to 5
+// in March 2023 and 5 to 8 in early 2024, and a workstation card allows more.
+// It is driver-enforced rather than a guess, but a session can still fail to
+// open for other reasons, so the JPEG fallback does not trust the number.
 
 /// An encoded frame ready for the wire.
 pub struct EncodedFrame {
@@ -69,6 +64,7 @@ struct Session {
 
 /// Per-window encoders, with a JPEG fallback when hardware sessions run out.
 pub struct Encoders {
+    config: crate::config::Stream,
     sessions: HashMap<WindowId, Session>,
     /// Windows that failed to get a hardware session. Tracked so the failure is
     /// logged once rather than every frame.
@@ -84,12 +80,12 @@ pub struct Encoders {
 
 impl Default for Encoders {
     fn default() -> Self {
-        Self::new()
+        Self::new(crate::config::Stream::default())
     }
 }
 
 impl Encoders {
-    pub fn new() -> Self {
+    pub fn new(config: crate::config::Stream) -> Self {
         let available = match ff::init() {
             Ok(()) => {
                 let found = ff::encoder::find_by_name(ENCODER_NAME).is_some();
@@ -107,6 +103,7 @@ impl Encoders {
         };
 
         Self {
+            config,
             sessions: HashMap::new(),
             fallback: HashMap::new(),
             available,
@@ -167,7 +164,7 @@ impl Encoders {
         Some(EncodedFrame {
             format: FrameFormat::Jpeg,
             keyframe: true,
-            bytes: frame.to_jpeg(JPEG_QUALITY)?,
+            bytes: frame.to_jpeg(self.config.jpeg_quality)?,
         })
     }
 
@@ -182,26 +179,28 @@ impl Encoders {
             self.sessions.remove(&frame.id);
         }
 
-        if self.sessions.len() >= MAX_SESSIONS {
+        if self.sessions.len() >= self.config.max_h264_sessions {
             if self.fallback.insert(frame.id, ()).is_none() {
                 tracing::warn!(
-                    "NVENC session limit ({MAX_SESSIONS}) reached; {} falls back to JPEG",
+                    "NVENC session limit ({}) reached; {} falls back to JPEG",
+                    self.config.max_h264_sessions,
                     frame.id
                 );
             }
             return false;
         }
 
-        match Session::new(frame.width, frame.height) {
+        match Session::new(frame.width, frame.height, self.config.gop) {
             Ok(session) => {
                 self.fallback.remove(&frame.id);
                 self.sessions.insert(frame.id, session);
                 tracing::info!(
-                    "opened an h264 session for {} ({}x{}), {} of {MAX_SESSIONS} in use",
+                    "opened an h264 session for {} ({}x{}), {} of {} in use",
                     frame.id,
                     frame.width,
                     frame.height,
-                    self.sessions.len()
+                    self.sessions.len(),
+                    self.config.max_h264_sessions
                 );
                 true
             }
@@ -221,10 +220,9 @@ impl Encoders {
 }
 
 const ENCODER_NAME: &str = "h264_nvenc";
-const JPEG_QUALITY: u8 = 70;
 
 impl Session {
-    fn new(width: u32, height: u32) -> Result<Self, ff::Error> {
+    fn new(width: u32, height: u32, gop: u32) -> Result<Self, ff::Error> {
         let codec = ff::encoder::find_by_name(ENCODER_NAME).ok_or(ff::Error::EncoderNotFound)?;
         let ctx = ff::codec::context::Context::new_with_codec(codec);
         let mut enc = ctx.encoder().video()?;
@@ -233,7 +231,10 @@ impl Session {
         enc.set_height(height);
         enc.set_format(Pixel::NV12);
         enc.set_time_base(ff::Rational(1, 60));
-        enc.set_gop(GOP);
+        // Keyframe interval, and so also the worst case wait before a newly
+        // attached browser can decode anything: startup latency against
+        // bandwidth.
+        enc.set_gop(gop);
         // No B-frames: they reorder output, which adds latency for no benefit
         // on an interactive stream.
         enc.set_max_b_frames(0);
@@ -390,7 +391,7 @@ mod tests {
     #[test]
     fn encoders_report_availability_without_panicking() {
         // Must not panic on a machine with no NVENC; it should just fall back.
-        let encoders = Encoders::new();
+        let encoders = Encoders::new(crate::config::Stream::default());
         // Either outcome is valid depending on the host; what matters is that
         // construction succeeded.
         let _ = encoders.available;
@@ -398,7 +399,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_jpeg_when_hardware_is_unavailable() {
-        let mut encoders = Encoders::new();
+        let mut encoders = Encoders::new(crate::config::Stream::default());
         encoders.available = false;
         let encoded = encoders
             .encode(&frame(64, 64))
@@ -410,7 +411,7 @@ mod tests {
 
     #[test]
     fn forgetting_a_window_drops_its_session() {
-        let mut encoders = Encoders::new();
+        let mut encoders = Encoders::new(crate::config::Stream::default());
         encoders.fallback.insert(WindowId(1), ());
         encoders.forget(WindowId(1));
         assert!(encoders.fallback.is_empty());
@@ -429,13 +430,10 @@ use std::thread;
 
 use crate::shell::FrameSink;
 
-/// How many captured frames may wait to be encoded.
-///
-/// Small on purpose. A backlog here is latency the user sees as the remote view
-/// lagging behind reality, and for an interactive desktop a fresh frame is worth
-/// more than a complete history. Dropping is the correct response to a
-/// consumer that cannot keep up.
-const QUEUE_DEPTH: usize = 2;
+// The queue depth is `[stream].encoder_queue_depth`. Small on purpose: a
+// backlog here is latency the user sees as the remote view lagging reality, and
+// for an interactive desktop a fresh frame is worth more than a complete
+// history. Dropping is the correct response to a consumer that cannot keep up.
 
 /// Encoding, moved onto its own thread.
 ///
@@ -464,6 +462,8 @@ pub struct EncodeWorker {
     /// knowing the queue is backed up lets the caller skip capturing at all
     /// rather than doing GPU work and then throwing it away.
     queued: Arc<AtomicUsize>,
+    /// Mirrored from the config so `has_capacity` stays a plain atomic read.
+    queue_depth: usize,
 }
 
 struct Job {
@@ -477,8 +477,9 @@ enum Control {
 }
 
 impl EncodeWorker {
-    pub fn spawn(sink: FrameSink) -> std::io::Result<Self> {
-        let (frames_tx, frames_rx) = sync_channel::<Job>(QUEUE_DEPTH);
+    pub fn spawn(sink: FrameSink, config: crate::config::Stream) -> std::io::Result<Self> {
+        let queue_depth = config.encoder_queue_depth.max(1);
+        let (frames_tx, frames_rx) = sync_channel::<Job>(queue_depth);
         let (control_tx, control_rx) = sync_channel::<Control>(16);
         let queued = Arc::new(AtomicUsize::new(0));
         let worker_queued = Arc::clone(&queued);
@@ -486,7 +487,7 @@ impl EncodeWorker {
         thread::Builder::new()
             .name("lwfa-encode".into())
             .spawn(move || {
-                let mut encoders = Encoders::new();
+                let mut encoders = Encoders::new(config);
                 loop {
                     let Ok(job) = frames_rx.recv() else {
                         return; // compositor is gone
@@ -533,6 +534,7 @@ impl EncodeWorker {
             frames: frames_tx,
             control: control_tx,
             queued,
+            queue_depth,
         })
     }
 
@@ -553,7 +555,7 @@ impl EncodeWorker {
 
     /// Room for another frame without blocking.
     pub fn has_capacity(&self) -> bool {
-        self.queued.load(Ordering::Relaxed) < QUEUE_DEPTH
+        self.queued.load(Ordering::Relaxed) < self.queue_depth
     }
 
     pub fn forget(&self, id: WindowId) {

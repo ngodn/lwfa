@@ -16,6 +16,7 @@
 
 mod auth;
 mod capture;
+mod config;
 mod encode;
 mod focus;
 mod handlers;
@@ -33,7 +34,7 @@ use smithay::reexports::wayland_server::Display;
 use smithay::xwayland::{X11Wm, XWayland, XWaylandEvent};
 
 use crate::layout::Mode;
-use crate::shell::{DEFAULT_ADDR, ShellEvent, ShellLink};
+use crate::shell::{ShellEvent, ShellLink};
 use crate::state::{CalloopData, Lwfa};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("lwfa running on WAYLAND_DISPLAY={:?}", data.socket_name);
 
-    if std::env::var_os("LWFA_NO_AUTOSTART").is_none() {
+    if data.config.autostart_terminal() {
         data.spawn_terminal();
     }
 
@@ -72,8 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// means `DISPLAY` is unset when early clients are spawned, and a client that
 /// checks once at startup will already have decided X11 is unavailable.
 fn init_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut CalloopData) {
-    if std::env::var_os("LWFA_NO_XWAYLAND").is_some() {
-        tracing::info!("LWFA_NO_XWAYLAND set, skipping xwayland; X11 clients will not run");
+    if !data.config.xwayland() {
+        tracing::info!("xwayland disabled; X11 clients will not run");
         return;
     }
 
@@ -128,8 +129,8 @@ fn init_shell_link(
     event_loop: &mut EventLoop<CalloopData>,
     data: &mut CalloopData,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Environment first, then .env, then the loopback default.
-    let addr = auth::setting("LWFA_SHELL_ADDR").unwrap_or_else(|| DEFAULT_ADDR.to_string());
+    // Environment first, then .env, then configs/defaults.toml.
+    let addr = data.config.shell_addr();
     let (events_tx, events_rx) = channel::channel::<ShellEvent>();
 
     let token = match auth::resolve_token() {
@@ -142,7 +143,12 @@ fn init_shell_link(
         }
     };
 
-    let (link, bound) = match ShellLink::bind(&addr, token.clone(), events_tx) {
+    let (link, bound) = match ShellLink::bind(
+        &addr,
+        token.clone(),
+        events_tx,
+        data.config.stream.max_frames_in_flight,
+    ) {
         Ok(bound) => bound,
         Err(err) => {
             // Not fatal. Safe mode still gives a usable compositor, and a bad
@@ -153,7 +159,7 @@ fn init_shell_link(
         }
     };
     // The encoder needs a frame sink, so it is spawned once the link exists.
-    match crate::encode::EncodeWorker::spawn(link.sink()) {
+    match crate::encode::EncodeWorker::spawn(link.sink(), data.config.stream.clone()) {
         Ok(worker) => data.encoders = Some(worker),
         Err(err) => {
             // Not fatal: the compositor still works, there is just nothing to

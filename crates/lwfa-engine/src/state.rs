@@ -37,6 +37,8 @@ use crate::layout::{self, Layout};
 use crate::shell::ShellLink;
 
 pub struct Lwfa {
+    /// Settings from `configs/defaults.toml`, resolved once at startup.
+    pub config: crate::config::Config,
     pub start_time: std::time::Instant,
     pub socket_name: OsString,
     pub display_handle: DisplayHandle,
@@ -99,6 +101,7 @@ pub struct Lwfa {
 impl Lwfa {
     pub fn new(event_loop: &mut EventLoop<'static, CalloopData>, display: Display<Self>) -> Self {
         let dh = display.handle();
+        let config = crate::config::Config::load();
 
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
@@ -127,6 +130,7 @@ impl Lwfa {
         let loop_handle = event_loop.handle();
 
         Self {
+            config,
             start_time: std::time::Instant::now(),
             display_handle: dh,
             // Real size arrives from the backend once the output exists.

@@ -43,6 +43,8 @@ serde_json = "1.0.151"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
 
 [lints]
 workspace = true

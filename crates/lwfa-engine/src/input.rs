@@ -153,8 +153,7 @@ impl Lwfa {
     }
 
     pub fn spawn_terminal(&self) {
-        let terminal = std::env::var("LWFA_TERMINAL").unwrap_or_else(|_| "alacritty".to_string());
-        self.spawn(&terminal);
+        self.spawn(&self.config.terminal());
     }
 
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {

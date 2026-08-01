@@ -39,13 +39,11 @@ use smithay::reexports::calloop::channel::Sender as LoopSender;
 
 use crate::auth;
 
-/// Where the shell connects, when `.env` does not say.
-///
-/// lwfa owns the 6733+ block: 6733 serves the shell page, 6734 is this socket.
-/// Loopback by default, so exposing it to the network is always a deliberate
-/// edit rather than something that happens by installing.
-pub const DEFAULT_ADDR: &str = "127.0.0.1:6734";
-
+// The listen address is `[net].shell_addr` in `configs/defaults.toml`, and
+// `LWFA_SHELL_ADDR` overrides it. lwfa owns the 6733+ block: 6733 serves the
+// shell page and 6734 is this socket. Loopback by default, so exposing it to
+// the network is always a deliberate edit rather than a side effect of
+// installing.
 /// How often the connection thread checks for outgoing messages while idle.
 ///
 /// These are window lifecycle events, not per-frame data, so this only bounds
@@ -92,6 +90,9 @@ pub struct FrameSink {
     outgoing: Sender<Outgoing>,
     in_flight: Arc<AtomicUsize>,
     connected: Arc<AtomicBool>,
+    /// `[stream].max_frames_in_flight`. Copied in rather than shared, because
+    /// this is read on the hot path and never changes after startup.
+    max_in_flight: usize,
 }
 
 impl FrameSink {
@@ -101,7 +102,7 @@ impl FrameSink {
     /// cannot keep up costs no GPU work at all.
     pub fn can_accept_frame(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
-            && self.in_flight.load(Ordering::Relaxed) < MAX_FRAMES_IN_FLIGHT
+            && self.in_flight.load(Ordering::Relaxed) < self.max_in_flight
     }
 
     pub fn send_frame(&self, bytes: Vec<u8>) {
@@ -120,12 +121,10 @@ pub struct ShellLink {
     sink: FrameSink,
 }
 
-/// How many encoded frames may be queued before capture backs off.
-///
-/// Without this, a shell on a slow link makes the queue grow without bound and
-/// the compositor spends all its time encoding frames nobody will see. Dropping
-/// frames is the correct response to a slow consumer; buffering them is not.
-const MAX_FRAMES_IN_FLIGHT: usize = 4;
+// `[stream].max_frames_in_flight` bounds the write queue. Without a bound, a
+// shell on a slow link makes it grow forever and the compositor spends all its
+// time encoding frames nobody will see. Dropping frames is the correct response
+// to a slow consumer; buffering them is not.
 
 impl ShellLink {
     /// Start listening. Returns the link plus a calloop event source to insert.
@@ -133,6 +132,7 @@ impl ShellLink {
         addr: &str,
         token: String,
         events: LoopSender<ShellEvent>,
+        max_in_flight: usize,
     ) -> std::io::Result<(Self, std::net::SocketAddr)> {
         let listener = TcpListener::bind(addr)?;
         let local = listener.local_addr()?;
@@ -161,6 +161,7 @@ impl ShellLink {
                     outgoing: outgoing_tx,
                     in_flight,
                     connected,
+                    max_in_flight: max_in_flight.max(1),
                 },
             },
             local,

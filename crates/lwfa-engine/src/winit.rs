@@ -19,8 +19,12 @@ use smithay::backend::winit::{self, WinitEvent};
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::winit::dpi::LogicalSize;
+use smithay::reexports::winit::platform::wayland::WindowAttributesExtWayland;
+use smithay::reexports::winit::window::Window as WinitWindow;
 use smithay::utils::{Rectangle, Transform};
 
+use crate::config;
 use crate::state::{CalloopData, Lwfa};
 
 /// Where to write per-window capture PNGs, if the debug dump is enabled.
@@ -28,38 +32,50 @@ fn capture_dump_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("LWFA_CAPTURE_DUMP").map(std::path::PathBuf::from)
 }
 
-/// Background behind the strip. Slightly lighter than black so the gaps between
-/// columns are visible and the strip reads as a strip.
-const BACKDROP: [f32; 4] = [0.06, 0.06, 0.08, 1.0];
+// The backdrop colour is `[window].backdrop`, and the two timings below are
+// `[render]`, all in `configs/defaults.toml`.
 
-/// How often the fallback tick checks whether the on-screen loop has stalled.
-const TICK: Duration = Duration::from_millis(16);
-
-/// How long the on-screen loop may go quiet before the fallback takes over.
-///
-/// The nested backend redraws only when the host compositor hands it a frame
-/// callback, and a host stops doing that the moment our window is not visible:
-/// another workspace, a minimise, something full-screen on top. For an ordinary
-/// nested compositor that is correct, and it is the behaviour you want.
-///
-/// It is wrong for lwfa. The point of the whole project is that the session is
-/// usable from a tablet while nobody is looking at the host screen, so tying the
-/// remote frame rate to the host's redraw cadence means parking lwfa on another
-/// workspace freezes every remote client. It fails in a way that is genuinely
-/// hard to read, too: titles, geometry and layout keep working, because those
-/// are protocol traffic and owe nothing to rendering. The shell looks perfectly
-/// alive and shows nothing.
-///
-/// So when the host goes quiet and someone is still watching remotely, drive
-/// the streaming path from a timer instead. Three frames at 60Hz: long enough
-/// that a normally scheduled loop never trips it, short enough to be invisible.
-const REDRAW_STALL: Duration = Duration::from_millis(50);
+// Why the stall fallback exists at all, and why `[render].redraw_stall_ms`
+// defaults to three frames rather than something longer:
+//
+// The nested backend redraws only when the host compositor hands it a frame
+// callback, and a host stops doing that the moment our window is not visible:
+// another workspace, a minimise, something full-screen on top. For an ordinary
+// nested compositor that is correct, and it is the behaviour you want.
+//
+// It is wrong for lwfa. The point of the whole project is that the session is
+// usable from a tablet while nobody is looking at the host screen, so tying the
+// remote frame rate to the host's redraw cadence means parking lwfa on another
+// workspace freezes every remote client. It fails in a way that is genuinely
+// hard to read, too: titles, geometry and layout keep working, because those
+// are protocol traffic and owe nothing to rendering. The shell looks perfectly
+// alive and shows nothing.
+//
+// So when the host goes quiet and someone is still watching remotely, drive the
+// streaming path from a timer instead. Long enough that a normally scheduled
+// loop never trips it, short enough that the stall is not visible.
 
 pub fn init_winit(
     event_loop: &mut EventLoop<CalloopData>,
     data: &mut CalloopData,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (backend, winit_source) = winit::init::<GlesRenderer>()?;
+    // Smithay's `winit::init` titles the window "Smithay" and sets no app id at
+    // all, which leaves the host compositor with an empty class. That is not
+    // cosmetic: a window rule cannot match on nothing, so there is no way to
+    // tell a host "always put lwfa on this workspace, full-screen". Name it.
+    //
+    // `with_name(general, instance)` is winit's Wayland extension; `general`
+    // becomes the `xdg_toplevel` app id, which is what compositors call the
+    // window's class.
+    let attributes = WinitWindow::default_attributes()
+        .with_title(config::WINDOW_TITLE)
+        .with_name(config::APP_ID, config::APP_ID)
+        .with_inner_size(LogicalSize::new(
+            data.config.window.width,
+            data.config.window.height,
+        ))
+        .with_visible(true);
+    let (backend, winit_source) = winit::init_from_attributes::<GlesRenderer>(attributes)?;
 
     // Shared because two sources need it: the winit event source for the
     // on-screen path, and the stall timer for the remote one. They are both
@@ -154,6 +170,7 @@ pub fn init_winit(
                     state.tick_animations();
 
                     let backend = &mut *backend.borrow_mut();
+                    let backdrop = state.config.window.backdrop;
                     let size = backend.window_size();
                     let damage = Rectangle::from_size(size);
 
@@ -179,7 +196,7 @@ pub fn init_winit(
                             [&state.space],
                             &[],
                             &mut damage_tracker,
-                            BACKDROP,
+                            backdrop,
                         ) {
                             tracing::error!("render failed: {err}");
                         }
@@ -229,11 +246,13 @@ pub fn init_winit(
         }
     })?;
 
-    // The stall fallback. See REDRAW_STALL for why this exists at all.
+    // The stall fallback. See the comment above for why this exists at all.
+    let tick = data.config.render.tick();
+    let redraw_stall = data.config.render.redraw_stall();
     event_loop
         .handle()
-        .insert_source(Timer::from_duration(TICK), move |_, _, data| {
-            let stalled = last_redraw.get().elapsed() >= REDRAW_STALL;
+        .insert_source(Timer::from_duration(tick), move |_, _, data| {
+            let stalled = last_redraw.get().elapsed() >= redraw_stall;
             // Only worth doing for someone actually watching. With no shell
             // connected there is nobody to send frames to, and letting an
             // invisible nested compositor idle is the right behaviour.
@@ -264,12 +283,24 @@ pub fn init_winit(
                 state.popups.cleanup();
                 let _ = state.display_handle.clone().flush_clients();
 
-                // Keep asking. The host ignores this while we are hidden, and
-                // honours it as soon as we are visible again, which is what
-                // hands control back to the on-screen path.
-                backend.borrow().window().request_redraw();
+                // Deliberately NOT `request_redraw()` here, which is what an
+                // earlier version did and which wedged the whole compositor.
+                //
+                // `Redraw` means "paint to the host's swapchain". Asking for one
+                // every 16ms while the host is not consuming buffers exhausts
+                // the swapchain, and the next `submit()` then blocks inside
+                // libwayland waiting for a release that is not coming. It blocks
+                // the *event loop thread*, so nothing else is dispatched either:
+                // no shell events, no protocol traffic, no reply to the host's
+                // ping. The host puts up "application not responding" and the
+                // remote session dies with it.
+                //
+                // Nothing needs to be asked for. The on-screen handler ends with
+                // its own `request_redraw()`, so exactly one request is always
+                // outstanding, and the host honours it the moment the window is
+                // visible again. One request in flight never exhausts anything.
             }
-            TimeoutAction::ToDuration(TICK)
+            TimeoutAction::ToDuration(tick)
         })?;
 
     Ok(())
