@@ -42,6 +42,19 @@ pub const DEFAULT_ADDR: &str = "127.0.0.1:9843";
 /// this socket.
 const POLL_INTERVAL: Duration = Duration::from_millis(4);
 
+/// Bound on how long a connecting client may stall the accept loop.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Close reason sent to a shell that a newer one has replaced.
+///
+/// The client checks for this and stops reconnecting. It has to be explicit:
+/// a plain socket drop is indistinguishable from a network blip, and retrying
+/// is the right response to a blip.
+pub const REPLACED_REASON: &str = "replaced-by-newer-shell";
+
+/// Bound on how long saying goodbye to a replaced shell may take.
+const GOODBYE_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// What the compositor sees. Delivered on the event loop thread.
 #[derive(Debug)]
 pub enum ShellEvent {
@@ -132,139 +145,232 @@ impl ShellLink {
     }
 }
 
+/// Accept connections and serve whichever is newest.
+///
+/// One thread, which owns the outgoing queue, so no lock is needed around the
+/// WebSocket and no frame can be half-written.
+///
+/// **Newest connection wins.** The obvious loop
+/// (`for stream in listener.incoming() { serve(stream) }`) serves one client to
+/// completion, which means a stale or hung shell holds the slot forever and
+/// every later connection sits unread in the accept backlog. That is not a
+/// theoretical problem: a browser tab that never cleanly closed will lock you
+/// out of your own desktop until the engine restarts. Replacing the current
+/// connection instead means the client the user is actually looking at is
+/// always the one being served.
 fn accept_loop(
     listener: TcpListener,
     events: LoopSender<ShellEvent>,
     outgoing: Receiver<Outgoing>,
     in_flight: Arc<AtomicUsize>,
 ) {
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                tracing::info!("shell connected from {:?}", stream.peer_addr().ok());
-                serve(stream, &events, &outgoing, &in_flight);
+    if listener.set_nonblocking(true).is_err() {
+        tracing::error!("could not set the shell listener non-blocking; no shell can connect");
+        return;
+    }
+
+    let mut current: Option<tungstenite::WebSocket<TcpStream>> = None;
+
+    loop {
+        // Drain every pending connection, keeping only the last. Dropping the
+        // previous socket closes it, which is how the old client learns it has
+        // been replaced.
+        loop {
+            match listener.accept() {
+                Ok((stream, peer)) => match handshake(stream) {
+                    Some(socket) => {
+                        if let Some(old) = current.take() {
+                            tracing::info!(
+                                "a new shell connected from {peer}, replacing the old one"
+                            );
+                            // Deliberately no `Disconnected` here. A
+                            // replacement is not a gap in shell coverage, and
+                            // dropping to safe mode and straight back would
+                            // resize every window twice and rebuild every
+                            // encoder session for nothing.
+                            say_goodbye(old);
+                        } else {
+                            tracing::info!("shell connected from {peer}");
+                        }
+                        current = Some(socket);
+                        drain_stale(&outgoing, &in_flight);
+                        if events.send(ShellEvent::Connected).is_err() {
+                            return;
+                        }
+                    }
+                    None => continue,
+                },
+                Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    tracing::warn!("shell listener accept failed: {err}");
+                    break;
+                }
+            }
+        }
+
+        if let Some(socket) = current.as_mut() {
+            if !pump(socket, &events, &outgoing, &in_flight) {
                 tracing::info!("shell disconnected");
+                current = None;
                 let _ = events.send(ShellEvent::Disconnected);
             }
-            Err(err) => {
-                tracing::warn!("shell listener accept failed: {err}");
-            }
+        }
+
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Complete the WebSocket handshake, then switch the socket to non-blocking.
+///
+/// The handshake itself needs a blocking socket, but a client that connects and
+/// then says nothing would stall the whole loop, so it is bounded by a read
+/// timeout rather than trusted.
+fn handshake(stream: TcpStream) -> Option<tungstenite::WebSocket<TcpStream>> {
+    // Nagle would add up to 40ms to a small layout message, which is a visible
+    // hitch on something the user just triggered.
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
+
+    let socket = match tungstenite::accept(stream) {
+        Ok(socket) => socket,
+        Err(err) => {
+            tracing::warn!("shell websocket handshake failed: {err}");
+            return None;
+        }
+    };
+
+    if socket.get_ref().set_read_timeout(None).is_err()
+        || socket.get_ref().set_nonblocking(true).is_err()
+    {
+        tracing::warn!("could not set the shell socket non-blocking");
+        return None;
+    }
+    Some(socket)
+}
+
+/// Close a replaced connection, making sure the reason actually gets sent.
+///
+/// `close()` only *queues* the close frame, and on a non-blocking socket the
+/// following flush returns `WouldBlock` and the frame is lost when the socket
+/// drops. The old client then sees a bare TCP reset, cannot tell it apart from
+/// a network blip, and reconnects, which replaces the new shell and starts the
+/// whole cycle again.
+///
+/// So the socket goes briefly back to blocking, with a write timeout so a dead
+/// peer cannot stall the accept loop.
+fn say_goodbye(mut socket: tungstenite::WebSocket<TcpStream>) {
+    let stream = socket.get_ref();
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_write_timeout(Some(GOODBYE_TIMEOUT));
+
+    let _ = socket.close(Some(tungstenite::protocol::CloseFrame {
+        code: tungstenite::protocol::frame::coding::CloseCode::Normal,
+        reason: REPLACED_REASON.into(),
+    }));
+    // close() queues; the write only happens on flush, and tungstenite may
+    // need more than one to drain.
+    for _ in 0..3 {
+        match socket.flush() {
+            Ok(()) => break,
+            Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => break,
+            Err(_) => continue,
         }
     }
 }
 
-fn serve(
-    stream: TcpStream,
-    events: &LoopSender<ShellEvent>,
-    outgoing: &Receiver<Outgoing>,
-    in_flight: &AtomicUsize,
-) {
-    // Nagle would add up to 40ms to a small layout message, which is a visible
-    // hitch on something the user just triggered.
-    let _ = stream.set_nodelay(true);
-
-    let mut socket = match tungstenite::accept(stream) {
-        Ok(socket) => socket,
-        Err(err) => {
-            tracing::warn!("shell websocket handshake failed: {err}");
-            return;
-        }
-    };
-
-    if socket.get_ref().set_nonblocking(true).is_err() {
-        tracing::warn!("could not set the shell socket non-blocking");
-        return;
-    }
-
-    // Drain anything queued while no shell was connected, so a reconnecting
-    // shell does not receive a backlog addressed to its predecessor. The
-    // `Hello` the engine sends next carries the full current state anyway.
+/// Discard anything queued for a previous shell.
+///
+/// The `Hello` sent next carries the full current state, so a backlog addressed
+/// to the old client is worse than useless: it would be decoded against the new
+/// client's empty world.
+fn drain_stale(outgoing: &Receiver<Outgoing>, in_flight: &AtomicUsize) {
     while let Ok(stale) = outgoing.try_recv() {
         if matches!(stale, Outgoing::Frame(_)) {
             in_flight.fetch_sub(1, Ordering::Relaxed);
         }
     }
+}
 
-    if events.send(ShellEvent::Connected).is_err() {
-        return;
+/// Move one round of messages in both directions.
+///
+/// Returns false when the connection is finished and should be dropped.
+fn pump(
+    socket: &mut tungstenite::WebSocket<TcpStream>,
+    events: &LoopSender<ShellEvent>,
+    outgoing: &Receiver<Outgoing>,
+    in_flight: &AtomicUsize,
+) -> bool {
+    // Reads first, so a burst of shell input is not delayed behind the poll
+    // interval.
+    loop {
+        match socket.read() {
+            Ok(tungstenite::Message::Text(text)) => {
+                match serde_json::from_str::<ToEngine>(&text) {
+                    Ok(message) => {
+                        if events.send(ShellEvent::Message(message)).is_err() {
+                            return false;
+                        }
+                    }
+                    Err(err) => {
+                        // Report rather than drop. A shell sending something
+                        // the engine cannot parse is a bug worth surfacing,
+                        // not something to fail silently on.
+                        tracing::warn!("undecodable message from shell: {err}; raw: {text}");
+                    }
+                }
+            }
+            Ok(tungstenite::Message::Close(_)) => return false,
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(err)) if err.kind() == ErrorKind::WouldBlock => break,
+            Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                return false;
+            }
+            Err(err) => {
+                tracing::warn!("shell socket read failed: {err}");
+                return false;
+            }
+        }
     }
 
     loop {
-        // Reads first, so a burst of shell input is not delayed behind the
-        // poll interval.
-        loop {
-            match socket.read() {
-                Ok(tungstenite::Message::Text(text)) => {
-                    match serde_json::from_str::<ToEngine>(&text) {
-                        Ok(message) => {
-                            if events.send(ShellEvent::Message(message)).is_err() {
-                                return;
-                            }
-                        }
+        match outgoing.try_recv() {
+            Ok(outbound) => {
+                let frame = match outbound {
+                    Outgoing::Control(message) => match serde_json::to_string(&message) {
+                        Ok(json) => tungstenite::Message::Text(json.into()),
                         Err(err) => {
-                            // Report rather than drop. A shell sending something
-                            // the engine cannot parse is a bug worth surfacing,
-                            // not something to fail silently on.
-                            tracing::warn!("undecodable message from shell: {err}; raw: {text}");
+                            tracing::error!("could not serialize {message:?}: {err}");
+                            continue;
+                        }
+                    },
+                    Outgoing::Frame(bytes) => {
+                        in_flight.fetch_sub(1, Ordering::Relaxed);
+                        tungstenite::Message::Binary(bytes.into())
+                    }
+                };
+                if let Err(err) = socket.send(frame) {
+                    match err {
+                        tungstenite::Error::Io(ref io) if io.kind() == ErrorKind::WouldBlock => {}
+                        _ => {
+                            tracing::warn!("shell socket write failed: {err}");
+                            return false;
                         }
                     }
                 }
-                Ok(tungstenite::Message::Close(_)) => return,
-                Ok(_) => {}
-                Err(tungstenite::Error::Io(err)) if err.kind() == ErrorKind::WouldBlock => break,
-                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
-                    return;
-                }
-                Err(err) => {
-                    tracing::warn!("shell socket read failed: {err}");
-                    return;
-                }
             }
+            Err(TryRecvError::Empty) => break,
+            // The compositor is gone.
+            Err(TryRecvError::Disconnected) => return false,
         }
+    }
 
-        loop {
-            match outgoing.try_recv() {
-                Ok(outbound) => {
-                    let frame = match outbound {
-                        Outgoing::Control(message) => match serde_json::to_string(&message) {
-                            Ok(json) => tungstenite::Message::Text(json.into()),
-                            Err(err) => {
-                                tracing::error!("could not serialize {message:?}: {err}");
-                                continue;
-                            }
-                        },
-                        Outgoing::Frame(bytes) => {
-                            in_flight.fetch_sub(1, Ordering::Relaxed);
-                            tungstenite::Message::Binary(bytes.into())
-                        }
-                    };
-                    if let Err(err) = socket.send(frame) {
-                        match err {
-                            tungstenite::Error::Io(ref io)
-                                if io.kind() == ErrorKind::WouldBlock => {}
-                            _ => {
-                                tracing::warn!("shell socket write failed: {err}");
-                                return;
-                            }
-                        }
-                    }
-                }
-                Err(TryRecvError::Empty) => break,
-                // The compositor is gone.
-                Err(TryRecvError::Disconnected) => return,
-            }
+    match socket.flush() {
+        Ok(()) => true,
+        Err(tungstenite::Error::Io(ref io)) if io.kind() == ErrorKind::WouldBlock => true,
+        Err(err) => {
+            tracing::warn!("shell socket flush failed: {err}");
+            false
         }
-
-        // Flush anything tungstenite buffered because the socket was full.
-        match socket.flush() {
-            Ok(()) => {}
-            Err(tungstenite::Error::Io(ref io)) if io.kind() == ErrorKind::WouldBlock => {}
-            Err(err) => {
-                tracing::warn!("shell socket flush failed: {err}");
-                return;
-            }
-        }
-
-        thread::sleep(POLL_INTERVAL);
     }
 }

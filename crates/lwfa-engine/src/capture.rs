@@ -70,6 +70,26 @@ impl SurfaceCapture {
         self.targets.remove(&id);
     }
 
+    /// Force the next capture of every window, ignoring damage.
+    ///
+    /// Damage tracking means an idle window produces no frames at all, which is
+    /// the point. But it also means a shell that connects *later* would never
+    /// receive anything for a window nobody is touching, and would show it
+    /// blank until the user happened to type in it. Attaching a client is
+    /// exactly the moment that has to be overridden.
+    pub fn invalidate_all(&mut self) {
+        for target in self.targets.values_mut() {
+            target.last_commits.clear();
+        }
+    }
+
+    /// Force the next capture of one window. Used when it starts streaming.
+    pub fn invalidate(&mut self, id: WindowId) {
+        if let Some(target) = self.targets.get_mut(&id) {
+            target.last_commits.clear();
+        }
+    }
+
     /// Capture one window, or return `None` if nothing changed since last time.
     ///
     /// `size` is the window's current size in physical pixels.

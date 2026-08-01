@@ -99,6 +99,7 @@ code {
 .status-connecting::before { background: var(--warn); }
 .status-disconnected::before { background: var(--bad); }
 .status-incompatible::before { background: var(--bad); }
+.status-replaced::before { background: var(--muted); }
 
 .controls {
   display: flex;
@@ -262,6 +263,7 @@ button:disabled {
 }
 
 .surface .waiting,
+.surface .offscreen,
 .surface .surface-label {
   position: absolute;
   font-size: 0.7rem;
@@ -269,10 +271,17 @@ button:disabled {
   pointer-events: none;
 }
 
-.surface .waiting {
+.surface .waiting,
+.surface .offscreen {
   inset: 0;
   display: grid;
   place-items: center;
+}
+
+/* Scrolled off the strip: not streamed on purpose, so it should read as
+   deliberate rather than broken. */
+.surface .offscreen {
+  opacity: 0.5;
 }
 
 .surface .surface-label {

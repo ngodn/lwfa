@@ -233,3 +233,14 @@ export function focusedWindow(state: StripState): WindowId | null {
 export function reflow(state: StripState, output: Output, config: StripConfig): StripState {
   return scrollFocusIntoView(state, output, config)
 }
+
+/**
+ * Does this column intersect the viewport at all?
+ *
+ * Only intersecting columns are worth streaming pixels for, which is what
+ * bounds the encoder budget by viewport width rather than by how many windows
+ * are open. See docs/architecture.md section 2.3.
+ */
+export function intersectsViewport(rect: Rect, viewportWidth: number): boolean {
+  return rect.x + rect.width > 0 && rect.x < viewportWidth
+}

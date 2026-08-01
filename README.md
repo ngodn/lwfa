@@ -20,14 +20,14 @@ structural. It records the decisions and, more importantly, why.
 
 ## Status
 
-Milestone 4 of 7, partially. See the build order in the architecture doc.
+Milestone 4 of 7 complete. See the build order in the architecture doc.
 
 - [x] **1. Spring parity harness** — `crates/lwfa-spring`, `packages/spring`
 - [x] **2. Smithay compositor, nested backend** — `crates/lwfa-engine`
 - [x] **3. Shell protocol v0** — `crates/lwfa-proto`, `packages/proto`, `packages/shell`
       (the layer-shell chrome path is *not* done; see the architecture doc)
-- [~] **4. Per-surface streaming and the remote backend** — architecture done and
-      verified in a browser; frames are JPEG, not hardware H.264 (see architecture doc)
+- [x] **4. Per-surface streaming and the remote backend** — hardware H.264 via
+      NVENC, decoded with WebCodecs, composited in the browser DOM
 - [ ] 5. Appearance vocabulary in both backends
 - [ ] 6. iPad: WebCodecs, gestures, responsive breakpoints
 - [ ] 7. Clipboard, audio, multi-monitor, DPI, reconnect, auth, packaging

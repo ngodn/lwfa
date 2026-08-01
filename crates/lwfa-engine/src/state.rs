@@ -28,12 +28,8 @@ use smithay::wayland::shm::ShmState;
 use smithay::wayland::socket::ListeningSocketSource;
 
 use crate::capture::SurfaceCapture;
+use crate::encode::Encoders;
 
-/// JPEG quality for streamed frames.
-///
-/// 70 keeps a 1280x720 window around 100KB, which is comfortable on a LAN.
-/// This knob disappears when hardware H.264 replaces JPEG; see `capture.rs`.
-const JPEG_QUALITY: u8 = 70;
 use crate::layout::{self, Layout};
 use crate::shell::ShellLink;
 
@@ -51,6 +47,8 @@ pub struct Lwfa {
     pub shell: Option<ShellLink>,
     /// Per-surface capture. Only does work when something asks it to.
     pub capture: SurfaceCapture,
+    /// Per-window hardware encoders, with a JPEG fallback.
+    pub encoders: Encoders,
     /// Windows the shell has asked for pixels of.
     ///
     /// Empty is the normal case for a local shell, which composites natively
@@ -110,6 +108,7 @@ impl Lwfa {
             layout: Layout::new((0, 0).into()),
             shell: None,
             capture: SurfaceCapture::default(),
+            encoders: Encoders::new(),
             streaming: std::collections::HashSet::new(),
             space: Space::default(),
             loop_signal,
@@ -443,7 +442,7 @@ impl Lwfa {
             let Some(frame) = self.capture.capture(renderer, id, &window, size) else {
                 continue;
             };
-            let Some(jpeg) = frame.to_jpeg(JPEG_QUALITY) else {
+            let Some(encoded) = self.encoders.encode(&frame) else {
                 continue;
             };
 
@@ -451,10 +450,11 @@ impl Lwfa {
                 window: id,
                 width: frame.width,
                 height: frame.height,
-                format: lwfa_proto::FrameFormat::Jpeg,
+                format: encoded.format,
+                keyframe: encoded.keyframe,
             };
             if let Some(shell) = self.shell.as_ref() {
-                shell.send_frame(header.encode_with_payload(&jpeg));
+                shell.send_frame(header.encode_with_payload(&encoded.bytes));
             }
         }
     }

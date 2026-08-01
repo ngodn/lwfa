@@ -16,7 +16,19 @@ import {
   type ToShell,
 } from "@lwfa/proto"
 
-export type Status = "connecting" | "connected" | "disconnected" | "incompatible"
+/**
+ * Close reason the engine sends to a shell a newer one has replaced.
+ * Must match `REPLACED_REASON` in `crates/lwfa-engine/src/shell.rs`.
+ */
+export const REPLACED_REASON = "replaced-by-newer-shell"
+
+export type Status =
+  | "connecting"
+  | "connected"
+  | "disconnected"
+  | "incompatible"
+  /** A newer shell took over. This one has stopped on purpose. */
+  | "replaced"
 
 export interface ConnectionHandlers {
   onMessage: (message: ToShell) => void
@@ -102,9 +114,18 @@ export class Connection {
       this.#handlers.onMessage(message)
     }
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       this.#socket = null
       if (this.#closed) return
+
+      if (event.reason === REPLACED_REASON) {
+        // A newer shell took over. Reconnecting would displace it, and it
+        // would then displace this one back, forever. Stop instead.
+        this.#closed = true
+        this.#handlers.onStatus("replaced")
+        return
+      }
+
       this.#handlers.onStatus("disconnected")
       this.#scheduleReconnect()
     }

@@ -15,6 +15,7 @@
 //! what it means. Focus order is layout policy, and policy lives in the shell.
 
 mod capture;
+mod encode;
 mod handlers;
 mod input;
 mod layout;
@@ -105,6 +106,13 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 shell.set_connected(true);
             }
             state.layout.set_mode(Mode::Shell);
+            // A browser attaching mid-stream cannot decode until it sees an
+            // IDR, so ask every live encoder for one now rather than making it
+            // wait up to a whole GOP.
+            state.encoders.request_keyframes();
+            // And force a capture of every window, because an idle one would
+            // otherwise never produce a frame for the new client to decode.
+            state.capture.invalidate_all();
             let hello = state.hello();
             state.send_to_shell(hello);
             tracing::info!("shell took over layout");
@@ -143,7 +151,24 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             }
             ToEngine::SetStreams { windows } => {
                 // Total, like SetLayout: anything not listed stops streaming.
-                state.streaming = windows.into_iter().collect();
+                let next: std::collections::HashSet<_> = windows.into_iter().collect();
+                // Force a fresh, self-contained frame for every window named
+                // here, not just newly-added ones.
+                //
+                // This is the moment that matters: a shell announces what it
+                // wants *after* connecting, so invalidating on connect alone
+                // pushes frames out before the client has asked for anything,
+                // and damage tracking then means an idle window never produces
+                // another one. The symptom is a browser where only the window
+                // you happen to type in is ever visible.
+                //
+                // Cheap because it is bounded by what the viewport shows and
+                // only costs one capture per window.
+                for id in &next {
+                    state.capture.invalidate(*id);
+                }
+                state.encoders.request_keyframes();
+                state.streaming = next;
                 tracing::debug!("streaming {} window(s)", state.streaming.len());
             }
             ToEngine::Spawn { command } => {

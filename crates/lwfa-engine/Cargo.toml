@@ -29,6 +29,11 @@ tungstenite = "0.30.0"
 # and JPEG for the wire. Hardware H.264 replaces JPEG on the wire later; see
 # crates/lwfa-engine/src/capture.rs.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+
+# Hardware H.264 via the system ffmpeg's h264_nvenc. Chosen over
+# nvidia-video-codec-sdk because that crate's cudarc dependency hard-panics on
+# CUDA 13.3, which is what this machine has. See crates/lwfa-engine/src/encode.rs.
+ffmpeg-next = "8.1.0"
 serde_json = "1.0.151"
 
 tracing = "0.1"

@@ -21,13 +21,16 @@ function rustFrame(
   width: number,
   height: number,
   payload: number[],
+  format: number = FrameFormat.Jpeg,
+  keyframe = true,
 ): ArrayBuffer {
   const buf = new ArrayBuffer(FRAME_HEADER_LEN + payload.length)
   const bytes = new Uint8Array(buf)
   const view = new DataView(buf)
   bytes.set([0x4c, 0x57, 0x46, 0x41], 0) // "LWFA"
   bytes[4] = FRAME_VERSION
-  bytes[5] = FrameFormat.Jpeg
+  bytes[5] = format
+  bytes[6] = keyframe ? 1 : 0
   view.setBigUint64(8, BigInt(id), true)
   view.setUint32(16, width, true)
   view.setUint32(20, height, true)
@@ -45,6 +48,7 @@ describe("binary frames", () => {
       width: 1261,
       height: 1390,
       format: FrameFormat.Jpeg,
+      keyframe: true,
     })
     expect([...frame!.payload]).toEqual(payload)
   })
@@ -71,6 +75,18 @@ describe("binary frames", () => {
     const buf = rustFrame(1, 10, 10, [0])
     new Uint8Array(buf)[5] = 99
     expect(decodeFrame(buf)).toBeNull()
+  })
+
+  it("decodes H.264 frames and their keyframe flag", () => {
+    // The browser gates decoding on this flag. If it were misread, a stream
+    // joined mid-flight would either never start or feed the decoder deltas
+    // with no reference picture.
+    for (const keyframe of [true, false]) {
+      const frame = decodeFrame(rustFrame(3, 640, 480, [0, 0, 0, 1], FrameFormat.H264, keyframe))
+      expect(frame).not.toBeNull()
+      expect(frame!.header.format).toBe(FrameFormat.H264)
+      expect(frame!.header.keyframe).toBe(keyframe)
+    }
   })
 
   it("rejects a truncated header", () => {

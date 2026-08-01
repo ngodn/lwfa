@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { DecodedFrame, ToShell, WindowId, WindowInfo } from "@lwfa/proto"
 import { Connection, type Status } from "./connection.js"
+import { FrameDecoder, supportsH264 } from "./decode.js"
 import { WindowSurface } from "./WindowSurface.js"
 import {
   DEFAULT_CONFIG,
@@ -25,6 +26,7 @@ import {
   focusRight,
   focusWindow,
   focusedWindow,
+  intersectsViewport,
   layout,
   reflow,
   removeWindow,
@@ -50,6 +52,7 @@ export function App(): React.ReactElement {
   const [streaming, setStreaming] = useState(true)
 
   const connection = useRef<Connection | null>(null)
+  const decoderRef = useRef<FrameDecoder | null>(null)
   // Refs so the message handler, which is created once, always reads current
   // values instead of the ones captured when the socket opened.
   const stripRef = useRef(strip)
@@ -79,7 +82,7 @@ export function App(): React.ReactElement {
     connection.current?.send({
       type: "setStreams",
       windows: streamingRef.current
-        ? windows.filter((w) => w.rect.x + w.rect.width > 0 && w.rect.x < out.width).map((w) => w.id)
+        ? windows.filter((w) => intersectsViewport(w.rect, out.width)).map((w) => w.id)
         : [],
     })
   }, [])
@@ -150,6 +153,7 @@ export function App(): React.ReactElement {
             next.delete(message.id)
             return next
           })
+          decoderRef.current?.forget(message.id)
           update((state, out) => removeWindow(state, message.id, out, DEFAULT_CONFIG))
           break
 
@@ -176,25 +180,20 @@ export function App(): React.ReactElement {
       }
     }
 
-    const handleFrame = async (frame: DecodedFrame) => {
-      // createImageBitmap decodes off the main thread, so a large window does
-      // not stall the UI while it is being decoded.
-      const blob = new Blob([frame.payload as BlobPart], { type: "image/jpeg" })
-      let bitmap: ImageBitmap
-      try {
-        bitmap = await createImageBitmap(blob)
-      } catch (err) {
-        console.warn("could not decode a frame:", err)
-        return
-      }
+    const decoder = new FrameDecoder((id, bitmap) => {
       setFrames((prev) => {
         const next = new Map(prev)
         // Bitmaps hold GPU memory and are not garbage collected promptly, so
         // the one being replaced is closed explicitly.
-        prev.get(frame.header.window)?.close()
-        next.set(frame.header.window, bitmap)
+        prev.get(id)?.close()
+        next.set(id, bitmap)
         return next
       })
+    })
+    decoderRef.current = decoder
+
+    const handleFrame = (frame: DecodedFrame) => {
+      void decoder.handle(frame)
     }
 
     const conn = new Connection(ENGINE_URL, {
@@ -209,7 +208,9 @@ export function App(): React.ReactElement {
     conn.connect()
     return () => {
       conn.close()
+      decoder.close()
       connection.current = null
+      decoderRef.current = null
     }
   }, [push, update])
 
@@ -333,6 +334,9 @@ export function App(): React.ReactElement {
                 focused={index === strip.focus}
                 label={windows.get(w.id)?.title ?? windows.get(w.id)?.appId ?? `w${w.id}`}
                 frame={frames.get(w.id) ?? null}
+                // A column scrolled off the strip is deliberately not
+                // streamed, so it is not "waiting" for anything.
+                streamed={streaming && intersectsViewport(w.rect, output.width)}
                 onFocus={() => update((s, o) => focusWindow(s, w.id, o, DEFAULT_CONFIG))}
               />
             ))}
@@ -341,6 +345,13 @@ export function App(): React.ReactElement {
         {!streaming ? (
           <p className="empty">
             Streaming off. The engine is not capturing, so no pixels are being sent.
+          </p>
+        ) : null}
+        {streaming && !supportsH264() ? (
+          <p className="empty">
+            This browser has no WebCodecs <code>VideoDecoder</code>, so H.264 windows cannot be
+            shown. Safari 26+ is required on iOS and iPadOS. The engine still falls back to JPEG
+            for windows it has no hardware encoder session for.
           </p>
         ) : null}
       </section>

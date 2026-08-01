@@ -417,8 +417,15 @@ export const FRAME_VERSION = 0
 /** Bytes before the payload. */
 export const FRAME_HEADER_LEN = 24
 
+/** Bit 0 of the flags byte at offset 6. */
+const FLAG_KEYFRAME = 1 << 0
+
 export const FrameFormat = {
+  /** Whole-image, always self-contained. The engine's fallback when it has no
+   *  hardware encoder session left (8 concurrent on the dev GPU). */
   Jpeg: 0,
+  /** H.264 Annex B, SPS/PPS repeated on every keyframe. The normal path. */
+  H264: 1,
 } as const
 export type FrameFormat = (typeof FrameFormat)[keyof typeof FrameFormat]
 
@@ -427,6 +434,13 @@ export interface FrameHeader {
   width: number
   height: number
   format: FrameFormat
+  /**
+   * A decoder can start here. Always true for JPEG; true for H.264 IDRs.
+   *
+   * A browser attaching mid-stream must discard frames until this is true, or
+   * it feeds its decoder deltas with no reference picture.
+   */
+  keyframe: boolean
 }
 
 export interface DecodedFrame {
@@ -448,7 +462,9 @@ export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
     if (bytes[i] !== FRAME_MAGIC[i]) return null
   }
   if (bytes[4] !== FRAME_VERSION) return null
-  if (bytes[5] !== FrameFormat.Jpeg) return null
+  const format = bytes[5]
+  if (format !== FrameFormat.Jpeg && format !== FrameFormat.H264) return null
+  const keyframe = ((bytes[6] ?? 0) & FLAG_KEYFRAME) !== 0
 
   const view = new DataView(buffer)
   // Window ids are u64 on the wire. Reading as BigInt and narrowing keeps this
@@ -462,7 +478,7 @@ export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
   if (width === 0 || height === 0) return null
 
   return {
-    header: { window: Number(id), width, height, format: FrameFormat.Jpeg },
+    header: { window: Number(id), width, height, format, keyframe },
     payload: bytes.subarray(FRAME_HEADER_LEN),
   }
 }

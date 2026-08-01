@@ -326,15 +326,20 @@ non-NVIDIA smoke test.
    decoded pixels, positioned by the strip, with `border-radius` applied to
    live application windows.
 
-   **Not done: hardware encode.** Frames are whole-image JPEG, not H.264. That
-   means no inter-frame compression, no alpha channel, and none of the NVENC
-   budget reasoning in section 2.1 is exercised yet. It is a stopgap chosen to
-   prove the architecture without driver integration; swapping it out touches
-   `FrameFormat` and the two encode/decode call sites.
+   **Hardware H.264 done.** `crates/lwfa-engine/src/encode.rs` encodes each
+   window on NVENC via ffmpeg's `h264_nvenc`, and the browser decodes with
+   WebCodecs `VideoDecoder`. Measured on the RTX 3060 at 631x1366: **0.6-0.7 KB
+   per frame against JPEG's 30.5 KB**, and 0.80ms of GPU encode against several
+   milliseconds of software JPEG. JPEG remains as the fallback for when the
+   8-session NVENC limit is hit, which is why `FrameFormat` is per frame.
 
-   **Not done: WebCodecs.** The browser decodes JPEG via `createImageBitmap`
-   rather than `VideoDecoder`, so the Safari 26 requirement in section 6 is not
-   yet load-bearing. It becomes so when H.264 lands.
+   Not the NVENC SDK directly: `nvidia-video-codec-sdk`'s `cudarc` dependency
+   hard-panics at build time on CUDA 13.3, which is what this machine has.
+
+   **Still one readback per frame.** `capture.rs` copies the GPU texture to
+   host memory and the encoder uploads it back. Removing that needs CUDA/GL
+   interop and is the obvious next optimisation; only `encode.rs` and
+   `capture.rs` change.
 5. **Appearance vocabulary** in both backends, with a visual diff test comparing
    a local screenshot against a remote screenshot of the same state.
 6. **iPad.** WebCodecs, gesture arbitration, responsive breakpoints, on-screen

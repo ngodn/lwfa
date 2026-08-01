@@ -20,7 +20,7 @@ import {
   addWindow,
   layout,
 } from "../packages/shell/src/strip.ts"
-import { decodeFrame, decodeToShell, encode } from "../packages/proto/src/index.ts"
+import { FrameFormat, decodeFrame, decodeToShell, encode } from "../packages/proto/src/index.ts"
 
 const URL = process.argv[2] ?? "ws://127.0.0.1:9843"
 const OUT = new global.URL("../target/stream-frames", import.meta.url).pathname
@@ -56,10 +56,13 @@ socket.addEventListener("message", (event) => {
       badFrames++
       return
     }
-    const entry = received.get(frame.header.window) ?? { count: 0, bytes: 0, first: null, header: null }
+    const entry =
+      received.get(frame.header.window) ??
+      { count: 0, bytes: 0, first: null, header: null, keyframes: 0 }
     entry.count++
     entry.bytes += frame.payload.byteLength
     entry.header = frame.header
+    if (frame.header.keyframe) entry.keyframes++
     if (!entry.first) entry.first = Buffer.from(frame.payload)
     received.set(frame.header.window, entry)
     return
@@ -98,9 +101,28 @@ async function main() {
 
   mkdirSync(OUT, { recursive: true })
   for (const [id, entry] of received) {
-    // JPEG SOI marker. Proves the payload is a real image, not framing debris.
-    const isJpeg = entry.first[0] === 0xff && entry.first[1] === 0xd8
-    check(isJpeg, `w${id} payload is a JPEG`, `first bytes ${entry.first[0].toString(16)} ${entry.first[1].toString(16)}`)
+    const fmt = entry.header.format
+    if (fmt === FrameFormat.H264) {
+      // Annex B start code. Proves the payload is a real elementary stream
+      // rather than framing debris or an AVCC-boxed frame the browser could
+      // not configure itself from.
+      const p = entry.first
+      const annexB =
+        (p[0] === 0 && p[1] === 0 && p[2] === 1) ||
+        (p[0] === 0 && p[1] === 0 && p[2] === 0 && p[3] === 1)
+      check(annexB, `w${id} payload is Annex B H.264`, `first bytes ${[...p.subarray(0, 5)].join(" ")}`)
+
+      // NAL type 7 is SPS. It must be present in the first keyframe or a
+      // browser attaching mid-stream cannot configure its decoder.
+      const hasSps = [...p.subarray(0, 64)].some((b, i, a) =>
+        i >= 3 && a[i - 3] === 0 && a[i - 2] === 0 && a[i - 1] === 1 && (b & 0x1f) === 7,
+      )
+      check(hasSps, `w${id} first frame carries SPS`, hasSps ? "in-band" : "missing")
+      check(entry.keyframes > 0, `w${id} sent at least one keyframe`, `${entry.keyframes}`)
+    } else {
+      const isJpeg = entry.first[0] === 0xff && entry.first[1] === 0xd8
+      check(isJpeg, `w${id} payload is a JPEG (fallback path)`, `first bytes ${entry.first[0].toString(16)} ${entry.first[1].toString(16)}`)
+    }
 
     const expected = layout(strip, output, DEFAULT_CONFIG).find((w) => w.id === id)
     if (expected) {
@@ -111,11 +133,13 @@ async function main() {
       )
     }
 
-    const path = `${OUT}/window-${id}.jpg`
+    const ext = fmt === FrameFormat.H264 ? "h264" : "jpg"
+    const path = `${OUT}/window-${id}.${ext}`
     writeFileSync(path, entry.first)
+    const perFrame = entry.bytes / entry.count / 1024
     console.log(
-      `        w${id}: ${entry.count} frames, ${(entry.bytes / 1024).toFixed(0)} KB total, ` +
-        `${entry.header.width}x${entry.header.height} -> ${path}`,
+      `        w${id}: ${fmt === FrameFormat.H264 ? "H.264" : "JPEG"}, ${entry.count} frames, ` +
+        `${perFrame.toFixed(1)} KB/frame, ${entry.header.width}x${entry.header.height} -> ${path}`,
     )
   }
 

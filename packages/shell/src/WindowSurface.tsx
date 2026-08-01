@@ -27,6 +27,14 @@ export interface WindowSurfaceProps {
   label: string
   /** Most recent decoded frame, or null before the first one arrives. */
   frame: ImageBitmap | null
+  /**
+   * Whether pixels are being requested for this window at all.
+   *
+   * A column scrolled off the strip is deliberately not streamed, which is what
+   * bounds the encoder budget. Saying it is "waiting for pixels" would be
+   * wrong: nothing is coming, and nothing should be.
+   */
+  streamed: boolean
   onFocus: () => void
 }
 
@@ -37,6 +45,7 @@ export function WindowSurface({
   focused,
   label,
   frame,
+  streamed,
   onFocus,
 }: WindowSurfaceProps): React.ReactElement {
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -80,7 +89,11 @@ export function WindowSurface({
       }}
     >
       <canvas ref={canvas} />
-      {frame ? null : <span className="waiting">w{id} waiting for pixels…</span>}
+      {frame ? null : (
+        <span className={streamed ? "waiting" : "offscreen"}>
+          {streamed ? `w${id} waiting for pixels…` : `w${id} off screen`}
+        </span>
+      )}
       <span className="surface-label">{label}</span>
     </div>
   )
