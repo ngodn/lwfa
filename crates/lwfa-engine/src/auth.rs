@@ -122,6 +122,13 @@ fn parse_dotenv(contents: &str, key: &str) -> Option<String> {
     None
 }
 
+/// The `.env` file in use, if there is one.
+///
+/// Public so the engine can watch it for changes; see `Lwfa::watch_dotenv`.
+pub fn dotenv_file() -> Option<std::path::PathBuf> {
+    dotenv_path()
+}
+
 /// Where to look for `.env`.
 ///
 /// The working directory first, so `cargo run` from the repo root finds it,

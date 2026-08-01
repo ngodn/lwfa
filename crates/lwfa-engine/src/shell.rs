@@ -28,9 +28,9 @@ use std::cell::Cell;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -116,6 +116,10 @@ impl FrameSink {
     }
 }
 
+/// The shared password, readable by the accept thread and replaceable by the
+/// compositor when `.env` changes. See `Lwfa::watch_dotenv`.
+pub type SharedToken = Arc<Mutex<String>>;
+
 /// Handle the compositor uses to talk to whatever shell is connected.
 pub struct ShellLink {
     sink: FrameSink,
@@ -133,9 +137,14 @@ impl ShellLink {
         token: String,
         events: LoopSender<ShellEvent>,
         max_in_flight: usize,
-    ) -> std::io::Result<(Self, std::net::SocketAddr)> {
+    ) -> std::io::Result<(Self, std::net::SocketAddr, SharedToken)> {
         let listener = TcpListener::bind(addr)?;
         let local = listener.local_addr()?;
+        // Shared rather than moved, so editing AUTH_PASS in .env takes effect
+        // on the next connection instead of needing a restart. Read once per
+        // handshake, which is far too rare for the lock to matter.
+        let token = Arc::new(Mutex::new(token));
+        let thread_token = Arc::clone(&token);
         let (outgoing_tx, outgoing_rx) = channel::<Outgoing>();
         let in_flight = Arc::new(AtomicUsize::new(0));
         let connected = Arc::new(AtomicBool::new(false));
@@ -147,7 +156,7 @@ impl ShellLink {
             .spawn(move || {
                 accept_loop(
                     listener,
-                    token,
+                    thread_token,
                     events,
                     outgoing_rx,
                     thread_in_flight,
@@ -165,6 +174,7 @@ impl ShellLink {
                 },
             },
             local,
+            token,
         ))
     }
 
@@ -208,7 +218,7 @@ impl ShellLink {
 /// always the one being served.
 fn accept_loop(
     listener: TcpListener,
-    token: String,
+    token: SharedToken,
     events: LoopSender<ShellEvent>,
     outgoing: Receiver<Outgoing>,
     in_flight: Arc<AtomicUsize>,
@@ -227,7 +237,7 @@ fn accept_loop(
         // been replaced.
         loop {
             match listener.accept() {
-                Ok((stream, peer)) => match handshake(stream, &token) {
+                Ok((stream, peer)) => match handshake(stream, &token.lock().unwrap().clone()) {
                     Some(socket) => {
                         if let Some(old) = current.take() {
                             tracing::info!(

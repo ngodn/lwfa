@@ -93,8 +93,26 @@ rather than acting on them. Alt rather than Super, because the host compositor
 sees keys first and usually has Super bound. The TTY backend will move these to
 Super.
 
+### Configuration
+
+Settings live in [`configs/defaults.toml`](configs/defaults.toml): ports, the
+terminal, Xwayland, encoder limits, render timings, layout defaults, and which
+workspace lwfa's own window should take in a host compositor. It is commented,
+and it is the place to look before going hunting for a constant.
+
+Precedence, highest first: environment variables, then `.env` (gitignored,
+machine-local, holds `AUTH_PASS`), then that file, then built-ins. Loading never
+fails: a missing or broken file falls back to defaults with a warning, because a
+compositor you cannot start is a compositor you cannot fix from inside. Unknown
+keys *are* rejected, so a typo is reported rather than silently ignored.
+
+The shell cannot read the file (it runs in a browser), so
+`scripts/gen-config.mjs` generates its layout defaults from the same source.
+That runs automatically from `dev`, `build`, `test` and `typecheck`.
+
 Environment:
 
+- `LWFA_CONFIG` — path to a config file, overriding `configs/defaults.toml`
 - `LWFA_TERMINAL` — which terminal to spawn (default `alacritty`)
 - `LWFA_NO_AUTOSTART` — set to skip opening a terminal on launch
 - `LWFA_NO_XWAYLAND` — set to skip starting Xwayland, so X11 clients cannot run
@@ -104,6 +122,9 @@ Environment:
 - `AUTH_PASS` — the shared password. Read from `.env` if not in the environment.
   A temporary one is generated if neither is set, which breaks bookmarked URLs
 - `LWFA_PROFILE` — log per-window capture timings
+- `LWFA_HEARTBEAT` — log redraws and ticks per second, once a second. `0
+  redraws` with a healthy tick count is a hidden window behaving correctly; both
+  at zero means the event loop has stopped
 - `RUST_LOG=debug` — Smithay is chatty at `info`; `warn` is usually the useful level
 
 ### Using it from another device
@@ -162,6 +183,10 @@ editing the file.
 > `AUTH_PASS` in `.env` keeps the password stable across restarts. Without it a
 > fresh one is generated each run and any bookmarked URL stops working.
 
+Changing `AUTH_PASS` takes effect within a couple of seconds, no restart needed
+— which matters, because restarting the compositor kills every window in the
+session. Existing connections are left alone; only the next one is affected.
+
 ### X11 clients
 
 Xwayland starts with the engine and gets its own display, so `DISPLAY` inside
@@ -186,9 +211,36 @@ and so are maximise and fullscreen: the shell owns column width. Override-
 redirect windows (menus, tooltips) render on the local display but are not yet
 composited into a remote shell, which is the same gap Wayland popups have.
 
-On Hyprland, `scripts/dev-nested.sh` launches the engine pinned to a specific
-workspace (default 2, override with `LWFA_DEV_WORKSPACE`) so it never lands on
-whatever you are using.
+### Giving lwfa a workspace of its own
+
+lwfa's window is a whole desktop, not an app: it runs full-screen and takes the
+keyboard, so it should not share a workspace with anything you were using. The
+engine reports app id `lwfa`, so a host compositor can rule on it. On Hyprland
+(0.53+ syntax):
+
+```
+# ~/.config/hypr/monitors.conf — a workspace of its own, kept alive when empty
+workspace = 10, monitor:DP-1, persistent:true
+
+# ~/.config/hypr/hyprland.conf
+windowrule = workspace 10 silent, match:class ^(lwfa)$
+windowrule = fullscreen true, match:class ^(lwfa)$
+```
+
+`silent` places the window there *without* switching your view to it, so
+starting the engine never interrupts what you are doing. Keep the workspace
+number in step with `[host].workspace` in `configs/defaults.toml`, which is
+what `scripts/dev-nested.sh` reads.
+
+A window on a workspace you are not looking at gets no frame callbacks from the
+host, which the nested backend now handles in two places: the streaming path is
+driven from a timer so remote clients keep working, and the on-screen path
+refuses to present faster than a display interval, because presenting to a
+surface the host has never shown blocks forever and takes the whole compositor
+with it. See `[render]` in the config.
+
+`scripts/dev-nested.sh` does the same placement on a host without those rules
+installed, and verifies it afterwards.
 
 ## Tests
 

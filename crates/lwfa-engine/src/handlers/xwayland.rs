@@ -27,9 +27,12 @@
 //! Menus, tooltips and drag icons are `override-redirect`: X11 windows that
 //! opt out of window management entirely and place themselves. They are mapped
 //! where the client asked and are *not* given a `WindowId`, so the shell never
-//! sees them and never lays them out. On the local display they work normally.
-//! In the browser they are not yet composited, because a remote stream is keyed
-//! by window id and these have none. That is the same gap Wayland popups have.
+//! sees them and never lays them out.
+//!
+//! A remote frame is addressed by window id and these have none, so rather than
+//! invent ids for them they are drawn into the frame of whichever window they
+//! sit on top of. See `Lwfa::overlays_for`, which does the same for Wayland
+//! popups.
 
 use smithay::delegate_xwayland_shell;
 use smithay::desktop::{Window, WindowSurface};

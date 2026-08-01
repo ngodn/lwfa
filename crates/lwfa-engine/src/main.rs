@@ -72,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Lazy startup is what most compositors do and it does save ~30MB, but it
 /// means `DISPLAY` is unset when early clients are spawned, and a client that
 /// checks once at startup will already have decided X11 is unavailable.
-fn init_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut CalloopData) {
+fn init_xwayland(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut CalloopData) {
     if !data.config.xwayland() {
         tracing::info!("xwayland disabled; X11 clients will not run");
         return;
@@ -126,7 +126,7 @@ fn init_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut CalloopData
 
 /// Start the shell listener and route its events into the compositor.
 fn init_shell_link(
-    event_loop: &mut EventLoop<CalloopData>,
+    event_loop: &mut EventLoop<'static, CalloopData>,
     data: &mut CalloopData,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Environment first, then .env, then configs/defaults.toml.
@@ -143,7 +143,7 @@ fn init_shell_link(
         }
     };
 
-    let (link, bound) = match ShellLink::bind(
+    let (link, bound, shared_token) = match ShellLink::bind(
         &addr,
         token.clone(),
         events_tx,
@@ -169,6 +169,7 @@ fn init_shell_link(
     }
     data.shell = Some(link);
     announce(bound, &token);
+    watch_dotenv(event_loop, shared_token);
 
     event_loop
         .handle()
@@ -181,6 +182,62 @@ fn init_shell_link(
         .map_err(|err| format!("failed to insert the shell event source: {err}"))?;
 
     Ok(())
+}
+
+/// Re-read `AUTH_PASS` when `.env` changes.
+///
+/// Without this, changing the password means restarting the compositor, which
+/// means killing every window in the session. That is a bad trade for a typo,
+/// and it is exactly what you want to do after typing the password wrong on a
+/// tablet a few times.
+///
+/// Polled rather than inotified: one `stat` every two seconds costs nothing
+/// measurable, and it keeps working when an editor replaces the file rather
+/// than writing it in place, which is what most editors do and what breaks a
+/// naive inotify watch on the file itself.
+///
+/// Only the *next* connection is affected. Whoever is already connected stays
+/// connected, which is deliberate: changing the password should not knock the
+/// tablet you are holding off the session.
+fn watch_dotenv(
+    event_loop: &mut EventLoop<'static, CalloopData>,
+    token: crate::shell::SharedToken,
+) {
+    const POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+    let Some(path) = auth::dotenv_file() else {
+        return;
+    };
+    let mut seen = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+
+    let inserted = event_loop.handle().insert_source(
+        smithay::reexports::calloop::timer::Timer::from_duration(POLL),
+        move |_, _, _: &mut CalloopData| {
+            let now = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            if now != seen {
+                seen = now;
+                match auth::resolve_token() {
+                    Ok(next) => {
+                        let mut current = token.lock().unwrap();
+                        if *current != next {
+                            *current = next;
+                            tracing::info!(
+                                "{} changed in .env; the new one is live for the next connection",
+                                auth::PASS_VAR
+                            );
+                        }
+                    }
+                    // Keep the old password rather than locking everyone out
+                    // over a half-written file.
+                    Err(err) => tracing::warn!("could not re-read {}: {err}", path.display()),
+                }
+            }
+            smithay::reexports::calloop::timer::TimeoutAction::ToDuration(POLL)
+        },
+    );
+    if let Err(err) = inserted {
+        tracing::warn!("could not watch .env: {err}. A password change will need a restart.");
+    }
 }
 
 /// Tell the user where to connect, and warn if the socket left this machine.
