@@ -59,6 +59,21 @@ export interface WindowLayout {
   z: number
 }
 
+/**
+ * A pointer button, Linux evdev numbering (`BTN_LEFT` = 0x110).
+ * Not the browser's 0/1/2, which is a different numbering entirely.
+ */
+export type ButtonCode = number
+
+/**
+ * A key, Linux evdev numbering (`KEY_A` = 30).
+ *
+ * Derived from `KeyboardEvent.code` (the physical key), never from
+ * `KeyboardEvent.key` (the character), or the layout would be applied twice.
+ * See `packages/shell/src/input.ts`.
+ */
+export type KeyCode = number
+
 /** Keyboard modifier state at the time of a key press. */
 export interface Modifiers {
   alt: boolean
@@ -99,6 +114,21 @@ export type ToEngine =
    * streaming. A shell compositing natively asks for none.
    */
   | { type: "setStreams"; windows: WindowId[] }
+  /**
+   * Pointer moved within a window. Coordinates are window-relative logical
+   * pixels, because during an animation the engine's actual window position
+   * differs from the shell's target and output-relative coordinates would land
+   * clicks where the window is heading rather than where it is.
+   */
+  | { type: "pointerMotion"; window: WindowId; x: number; y: number }
+  | { type: "pointerButton"; button: ButtonCode; pressed: boolean }
+  | { type: "pointerAxis"; horizontal: number; vertical: number }
+  | { type: "pointerLeave" }
+  | { type: "key"; key: KeyCode; pressed: boolean }
+  /** Touch is first-class, not synthesised into pointer events. */
+  | { type: "touchDown"; window: WindowId; id: number; x: number; y: number }
+  | { type: "touchMotion"; window: WindowId; id: number; x: number; y: number }
+  | { type: "touchUp"; id: number }
 
 /** Motion's defaults, matching `SpringSpec::default` on the Rust side. */
 export const DEFAULT_SPRING: SpringSpec = { stiffness: 100, damping: 10, mass: 1 }
@@ -363,6 +393,60 @@ export function decodeToEngine(text: string): ToEngine {
       const where = `${at}.spawn`
       noExtraKeys(o, ["type", "command"], where)
       return { type: "spawn", command: str(o, "command", where) }
+    }
+    case "pointerMotion": {
+      const where = `${at}.pointerMotion`
+      noExtraKeys(o, ["type", "window", "x", "y"], where)
+      return {
+        type: "pointerMotion",
+        window: int(o, "window", where),
+        x: num(o, "x", where),
+        y: num(o, "y", where),
+      }
+    }
+    case "pointerButton": {
+      const where = `${at}.pointerButton`
+      noExtraKeys(o, ["type", "button", "pressed"], where)
+      return {
+        type: "pointerButton",
+        button: int(o, "button", where),
+        pressed: bool(o, "pressed", where),
+      }
+    }
+    case "pointerAxis": {
+      const where = `${at}.pointerAxis`
+      noExtraKeys(o, ["type", "horizontal", "vertical"], where)
+      return {
+        type: "pointerAxis",
+        horizontal: num(o, "horizontal", where),
+        vertical: num(o, "vertical", where),
+      }
+    }
+    case "pointerLeave": {
+      noExtraKeys(o, ["type"], `${at}.pointerLeave`)
+      return { type: "pointerLeave" }
+    }
+    case "key": {
+      const where = `${at}.key`
+      noExtraKeys(o, ["type", "key", "pressed"], where)
+      return { type: "key", key: int(o, "key", where), pressed: bool(o, "pressed", where) }
+    }
+    case "touchDown":
+    case "touchMotion": {
+      const where = `${at}.${t}`
+      noExtraKeys(o, ["type", "window", "id", "x", "y"], where)
+      return {
+        type: t,
+        window: int(o, "window", where),
+        id: int(o, "id", where),
+        x: num(o, "x", where),
+        y: num(o, "y", where),
+      }
+    }
+    case "touchUp": {
+      const where = `${at}.touchUp`
+      noExtraKeys(o, ["type", "id"], where)
+      return { type: "touchUp", id: int(o, "id", where) }
     }
     case "setStreams": {
       const where = `${at}.setStreams`

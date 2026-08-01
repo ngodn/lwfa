@@ -161,29 +161,19 @@ pub fn init_winit(
 
                     // Per-surface capture for any remote shell. Does
                     // nothing unless a shell has asked for streams.
-                    {
-                        let (renderer, _fb) = match backend.bind() {
-                            Ok(bound) => bound,
-                            Err(err) => {
-                                tracing::error!("stream capture: could not bind: {err}");
-                                return;
-                            }
-                        };
-                        state.stream_frames(renderer);
-                    }
+                    //
+                    // `renderer()`, not `bind()`. `bind()` acquires a buffer
+                    // from the swapchain, and one acquired here after `submit`
+                    // is never presented, which makes the output flicker.
+                    // Capture renders into its own offscreen texture and needs
+                    // no backend buffer at all.
+                    state.stream_frames(backend.renderer());
 
                     // Debug: dump one PNG per window so capture can be
                     // verified against what is actually on screen. Off unless
                     // LWFA_CAPTURE_DUMP names a directory.
                     if let Some(dir) = capture_dump_dir() {
-                        let (renderer, _fb) = match backend.bind() {
-                            Ok(bound) => bound,
-                            Err(err) => {
-                                tracing::error!("capture dump: could not bind: {err}");
-                                return;
-                            }
-                        };
-                        state.dump_captures(renderer, &dir);
+                        state.dump_captures(backend.renderer(), &dir);
                     }
 
                     state.space.refresh();

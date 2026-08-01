@@ -14,7 +14,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { DecodedFrame, ToShell, WindowId, WindowInfo } from "@lwfa/proto"
 import { Connection, type Status } from "./connection.js"
 import { FrameDecoder, supportsH264 } from "./decode.js"
-import { WindowSurface } from "./WindowSurface.js"
+import { WindowSurface, type SurfaceInput } from "./WindowSurface.js"
+import { evdevFromCode, isShellKey } from "./input.js"
 import {
   DEFAULT_CONFIG,
   EMPTY,
@@ -62,6 +63,36 @@ export function App(): React.ReactElement {
 
   const streamingRef = useRef(streaming)
   streamingRef.current = streaming
+
+  /** Forward input aimed at a window, tagging it with which window it hit. */
+  const sendInput = useCallback((id: WindowId, event: SurfaceInput) => {
+    const conn = connection.current
+    if (!conn) return
+    switch (event.kind) {
+      case "motion":
+        conn.send({ type: "pointerMotion", window: id, x: event.x, y: event.y })
+        break
+      case "button":
+        conn.send({ type: "pointerButton", button: event.button, pressed: event.pressed })
+        break
+      case "axis":
+        conn.send({
+          type: "pointerAxis",
+          horizontal: event.horizontal,
+          vertical: event.vertical,
+        })
+        break
+      case "touchDown":
+        conn.send({ type: "touchDown", window: id, id: event.id, x: event.x, y: event.y })
+        break
+      case "touchMotion":
+        conn.send({ type: "touchMotion", window: id, id: event.id, x: event.x, y: event.y })
+        break
+      case "touchUp":
+        conn.send({ type: "touchUp", id: event.id })
+        break
+    }
+  }, [])
 
   /** Push the current strip to the engine as a target plus a spring. */
   const push = useCallback((next: StripState, out: Output, animate = true) => {
@@ -214,6 +245,47 @@ export function App(): React.ReactElement {
     }
   }, [push, update])
 
+  // Keyboard input is captured on the document rather than per element,
+  // because keyboard focus lives in the compositor and there is nothing
+  // focusable in the DOM that corresponds to it.
+  useEffect(() => {
+    if (status !== "connected") return
+
+    const forward = (event: KeyboardEvent, pressed: boolean) => {
+      if (isShellKey(event)) return
+      // Drop browser autorepeat. Wayland tells clients the repeat rate and
+      // they generate their own repeats, and the compositor's keyboard handle
+      // repeats too. Forwarding the browser's as well means a held key repeats
+      // two or three times over, which shows up as duplicated characters.
+      if (pressed && event.repeat) return
+      const key = evdevFromCode(event.code)
+      if (key === null) return
+      // Stop the browser acting on it too. Without this Ctrl+W closes the tab
+      // instead of reaching the application, which is a very bad surprise.
+      event.preventDefault()
+      connection.current?.send({ type: "key", key, pressed })
+    }
+
+    const down = (event: KeyboardEvent) => forward(event, true)
+    const up = (event: KeyboardEvent) => forward(event, false)
+    // Capture phase, so React's own handlers do not swallow anything first.
+    window.addEventListener("keydown", down, { capture: true })
+    window.addEventListener("keyup", up, { capture: true })
+
+    const blur = () => {
+      // Held keys would otherwise stay down in the compositor forever, which
+      // shows up as a key repeating until you alt-tab back and press it again.
+      connection.current?.send({ type: "pointerLeave" })
+    }
+    window.addEventListener("blur", blur)
+
+    return () => {
+      window.removeEventListener("keydown", down, { capture: true })
+      window.removeEventListener("keyup", up, { capture: true })
+      window.removeEventListener("blur", blur)
+    }
+  }, [status])
+
   const width = output.width > 0 ? columnWidth(output, DEFAULT_CONFIG) : 0
   const placed = useMemo(
     () => (output.width > 0 ? layout(strip, output, DEFAULT_CONFIG) : []),
@@ -338,6 +410,7 @@ export function App(): React.ReactElement {
                 // streamed, so it is not "waiting" for anything.
                 streamed={streaming && intersectsViewport(w.rect, output.width)}
                 onFocus={() => update((s, o) => focusWindow(s, w.id, o, DEFAULT_CONFIG))}
+                onInput={(event) => sendInput(w.id, event)}
               />
             ))}
           </div>

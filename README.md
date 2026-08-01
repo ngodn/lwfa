@@ -28,6 +28,8 @@ Milestone 4 of 7 complete. See the build order in the architecture doc.
       (the layer-shell chrome path is *not* done; see the architecture doc)
 - [x] **4. Per-surface streaming and the remote backend** — hardware H.264 via
       NVENC, decoded with WebCodecs, composited in the browser DOM
+- [x] **Remote input** — pointer, keyboard and touch from the browser into the
+      compositor. **Localhost only, no auth yet** (see the warning below)
 - [ ] 5. Appearance vocabulary in both backends
 - [ ] 6. iPad: WebCodecs, gestures, responsive breakpoints
 - [ ] 7. Clipboard, audio, multi-monitor, DPI, reconnect, auth, packaging
@@ -83,8 +85,10 @@ Environment:
 - `LWFA_SHELL_ADDR` — where to listen for a shell (default `127.0.0.1:9843`)
 - `RUST_LOG=debug` — Smithay is chatty at `info`; `warn` is usually the useful level
 
-> The shell socket has **no authentication** and can spawn processes, so it is
-> bound to localhost. Do not expose it off the machine until milestone 7.
+> **The shell socket has no authentication.** It accepts input injection and
+> can spawn processes, so anything that reaches the port has full control of
+> the session. It is bound to localhost and must stay there until auth exists.
+> Do not set `LWFA_SHELL_ADDR` to a non-loopback address.
 
 On Hyprland, `scripts/dev-nested.sh` launches the engine pinned to a specific
 workspace (default 2, override with `LWFA_DEV_WORKSPACE`) so it never lands on

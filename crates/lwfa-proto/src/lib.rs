@@ -203,6 +203,26 @@ pub enum ToShell {
     KeyBinding { key: String, modifiers: Modifiers },
 }
 
+/// A pointer button, using Linux evdev numbering (`BTN_LEFT` = 0x110).
+///
+/// evdev rather than the browser's 0/1/2, because that is what Wayland clients
+/// receive and what `wl_pointer` documents. Translating once in the shell is
+/// better than every consumer guessing.
+pub type ButtonCode = u32;
+
+/// A key, using Linux evdev numbering (`KEY_A` = 30).
+///
+/// The browser reports `KeyboardEvent.code`, a physical-key name like `"KeyA"`.
+/// The shell maps that to evdev here rather than sending the string, because
+/// the engine would otherwise need the same table plus a parser, and because
+/// evdev codes are what xkb actually consumes (as `code + 8`).
+///
+/// Deliberately not `KeyboardEvent.key`: that is the *character produced*,
+/// which already has the layout and modifiers applied. Sending it would apply
+/// the layout twice, so a Dvorak user typing on a remote machine set to QWERTY
+/// would get nonsense.
+pub type KeyCode = u32;
+
 /// Shell to engine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
@@ -226,6 +246,59 @@ pub enum ToEngine {
     /// Launch a program. The engine sets `WAYLAND_DISPLAY` to its own socket.
     #[serde(rename_all = "camelCase")]
     Spawn { command: String },
+
+    /// Pointer moved within a window.
+    ///
+    /// # Why coordinates are window-relative
+    ///
+    /// `x` and `y` are logical pixels from the window's top-left, not from the
+    /// output's. During a spring animation the engine's actual window position
+    /// differs from the target the shell last computed, so output-relative
+    /// coordinates would land the click wherever the window *was going to be*
+    /// rather than where it is. Naming the window removes the ambiguity
+    /// entirely, and the engine already knows where it put things.
+    #[serde(rename_all = "camelCase")]
+    PointerMotion { window: WindowId, x: f64, y: f64 },
+
+    /// Pointer button pressed or released, on the window last moved over.
+    #[serde(rename_all = "camelCase")]
+    PointerButton { button: ButtonCode, pressed: bool },
+
+    /// Scroll. Values are logical pixels, positive right and down.
+    #[serde(rename_all = "camelCase")]
+    PointerAxis { horizontal: f64, vertical: f64 },
+
+    /// The pointer left the shell's window area entirely.
+    #[serde(rename_all = "camelCase")]
+    PointerLeave,
+
+    /// Key pressed or released. Goes to whatever has keyboard focus.
+    #[serde(rename_all = "camelCase")]
+    Key { key: KeyCode, pressed: bool },
+
+    /// A finger touched down. `id` distinguishes simultaneous fingers.
+    ///
+    /// Touch is first-class rather than synthesised into pointer events,
+    /// because `wl_touch` exists and clients that support it handle multi-touch
+    /// properly. Faking a pointer would throw away every finger but one.
+    #[serde(rename_all = "camelCase")]
+    TouchDown {
+        window: WindowId,
+        id: i32,
+        x: f64,
+        y: f64,
+    },
+
+    #[serde(rename_all = "camelCase")]
+    TouchMotion {
+        window: WindowId,
+        id: i32,
+        x: f64,
+        y: f64,
+    },
+
+    #[serde(rename_all = "camelCase")]
+    TouchUp { id: i32 },
 
     /// Which windows the shell wants pixels for.
     ///

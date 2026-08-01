@@ -19,6 +19,7 @@ mod encode;
 mod handlers;
 mod input;
 mod layout;
+mod remote_input;
 mod shell;
 mod state;
 mod winit;
@@ -171,6 +172,21 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 state.streaming = next;
                 tracing::debug!("streaming {} window(s)", state.streaming.len());
             }
+            ToEngine::PointerMotion { window, x, y } => state.remote_pointer_motion(window, x, y),
+            ToEngine::PointerButton { button, pressed } => {
+                state.remote_pointer_button(button, pressed)
+            }
+            ToEngine::PointerAxis {
+                horizontal,
+                vertical,
+            } => state.remote_pointer_axis(horizontal, vertical),
+            ToEngine::PointerLeave => state.remote_pointer_leave(),
+            ToEngine::Key { key, pressed } => state.remote_key(key, pressed),
+            ToEngine::TouchDown { window, id, x, y } => state.remote_touch_down(window, id, x, y),
+            ToEngine::TouchMotion { window, id, x, y } => {
+                state.remote_touch_motion(window, id, x, y)
+            }
+            ToEngine::TouchUp { id } => state.remote_touch_up(id),
             ToEngine::Spawn { command } => {
                 // NOTE: arbitrary command execution, reachable by anything that
                 // can open the socket. Acceptable while bound to localhost with

@@ -97,6 +97,11 @@ impl Lwfa {
         seat.add_keyboard(Default::default(), 200, 25)
             .expect("failed to add keyboard to seat");
         seat.add_pointer();
+        // Touch is advertised even though the nested backend has no
+        // touchscreen: it exists for remote fingers. A client that sees no
+        // wl_touch will never handle multi-touch, so this has to be present
+        // before the first client connects, not added when an iPad appears.
+        seat.add_touch();
 
         let socket_name = Self::init_wayland_listener(display, event_loop);
         let loop_signal = event_loop.get_signal();

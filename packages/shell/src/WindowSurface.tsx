@@ -18,6 +18,7 @@
 
 import { useEffect, useRef } from "react"
 import type { Rect, WindowId } from "@lwfa/proto"
+import { evdevFromButton, wheelDelta, windowPoint } from "./input.js"
 
 export interface WindowSurfaceProps {
   id: WindowId
@@ -36,7 +37,18 @@ export interface WindowSurfaceProps {
    */
   streamed: boolean
   onFocus: () => void
+  /** Input headed for the window itself, in window-relative logical pixels. */
+  onInput: (event: SurfaceInput) => void
 }
+
+/** Input aimed at a specific window, already in its coordinate space. */
+export type SurfaceInput =
+  | { kind: "motion"; x: number; y: number }
+  | { kind: "button"; button: number; pressed: boolean }
+  | { kind: "axis"; horizontal: number; vertical: number }
+  | { kind: "touchDown"; id: number; x: number; y: number }
+  | { kind: "touchMotion"; id: number; x: number; y: number }
+  | { kind: "touchUp"; id: number }
 
 export function WindowSurface({
   id,
@@ -47,6 +59,7 @@ export function WindowSurface({
   frame,
   streamed,
   onFocus,
+  onInput,
 }: WindowSurfaceProps): React.ReactElement {
   const canvas = useRef<HTMLCanvasElement>(null)
 
@@ -80,12 +93,48 @@ export function WindowSurface({
         height: `${rect.height}px`,
         zIndex: z,
       }}
-      onPointerDown={onFocus}
-      role="button"
-      tabIndex={0}
+      role="application"
       aria-label={label}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onFocus()
+      onPointerDown={(event) => {
+        onFocus()
+        const point = windowPoint(event, event.currentTarget, rect)
+        if (!point) return
+        // Capture, so a drag that leaves the element still delivers its
+        // release. Without this a client is left with a button stuck down.
+        event.currentTarget.setPointerCapture(event.pointerId)
+
+        if (event.pointerType === "touch") {
+          onInput({ kind: "touchDown", id: event.pointerId, ...point })
+          return
+        }
+        const button = evdevFromButton(event.button)
+        onInput({ kind: "motion", ...point })
+        if (button !== null) onInput({ kind: "button", button, pressed: true })
+      }}
+      onPointerMove={(event) => {
+        const point = windowPoint(event, event.currentTarget, rect)
+        if (!point) return
+        onInput(
+          event.pointerType === "touch"
+            ? { kind: "touchMotion", id: event.pointerId, ...point }
+            : { kind: "motion", ...point },
+        )
+      }}
+      onPointerUp={(event) => {
+        if (event.pointerType === "touch") {
+          onInput({ kind: "touchUp", id: event.pointerId })
+          return
+        }
+        const button = evdevFromButton(event.button)
+        if (button !== null) onInput({ kind: "button", button, pressed: false })
+      }}
+      onPointerCancel={(event) => {
+        if (event.pointerType === "touch") onInput({ kind: "touchUp", id: event.pointerId })
+      }}
+      onWheel={(event) => onInput({ kind: "axis", ...wheelDelta(event.nativeEvent) })}
+      onContextMenu={(event) => {
+        // Right-click belongs to the application, not to the browser's menu.
+        event.preventDefault()
       }}
     >
       <canvas ref={canvas} />
