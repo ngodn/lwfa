@@ -105,7 +105,14 @@ export const ShellChrome = memo(function ShellChrome({
 
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
-      <div className={cn("flex h-full w-full overflow-hidden bg-backdrop", shellDirection(edge))}>
+      {/* Safe-area padding lives here, once. Installed to a home screen the
+          page draws edge to edge (iOS `black-translucent`, Android
+          edge-to-edge), so without this the desktop's top row sits under the
+          status bar. The backdrop colour still fills the insets, which is what
+          makes the translucent status bar look intentional. Fixed-position
+          things (the panel sheet) do not inherit padding and offset
+          themselves; see PanelHost. */}
+      <div className={cn("pt-safe pb-safe pl-safe pr-safe flex h-full w-full overflow-hidden bg-backdrop", shellDirection(edge))}>
         <NavRail active={active} fired={fired} onSelect={select} />
         {/* A column, so a docked keyboard takes space from the desktop rather
             than covering the line being typed into. The gamepad positions
