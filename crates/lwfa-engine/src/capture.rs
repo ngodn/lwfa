@@ -334,9 +334,39 @@ impl SurfaceCapture {
             Point::from((-loc.x, -loc.y))
         };
 
-        // Building elements is CPU-only and cheap. Doing it before the skip
-        // check is what lets the commit counters be read at all: they live on
-        // the elements.
+        // The damage check comes first and reads the commit counters straight
+        // off the surface tree, before a single render element is built or a
+        // client buffer imported. An idle window used to pay for all of that
+        // every pass just to learn it was idle, and idle windows are most
+        // windows most of the time.
+        //
+        // The overlay trees join the same set, which is what makes a menu
+        // appearing count as damage. Without that the window would look
+        // unchanged and the menu would never be sent.
+        let mut commits: Vec<CommitCounter> = Vec::new();
+        tree_commits(&surface, &mut commits);
+        for (overlay, _) in overlays {
+            tree_commits(overlay, &mut commits);
+        }
+
+        // Recreate the buffer when the window resizes; reuse it otherwise, so
+        // the steady state allocates nothing.
+        let needs_new_buffer = match self.targets.get(&id) {
+            Some(target) => target.size != size,
+            None => true,
+        };
+
+        if !needs_new_buffer
+            && self
+                .targets
+                .get(&id)
+                .is_some_and(|t| t.last_commits == commits)
+        {
+            // Unchanged. Skipping everything below here is what makes
+            // capturing many windows affordable.
+            return;
+        }
+
         let mut elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
             render_elements_from_surface_tree(
                 renderer,
@@ -349,10 +379,6 @@ impl SurfaceCapture {
 
         // Prepended, because this list is drawn back to front in reverse: the
         // popup has to end up in front of the window it belongs to.
-        //
-        // Their commit counters join the damage set below, which is what makes a
-        // menu appearing count as damage. Without that the window would look
-        // unchanged and the menu would never be sent.
         for (overlay, offset) in overlays {
             let mut popup: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                 render_elements_from_surface_tree(
@@ -366,15 +392,6 @@ impl SurfaceCapture {
             popup.append(&mut elements);
             elements = popup;
         }
-
-        let commits: Vec<CommitCounter> = elements.iter().map(Element::current_commit).collect();
-
-        // Recreate the buffer when the window resizes; reuse it otherwise, so
-        // the steady state allocates nothing.
-        let needs_new_buffer = match self.targets.get(&id) {
-            Some(target) => target.size != size,
-            None => true,
-        };
 
         if needs_new_buffer {
             let Ok(texture) = renderer
@@ -394,14 +411,6 @@ impl SurfaceCapture {
                     pending: None,
                 },
             );
-        } else if self
-            .targets
-            .get(&id)
-            .is_some_and(|t| t.last_commits == commits)
-        {
-            // Unchanged. Skipping the render and read-back here is what makes
-            // capturing many windows affordable.
-            return;
         }
 
         let Some(target) = self.targets.get_mut(&id) else {
@@ -489,6 +498,43 @@ impl SurfaceCapture {
         // those comes next.
         target.pending = Some(Pending { mapping, size });
     }
+}
+
+/// The commit counters of every surface in a tree, in traversal order.
+///
+/// This is the cheap read behind the damage check: it walks the tree and
+/// copies one counter per surface, where building render elements walks the
+/// same tree while also importing client buffers into the renderer. The
+/// counters are the same ones a render element would report, because both
+/// read them from the surface's renderer state.
+///
+/// A surface no renderer has imported yet has no state and contributes
+/// nothing; once it is imported it appears, the set changes, and that reads
+/// as damage, which it is.
+fn tree_commits(surface: &WlSurface, out: &mut Vec<CommitCounter>) {
+    use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
+    use smithay::wayland::compositor::{TraversalAction, with_surface_tree_downward};
+
+    with_surface_tree_downward(
+        surface,
+        (),
+        |_, _, ()| TraversalAction::DoChildren(()),
+        // The traversal hands each surface's states in: they must be read from
+        // that argument, not through `with_states`, because the walk already
+        // holds the surface's state lock and taking it again deadlocks the
+        // calloop thread. That is the whole compositor: render, input, all of
+        // it, stopped on the first captured frame.
+        |_, states, ()| {
+            if let Some(state) = states
+                .data_map
+                .get::<RendererSurfaceStateUserData>()
+                .and_then(|data| data.lock().ok())
+            {
+                out.push(state.current_commit());
+            }
+        },
+        |_, _, ()| true,
+    );
 }
 
 /// Copy tightly-packed RGBA rows into an ffmpeg frame, honouring its stride.

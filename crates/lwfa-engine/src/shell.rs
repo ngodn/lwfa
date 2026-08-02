@@ -41,6 +41,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
+use std::os::fd::{AsFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -58,12 +59,18 @@ use crate::auth;
 // shell page and 6734 is this socket. Loopback by default, so exposing it to
 // the network is always a deliberate edit rather than a side effect of
 // installing.
-/// How often the connection thread checks for outgoing messages while idle.
+/// The connection thread's poll backstop.
 ///
-/// These are window lifecycle events, not per-frame data, so this only bounds
-/// notification latency and costs almost nothing. Video will not come through
-/// this socket.
-const POLL_INTERVAL: Duration = Duration::from_millis(4);
+/// The thread sleeps in `poll(2)` on every socket plus an eventfd the
+/// compositor rings whenever it queues something, so real traffic wakes it
+/// immediately. It used to spin on a 4ms sleep instead, which cost 250
+/// wakeups a second while idle and up to 4ms of queue latency on every
+/// encoded frame. The backstop only bounds how long a missed edge case could
+/// sit, and none is known.
+const POLL_BACKSTOP: rustix::event::Timespec = rustix::event::Timespec {
+    tv_sec: 0,
+    tv_nsec: 500_000_000,
+};
 
 /// Bound on how long a connecting client may stall the accept loop.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -123,9 +130,23 @@ pub enum ShellEvent {
 
 /// Something queued for the shell: a control message or a frame of pixels.
 enum Outgoing {
-    Control(Box<ToShell>),
-    /// Already-encoded binary frame, header included.
-    Frame(Vec<u8>),
+    /// Serialized once by whoever queues it; a broadcast to five devices
+    /// shares one buffer five ways instead of serializing five times.
+    Control(tungstenite::Utf8Bytes),
+    /// Already-encoded binary frame, header included. `Bytes`, so the fan-out
+    /// to several watching devices clones a reference count, not megabytes.
+    Frame(tungstenite::Bytes),
+}
+
+/// Serialize a control message for the wire.
+fn control(message: &ToShell) -> Option<tungstenite::Utf8Bytes> {
+    match serde_json::to_string(message) {
+        Ok(json) => Some(json.into()),
+        Err(err) => {
+            tracing::error!("could not serialize {message:?}: {err}");
+            None
+        }
+    }
 }
 
 /// One connected client's outbound queue.
@@ -177,16 +198,27 @@ pub struct Clients {
     /// `[stream].max_frames_in_flight`, per client.
     max_in_flight: usize,
     next_id: AtomicU64,
+    /// Rung after anything is queued, so the connection thread's `poll` wakes
+    /// now rather than at its backstop. An eventfd: writes add to a counter,
+    /// one read drains it, and it cannot block or fill up in any way that
+    /// matters here.
+    wake: OwnedFd,
 }
 
 impl Clients {
-    fn new(max_in_flight: usize) -> Self {
+    fn new(max_in_flight: usize, wake: OwnedFd) -> Self {
         Self {
             slots: Mutex::new(Vec::new()),
             max_in_flight: max_in_flight.max(1),
             // Ids start at 1 so 0 can mean "nobody" in logs and tests.
             next_id: AtomicU64::new(1),
+            wake,
         }
+    }
+
+    /// Wake the connection thread. Failure means only a backstop-length delay.
+    fn wake(&self) {
+        let _ = rustix::io::write(&self.wake, &1u64.to_ne_bytes());
     }
 
     fn allocate(&self) -> SessionId {
@@ -240,12 +272,13 @@ impl Clients {
 
     /// Queue a control message for everyone.
     pub fn broadcast(&self, message: ToShell) {
+        let Some(json) = control(&message) else { return };
         let Ok(slots) = self.slots.lock() else { return };
         for slot in slots.iter().filter(|s| s.alive()) {
-            let _ = slot
-                .outgoing
-                .send(Outgoing::Control(Box::new(message.clone())));
+            let _ = slot.outgoing.send(Outgoing::Control(json.clone()));
         }
+        drop(slots);
+        self.wake();
     }
 
     /// Ask the accept thread to disconnect one client.
@@ -261,15 +294,18 @@ impl Clients {
             // seeing your screen now.
             slot.connected.store(false, Ordering::Relaxed);
         });
+        self.wake();
     }
 
     /// Queue a control message for one connection.
     pub fn send_to(&self, id: SessionId, message: ToShell) {
+        let Some(json) = control(&message) else { return };
         self.with(id, |slot| {
             if slot.alive() {
-                let _ = slot.outgoing.send(Outgoing::Control(Box::new(message)));
+                let _ = slot.outgoing.send(Outgoing::Control(json));
             }
         });
+        self.wake();
     }
 }
 
@@ -306,6 +342,7 @@ impl FrameSink {
     /// gap between what it hears and what it sees. Silence that recovers beats
     /// audio that drifts further out of sync every second.
     pub fn send_audio(&self, chunk: Vec<u8>) {
+        let chunk = tungstenite::Bytes::from(chunk);
         let Ok(slots) = self.clients.slots.lock() else {
             return;
         };
@@ -319,15 +356,19 @@ impl FrameSink {
                 slot.in_flight.fetch_sub(1, Ordering::Relaxed);
             }
         }
+        drop(slots);
+        self.clients.wake();
     }
 
     /// Hand a finished frame to everyone who asked for that window.
     ///
-    /// The bytes are cloned per recipient. That is a real cost with several
-    /// devices watching, and it is still the right trade: the alternative is
-    /// encoding the same window once per client, which costs an NVENC session
-    /// each and there are only eight.
+    /// The fan-out clones a `Bytes`, which is a reference count. Several
+    /// devices watching the same window share one buffer, and the socket
+    /// hands it to the kernel without copying either. The alternative of
+    /// encoding per client would cost an NVENC session each, and there are
+    /// only eight.
     pub fn send_frame(&self, window: WindowId, bytes: Vec<u8>) {
+        let bytes = tungstenite::Bytes::from(bytes);
         let Ok(slots) = self.clients.slots.lock() else {
             return;
         };
@@ -349,6 +390,8 @@ impl FrameSink {
                 slot.in_flight.fetch_sub(1, Ordering::Relaxed);
             }
         }
+        drop(slots);
+        self.clients.wake();
     }
 }
 
@@ -382,7 +425,12 @@ impl ShellLink {
         // handshake, which is far too rare for the lock to matter.
         let token = Arc::new(Mutex::new(token));
         let thread_token = Arc::clone(&token);
-        let clients = Arc::new(Clients::new(max_in_flight));
+        let wake = rustix::event::eventfd(
+            0,
+            rustix::event::EventfdFlags::CLOEXEC | rustix::event::EventfdFlags::NONBLOCK,
+        )
+        .map_err(std::io::Error::from)?;
+        let clients = Arc::new(Clients::new(max_in_flight, wake));
         let thread_clients = Arc::clone(&clients);
 
         thread::Builder::new()
@@ -463,6 +511,10 @@ fn accept_loop(
         connected: Arc<AtomicBool>,
         evict: Arc<AtomicBool>,
         superseded: Arc<AtomicBool>,
+        /// The last flush hit `WouldBlock`: bytes are sitting in tungstenite's
+        /// queue waiting for the kernel buffer to drain, so the poll below
+        /// watches this socket for writability as well as readability.
+        write_blocked: bool,
     }
 
     let mut live: Vec<Live> = Vec::new();
@@ -514,6 +566,7 @@ fn accept_loop(
                         connected,
                         evict,
                         superseded: Arc::clone(&superseded),
+                        write_blocked: false,
                     });
 
                     tracing::info!(
@@ -549,15 +602,19 @@ fn accept_loop(
         let mut finished: Vec<usize> = Vec::new();
         for (index, client) in live.iter_mut().enumerate() {
             let kicked = client.evict.load(Ordering::Relaxed);
-            let alive = !kicked
-                && pump(
-                    &mut client.socket,
-                    client.id,
-                    &events,
-                    &client.outgoing,
-                    &client.in_flight,
-                );
-            if !alive {
+            if kicked {
+                finished.push(index);
+                continue;
+            }
+            let pumped = pump(
+                &mut client.socket,
+                client.id,
+                &events,
+                &client.outgoing,
+                &client.in_flight,
+            );
+            client.write_blocked = pumped.write_blocked;
+            if !pumped.alive {
                 finished.push(index);
             }
         }
@@ -585,7 +642,29 @@ fn accept_loop(
             let _ = events.send(ShellEvent::Disconnected(client.id));
         }
 
-        thread::sleep(POLL_INTERVAL);
+        // Sleep until there is something to do: a new connection, bytes from
+        // a client, room to finish a blocked write, or the compositor ringing
+        // the eventfd because it queued something. No timers, no spinning.
+        {
+            use rustix::event::{PollFd, PollFlags, poll};
+            let mut fds = Vec::with_capacity(live.len() + 2);
+            fds.push(PollFd::new(&listener, PollFlags::IN));
+            fds.push(PollFd::new(&clients.wake, PollFlags::IN));
+            for client in &live {
+                let flags = if client.write_blocked {
+                    PollFlags::IN | PollFlags::OUT
+                } else {
+                    PollFlags::IN
+                };
+                fds.push(PollFd::new(client.socket.get_ref(), flags));
+            }
+            let _ = poll(&mut fds, Some(&POLL_BACKSTOP));
+        }
+
+        // Drain the wake counter so the next poll blocks again. One read
+        // resets an eventfd however many times it was rung.
+        let mut drained = [0u8; 8];
+        let _ = rustix::io::read(&clients.wake, &mut drained);
     }
 }
 
@@ -797,16 +876,32 @@ fn say_goodbye(mut socket: tungstenite::WebSocket<TcpStream>, superseded: bool) 
     }
 }
 
+/// What [`pump`] observed on one connection.
+struct Pumped {
+    /// False when the connection is finished and should be dropped.
+    alive: bool,
+    /// Bytes are queued in tungstenite waiting for the socket to accept them,
+    /// so the poll should watch for writability.
+    write_blocked: bool,
+}
+
+impl Pumped {
+    fn dead() -> Self {
+        Self {
+            alive: false,
+            write_blocked: false,
+        }
+    }
+}
+
 /// Move one round of messages in both directions.
-///
-/// Returns false when the connection is finished and should be dropped.
 fn pump(
     socket: &mut tungstenite::WebSocket<TcpStream>,
     session: SessionId,
     events: &LoopSender<ShellEvent>,
     outgoing: &Receiver<Outgoing>,
     in_flight: &AtomicUsize,
-) -> bool {
+) -> Pumped {
     // Reads first, so a burst of shell input is not delayed behind the poll
     // interval.
     loop {
@@ -815,7 +910,7 @@ fn pump(
                 match serde_json::from_str::<ToEngine>(&text) {
                     Ok(message) => {
                         if events.send(ShellEvent::Message(session, message)).is_err() {
-                            return false;
+                            return Pumped::dead();
                         }
                     }
                     Err(err) => {
@@ -826,15 +921,15 @@ fn pump(
                     }
                 }
             }
-            Ok(tungstenite::Message::Close(_)) => return false,
+            Ok(tungstenite::Message::Close(_)) => return Pumped::dead(),
             Ok(_) => {}
             Err(tungstenite::Error::Io(err)) if err.kind() == ErrorKind::WouldBlock => break,
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
-                return false;
+                return Pumped::dead();
             }
             Err(err) => {
                 tracing::warn!("shell socket read failed: {err}");
-                return false;
+                return Pumped::dead();
             }
         }
     }
@@ -843,40 +938,42 @@ fn pump(
         match outgoing.try_recv() {
             Ok(outbound) => {
                 let frame = match outbound {
-                    Outgoing::Control(message) => match serde_json::to_string(&message) {
-                        Ok(json) => tungstenite::Message::Text(json.into()),
-                        Err(err) => {
-                            tracing::error!("could not serialize {message:?}: {err}");
-                            continue;
-                        }
-                    },
+                    Outgoing::Control(json) => tungstenite::Message::Text(json),
                     Outgoing::Frame(bytes) => {
                         in_flight.fetch_sub(1, Ordering::Relaxed);
-                        tungstenite::Message::Binary(bytes.into())
+                        tungstenite::Message::Binary(bytes)
                     }
                 };
                 if let Err(err) = socket.send(frame) {
                     match err {
+                        // Queued inside tungstenite; the flush below reports
+                        // the blockage.
                         tungstenite::Error::Io(ref io) if io.kind() == ErrorKind::WouldBlock => {}
                         _ => {
                             tracing::warn!("shell socket write failed: {err}");
-                            return false;
+                            return Pumped::dead();
                         }
                     }
                 }
             }
             Err(TryRecvError::Empty) => break,
             // The compositor is gone.
-            Err(TryRecvError::Disconnected) => return false,
+            Err(TryRecvError::Disconnected) => return Pumped::dead(),
         }
     }
 
     match socket.flush() {
-        Ok(()) => true,
-        Err(tungstenite::Error::Io(ref io)) if io.kind() == ErrorKind::WouldBlock => true,
+        Ok(()) => Pumped {
+            alive: true,
+            write_blocked: false,
+        },
+        Err(tungstenite::Error::Io(ref io)) if io.kind() == ErrorKind::WouldBlock => Pumped {
+            alive: true,
+            write_blocked: true,
+        },
         Err(err) => {
             tracing::warn!("shell socket flush failed: {err}");
-            false
+            Pumped::dead()
         }
     }
 }
