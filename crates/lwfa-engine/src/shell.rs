@@ -520,6 +520,46 @@ struct Live {
     unacked_video: usize,
     /// Audio chunks in the same position.
     unacked_audio: usize,
+    /// When anything last arrived from the far end. See `heartbeat`.
+    last_read: std::time::Instant,
+    /// An unanswered ping, when one is out. See `heartbeat`.
+    ping_sent: Option<std::time::Instant>,
+}
+
+/// Inbound silence that earns a connection a ping.
+///
+/// Nothing here assumes the shell talks constantly: an untouched viewer
+/// legitimately sends nothing for minutes. The ping is what makes silence
+/// distinguishable from death.
+const IDLE_BEFORE_PING: Duration = Duration::from_secs(10);
+
+/// An unanswered ping older than this is a dead connection.
+///
+/// This exists because of iOS. A home-screen web app that is swiped away is
+/// simply terminated: no unload runs, no close frame is sent, and the socket
+/// looks perfectly healthy from here. Before this, a discarded iPad lingered
+/// in the peers list, kept its windows in the streamed union, and held the
+/// virtual microphone, until a write happened to fail. Browsers answer pings
+/// in the network stack, below JavaScript, so a live page always passes; a
+/// suspended or dead one cannot.
+const PONG_GRACE: Duration = Duration::from_secs(15);
+
+/// Ping when quiet, reap when a ping goes unanswered. True to keep.
+fn heartbeat(client: &mut Live) -> bool {
+    let now = std::time::Instant::now();
+    if let Some(sent) = client.ping_sent {
+        return now.duration_since(sent) <= PONG_GRACE;
+    }
+    if now.duration_since(client.last_read) >= IDLE_BEFORE_PING {
+        // Failures are left to the read path, which already knows how to
+        // declare a socket dead; this only asks the question.
+        let _ = client
+            .socket
+            .send(tungstenite::Message::Ping(tungstenite::Bytes::new()));
+        let _ = client.socket.flush();
+        client.ping_sent = Some(now);
+    }
+    true
 }
 
 /// How many shells may be connected at once.
@@ -607,6 +647,8 @@ fn accept_loop(
                         write_blocked: false,
                         unacked_video: 0,
                         unacked_audio: 0,
+                        last_read: std::time::Instant::now(),
+                        ping_sent: None,
                     });
 
                     tracing::info!(
@@ -647,6 +689,12 @@ fn accept_loop(
                 continue;
             }
             if !pump(client, &events) {
+                finished.push(index);
+            } else if !heartbeat(client) {
+                tracing::info!(
+                    "shell {} stopped answering pings; presumed gone",
+                    client.id
+                );
                 finished.push(index);
             }
         }
@@ -915,7 +963,14 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
     // Reads first, so a burst of shell input is not delayed behind the poll
     // interval.
     loop {
-        match client.socket.read() {
+        let message = client.socket.read();
+        if message.is_ok() {
+            // Anything inbound proves the far end is alive, including the
+            // pong a browser's network stack sends below JavaScript.
+            client.last_read = std::time::Instant::now();
+            client.ping_sent = None;
+        }
+        match message {
             Ok(tungstenite::Message::Text(text)) => {
                 match serde_json::from_str::<ToEngine>(&text) {
                     Ok(message) => {
