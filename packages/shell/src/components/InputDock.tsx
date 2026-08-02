@@ -29,7 +29,7 @@
  * on every pointer move.
  */
 
-import { Suspense, lazy, memo, useCallback, useRef } from "react"
+import { Suspense, lazy, memo, useCallback, useEffect, useRef } from "react"
 import { GripHorizontal, Settings2, X } from "lucide-react"
 import { setDock, useDock } from "@/lib/dock"
 import { usePrefs } from "@/lib/prefs"
@@ -63,10 +63,42 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
   const actions = useSessionActions()
   const root = useRef<HTMLDivElement | null>(null)
 
+  // Whether the pad drives a controller or a keyboard.
+  //
+  // A controller is right for anything built for one, which is most modern
+  // games and everything Steam knows about. Keyboard stays because emulators
+  // and older titles often only understand keys, and because a controller
+  // needs `/dev/uinput`, which not every machine grants.
+  const controllerMode = prefs.gamepad.mode !== "keyboard"
+
   const onKey = useCallback(
     (code: number, pressed: boolean) => actions.send({ type: "key", key: code, pressed }),
     [actions],
   )
+
+  const onButton = useCallback(
+    (button: number, pressed: boolean) =>
+      actions.send({ type: "gamepadButton", button, pressed }),
+    [actions],
+  )
+
+  const onAxis = useCallback(
+    (axis: number, value: number) => actions.send({ type: "gamepadAxis", axis, value }),
+    [actions],
+  )
+
+  // Attach a real controller for as long as the pad is on screen.
+  //
+  // The device the engine creates is visible to the whole machine, which is
+  // exactly what makes Steam find it, so it must not outlive the thing holding
+  // it: a session advertising a controller nobody is touching confuses games
+  // about how many players are present.
+  const padOpen = dock === "gamepad"
+  useEffect(() => {
+    if (!padOpen || !controllerMode) return
+    actions.send({ type: "setGamepad", enabled: true })
+    return () => actions.send({ type: "setGamepad", enabled: false })
+  }, [padOpen, controllerMode, actions])
 
   // Straight to the DOM. The alternative re-renders the whole keyboard on every
   // pointermove of the drag, which on a tablet is visibly janky.
@@ -114,9 +146,16 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
       <header
         className={cn(
           "flex shrink-0 items-center gap-1 px-2 py-1",
-          // The gamepad's own layer ignores pointers; its header must not.
-          isGamepad && "pointer-events-auto self-end rounded-bl-lg bg-card/80 backdrop-blur-md",
+          // Over a game this is a card sitting in the corner of the picture,
+          // so it gets the pads' own treatment instead: small, dark, barely
+          // there, and faded to whatever the pads are faded to. It is the
+          // controller's furniture, not the shell's.
+          isGamepad &&
+            "pointer-events-auto self-end gap-0 rounded-bl-md border-b border-l border-white/20 bg-black/45 px-0.5 py-0.5 backdrop-blur-sm",
         )}
+        // Matching the pads exactly, rather than a fixed value that would be
+        // the wrong amount of visible at either end of the opacity slider.
+        style={isGamepad ? { opacity: prefs.gamepad.opacity } : undefined}
       >
         {isGamepad ? null : (
           <button
@@ -132,7 +171,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
           <Button
             size="sm"
             variant={gamepad.editing ? "default" : "ghost"}
-            className="h-7 text-xs"
+            className={cn("text-xs", isGamepad ? "h-6 px-2 text-white/90" : "h-7")}
             aria-pressed={gamepad.editing}
             onClick={() => setGamepad({ editing: !gamepad.editing })}
           >
@@ -142,20 +181,20 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         <Button
           size="icon"
           variant="ghost"
-          className="size-7"
+          className={cn(isGamepad ? "size-6 text-white/90" : "size-7")}
           aria-label="Settings"
           onClick={() => onOpenSettings(dock)}
         >
-          <Settings2 className="size-4" aria-hidden />
+          <Settings2 className={cn(isGamepad ? "size-3.5" : "size-4")} aria-hidden />
         </Button>
         <Button
           size="icon"
           variant="ghost"
-          className="size-7"
+          className={cn(isGamepad ? "size-6 text-white/90" : "size-7")}
           aria-label="Hide"
           onClick={() => setDock("none")}
         >
-          <X className="size-4" aria-hidden />
+          <X className={cn(isGamepad ? "size-3.5" : "size-4")} aria-hidden />
         </Button>
       </header>
 
@@ -170,6 +209,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
               editing={gamepad.editing}
               onChange={setPads}
               onKey={onKey}
+              {...(controllerMode ? { onButton, onAxis } : {})}
             />
           ) : (
             <Keyboard />

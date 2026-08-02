@@ -85,6 +85,15 @@ impl Lwfa {
                 .element_under(pointer.current_location())
                 .map(|(w, _)| w.clone())
                 .and_then(|w| self.layout.id_of(&w));
+            // One line per click. Cheap, off unless RUST_LOG asks for it, and
+            // the only thing that answers "the click went to the wrong window".
+            tracing::debug!(
+                "click at ({:.0},{:.0}) -> window {:?}, focused was {:?}",
+                pointer.current_location().x,
+                pointer.current_location().y,
+                clicked,
+                self.focused(),
+            );
             if let Some(id) = clicked {
                 if self.focused() != Some(id) {
                     self.set_focus(Some(id), true);

@@ -128,7 +128,7 @@ export const Keyboard = memo(function Keyboard() {
           className="h-8"
           onClick={() => setExtras((v) => !v)}
           aria-pressed={extras}
-          title="Insert, Home, Page Up, Print Screen and the rest of a full-size keyboard"
+          title="Insert, Home, Page Up and other full-size keys"
         >
           More keys
         </Button>

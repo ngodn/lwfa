@@ -21,7 +21,7 @@
  * `windowPoint`.
  */
 
-import type { ButtonCode, KeyCode, Rect } from "@lwfa/proto"
+import type { ButtonCode, KeyCode } from "@lwfa/proto"
 
 /**
  * `KeyboardEvent.code` to Linux evdev keycode.
@@ -88,16 +88,38 @@ export function evdevFromButton(button: number): ButtonCode | null {
  * Returns null for a degenerate box, which happens for a window that has been
  * scrolled to zero width.
  */
+/**
+ * Where a pointer landed, in the window's own coordinates.
+ *
+ * # Why the content size and not the layout rectangle
+ *
+ * The obvious source for the scale is the rectangle the shell laid the window
+ * out at, and it is wrong whenever the application has not taken that size.
+ * A window's pixels arrive at whatever size the *client* chose to render: a
+ * terminal resizes promptly, but a browser lags a resize by a frame or refuses
+ * a size outright, and the shell paints whatever arrives stretched to fill the
+ * box.
+ *
+ * Mapping through the layout rectangle then sends coordinates for a window
+ * that is not the one on screen. Measured in practice: a 1192x814 image
+ * stretched into an 1172x1122 box, so a click near the bottom of what the user
+ * could see arrived roughly three hundred pixels above it. Large targets still
+ * worked, which is what made it look intermittent rather than broken.
+ *
+ * `content` is the size of the pixels actually being displayed, which is the
+ * only coordinate space the person clicking can see.
+ */
 export function windowPoint(
   event: { clientX: number; clientY: number },
   element: Element,
-  rect: Rect,
+  content: { width: number; height: number },
 ): { x: number; y: number } | null {
   const box = element.getBoundingClientRect()
   if (box.width <= 0 || box.height <= 0) return null
+  if (content.width <= 0 || content.height <= 0) return null
   return {
-    x: ((event.clientX - box.left) / box.width) * rect.width,
-    y: ((event.clientY - box.top) / box.height) * rect.height,
+    x: ((event.clientX - box.left) / box.width) * content.width,
+    y: ((event.clientY - box.top) / box.height) * content.height,
   }
 }
 
@@ -130,6 +152,37 @@ export function isShellKey(event: KeyboardEvent): boolean {
 }
 
 /**
+ * Is the user typing into the shell's own UI rather than into the machine?
+ *
+ * Keys are captured on `window` because keyboard focus lives in the compositor
+ * and no DOM element corresponds to it. That is right for the desktop and
+ * catastrophic for the shell's own text fields: the capture-phase listener sees
+ * the keystroke first, calls `preventDefault` so the browser never inserts the
+ * character, and forwards it to whatever window has focus on the remote
+ * machine. The search box stays empty, and what you typed is delivered
+ * somewhere you were not looking.
+ *
+ * So: anything with a caret in it keeps its own keystrokes.
+ *
+ * Checked on the event target rather than `document.activeElement` because a
+ * field inside a shadow root reports its host as the active element, and
+ * because the target is what the event system already resolved.
+ */
+export function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  if (tag === "TEXTAREA" || tag === "SELECT") return true
+  if (tag !== "INPUT") return false
+  // Not every input takes text. A checkbox or a radio wants Space and the
+  // arrow keys to behave like a control, not to insert anything, and swallowing
+  // keys for those would make the rail's own switches deaf while adding
+  // nothing.
+  const type = (target as HTMLInputElement).type
+  return !["checkbox", "radio", "button", "submit", "reset", "range"].includes(type)
+}
+
+/**
  * Should this keydown be forwarded?
  *
  * Browser autorepeat is dropped: Wayland advertises a repeat rate to clients,
@@ -137,5 +190,5 @@ export function isShellKey(event: KeyboardEvent): boolean {
  * held key repeat two or three times over.
  */
 export function shouldForwardKeydown(event: KeyboardEvent): boolean {
-  return !isShellKey(event) && !event.repeat
+  return !isShellKey(event) && !event.repeat && !isTextEntry(event.target)
 }

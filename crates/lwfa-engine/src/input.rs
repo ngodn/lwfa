@@ -73,6 +73,32 @@ fn keysym_name(raw: u32) -> Option<&'static str> {
 /// is no globbing, no variable expansion and no operators. Handing this to a
 /// shell instead would be both wrong and a way to turn a malformed `Exec` into
 /// arbitrary code.
+/// How long to wait for a program to quit before saying it has not.
+///
+/// Long enough for an application to write its state and put a dialog up,
+/// short enough that somebody holding a tablet does not conclude it is broken.
+const GRACE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// How often to look. Cheap: one `readdir` of `/proc` per tick.
+const POLL: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Where applications should start: the user's home.
+fn session_home() -> std::path::PathBuf {
+    spawn_dir_for(std::env::var_os("HOME"))
+}
+
+/// The pure half of [`session_home`].
+///
+/// `$HOME` when it names an absolute path, and the root otherwise. Root rather
+/// than giving up and inheriting the engine's directory: somewhere that exists,
+/// is boring, and is the same every time beats somewhere unpredictable.
+fn spawn_dir_for(home: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    home.filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
+}
+
 fn split_command_line(line: &str) -> Vec<String> {
     let mut argv = Vec::new();
     let mut current = String::new();
@@ -155,7 +181,7 @@ impl Lwfa {
         self.apply_safe_mode();
     }
 
-    /// Whether the connected session may run this command.
+    /// Whether a set of permissions allows running this command.
     ///
     /// `allowed_apps` holds desktop entry *ids*, but what arrives over the wire
     /// is the `Exec=` line the launcher read out of that entry, because that is
@@ -165,8 +191,8 @@ impl Lwfa {
     /// Compared for equality, not by prefix: permitting `firefox` must not also
     /// permit `firefox; rm -rf ~`, which a `starts_with` check would wave
     /// straight through.
-    pub fn may_spawn(&self, command: &str) -> bool {
-        let Some(allowed) = self.permissions.allowed_apps.as_ref() else {
+    pub fn may_spawn(permissions: &lwfa_proto::Permissions, command: &str) -> bool {
+        let Some(allowed) = permissions.allowed_apps.as_ref() else {
             return true; // None means every application.
         };
         if allowed.is_empty() {
@@ -226,6 +252,27 @@ impl Lwfa {
         };
         cmd.env("WAYLAND_DISPLAY", &self.socket_name);
 
+        // Start where a login session would, not where the compositor was
+        // launched from.
+        //
+        // A child inherits the parent's working directory, and the engine's is
+        // wherever somebody happened to run it: a checkout, `/` under a systemd
+        // unit, or whatever directory a terminal was sitting in. Every terminal
+        // and every file dialog for the rest of the session then opens there,
+        // which is confusing at best and leaks the path at worst.
+        cmd.current_dir(session_home());
+
+        // Point the application at the session's own audio device, so what it
+        // plays goes to whoever is listening remotely rather than out of the
+        // speakers of a machine nobody may be sitting at. See `sink.rs`.
+        //
+        // Only when that sink exists: without it the variable would name a
+        // device that is not there and the application would get no audio at
+        // all, which is worse than the machine making a noise.
+        if self.audio_sink.available() {
+            cmd.env("PULSE_SINK", crate::sink::SINK_NAME);
+        }
+
         // Set per-process rather than with `set_var`, which is unsafe in
         // edition 2024 and genuinely racy here: by the time Xwayland reports
         // ready, the encoder and shell threads are already running and could be
@@ -246,6 +293,124 @@ impl Lwfa {
             Ok(child) => tracing::info!("spawned {command} as pid {}", child.id()),
             Err(err) => tracing::error!("failed to spawn {command}: {err}"),
         }
+    }
+
+    /// Is this command already running on the host? See `outside`.
+    pub fn running_outside(&self, command: &str) -> Option<crate::outside::Outsider> {
+        let program = crate::outside::program_name(command)?;
+        crate::outside::find(&program, &self.socket_name)
+    }
+
+    /// Ask a program on the host to quit, then launch it in here once it has.
+    ///
+    /// Asking, not killing. An application with unsaved work answers a polite
+    /// request by opening a dialog, and that dialog appears on the screen the
+    /// application is on, which is the one nobody is looking at. So the process
+    /// is watched rather than assumed dead, and if it is still there when the
+    /// grace period ends the shell is told, so it can say what is happening and
+    /// offer to insist.
+    ///
+    /// `force` is that insistence, and it loses unsaved work, so it is never
+    /// the first thing tried.
+    pub fn close_outside_then_spawn(
+        &mut self,
+        session: lwfa_proto::SessionId,
+        command: String,
+        terminal: bool,
+        other: crate::outside::Outsider,
+        force: bool,
+    ) {
+        let signal = if force {
+            rustix::process::Signal::KILL
+        } else {
+            rustix::process::Signal::TERM
+        };
+        // Through `rustix` rather than a raw `kill`, because this crate denies
+        // unsafe code and there is no reason to make an exception for one
+        // syscall. The pid is re-checked against the program name immediately
+        // before this, so a reused pid cannot be signalled by mistake.
+        let sent = rustix::process::Pid::from_raw(other.pid as i32)
+            .ok_or_else(|| std::io::Error::other("not a valid pid"))
+            .and_then(|pid| rustix::process::kill_process(pid, signal).map_err(Into::into));
+
+        if let Err(err) = sent {
+            tracing::warn!("could not signal {} ({}): {err}", other.program, other.pid);
+            self.send_to_session(
+                session,
+                lwfa_proto::ToShell::Error {
+                    request: "closeAndSpawn".into(),
+                    message: format!("could not close {}: {err}", other.program),
+                },
+            );
+            return;
+        }
+        tracing::info!(
+            "asked {} ({}) to quit so it can be opened in this session",
+            other.program,
+            other.pid
+        );
+
+        self.watch_for_exit(session, command, terminal, other, GRACE);
+    }
+
+    /// Poll until the program is gone, then spawn it here.
+    ///
+    /// A timer rather than a blocking wait: the process is not our child, so
+    /// there is nothing to `waitpid` on, and blocking the event loop would
+    /// freeze every window in the session while an application saves its work.
+    fn watch_for_exit(
+        &mut self,
+        session: lwfa_proto::SessionId,
+        command: String,
+        terminal: bool,
+        other: crate::outside::Outsider,
+        left: std::time::Duration,
+    ) {
+        let handle = self.loop_handle.clone();
+        let _ = handle.insert_source(
+            smithay::reexports::calloop::timer::Timer::from_duration(POLL),
+            move |_, _, data| {
+                let state = &mut *data;
+                let still_there = state.running_outside(&command).is_some_and(|now| now.pid == other.pid);
+
+                if !still_there {
+                    tracing::info!("{} has gone; opening it here", other.program);
+                    state.spawn(&command, terminal);
+                    return smithay::reexports::calloop::timer::TimeoutAction::Drop;
+                }
+
+                match left.checked_sub(POLL) {
+                    Some(remaining) if !remaining.is_zero() => {
+                        state.watch_for_exit(
+                            session,
+                            command.clone(),
+                            terminal,
+                            other.clone(),
+                            remaining,
+                        );
+                    }
+                    _ => {
+                        // Still running. Almost always because it is asking
+                        // about unsaved work on a screen nobody can see, so the
+                        // shell is told rather than left showing a spinner.
+                        tracing::info!(
+                            "{} did not quit within the grace period",
+                            other.program
+                        );
+                        state.send_to_session(
+                            session,
+                            lwfa_proto::ToShell::AlreadyRunning {
+                                command: command.clone(),
+                                terminal,
+                                program: other.program.clone(),
+                                pid: other.pid,
+                            },
+                        );
+                    }
+                }
+                smithay::reexports::calloop::timer::TimeoutAction::Drop
+            },
+        );
     }
 
     pub fn spawn_terminal(&self) {
@@ -411,6 +576,48 @@ impl Lwfa {
 
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod spawn_dir_tests {
+    use super::spawn_dir_for;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    /// A child inherits its parent's working directory, so without this every
+    /// terminal opened wherever the engine happened to be started from: a
+    /// checkout, or `/` under a systemd unit, or whatever directory somebody
+    /// had `cd`ed to. A session's applications should start at home, the same
+    /// as they would under any other desktop.
+    #[test]
+    fn uses_home_when_it_names_one() {
+        assert_eq!(
+            spawn_dir_for(Some(OsString::from("/home/someone"))),
+            PathBuf::from("/home/someone")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_root_when_home_is_unset() {
+        // Rather than inheriting: somewhere that exists and is the same every
+        // time beats somewhere unpredictable.
+        assert_eq!(spawn_dir_for(None), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn refuses_an_empty_home() {
+        assert_eq!(spawn_dir_for(Some(OsString::new())), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn refuses_a_relative_home() {
+        // A relative `$HOME` would be resolved against the engine's own
+        // directory, which is the thing being avoided.
+        assert_eq!(
+            spawn_dir_for(Some(OsString::from("somewhere"))),
+            PathBuf::from("/")
+        );
     }
 }
 
