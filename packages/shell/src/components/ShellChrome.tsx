@@ -111,8 +111,14 @@ export const ShellChrome = memo(function ShellChrome({
           status bar. The backdrop colour still fills the insets, which is what
           makes the translucent status bar look intentional. Fixed-position
           things (the panel sheet) do not inherit padding and offset
-          themselves; see PanelHost. */}
-      <div className={cn("pt-safe pb-safe pl-safe pr-safe flex h-full w-full overflow-hidden bg-backdrop", shellDirection(edge))}>
+          themselves; see PanelHost.
+
+          Top and sides only, deliberately. The home indicator is a floating
+          overlay, not a bar: reserving its inset painted a dead band across
+          the bottom of the screen. The desktop runs underneath it like every
+          full-screen app, and the one thing that must clear it, a docked
+          keyboard's bottom row, pads itself (see InputDock). */}
+      <div className={cn("pt-safe pl-safe pr-safe flex h-full w-full overflow-hidden bg-backdrop", shellDirection(edge))}>
         <NavRail active={active} fired={fired} onSelect={select} />
         {/* A column, so a docked keyboard takes space from the desktop rather
             than covering the line being typed into. The gamepad positions

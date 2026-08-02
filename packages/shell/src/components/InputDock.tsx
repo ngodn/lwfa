@@ -130,9 +130,10 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
     <div
       ref={root}
       className={cn(
-        // The shell root already keeps this above the home indicator; padding
-        // the bottom again here doubled the gap.
-        "z-20 flex flex-col",
+        // `pb-safe` here, not on the shell root: the desktop itself runs
+        // edge to edge under the home indicator, but a docked keyboard's
+        // bottom row must sit above it or the space bar is half swipe-bar.
+        "z-20 flex flex-col pb-safe",
         isGamepad
           // Floats: `pointer-events-none` so taps between the pads still reach
           // the window behind, and each pad turns them back on for itself.

@@ -90,6 +90,9 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
   // inset, and a vertical sheet starts below the status bar rather than under
   // it. `height: auto` matters there: the variant's `h-full` is 100% of the
   // viewport, which with a shifted top would overflow past the bottom.
+  // No bottom inset anywhere: the shell runs edge to edge under the home
+  // indicator (see ShellChrome), so a bottom rail sits flush at the screen
+  // edge and the sheet needs no extra offset there.
   const geometry: React.CSSProperties = vertical
     ? {
         [side]: `calc(var(--rail-size) + env(safe-area-inset-${side}, 0px))`,
@@ -99,9 +102,12 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
         height: "auto",
       }
     : {
-        [side]: `calc(var(--rail-size) + env(safe-area-inset-${side}, 0px))`,
+        [side]:
+          side === "top"
+            ? "calc(var(--rail-size) + env(safe-area-inset-top, 0px))"
+            : "var(--rail-size)",
         height:
-          "min(32rem, calc(100dvh - var(--rail-size) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)))",
+          "min(32rem, calc(100dvh - var(--rail-size) - env(safe-area-inset-top, 0px)))",
         maxHeight: "none",
       }
 
