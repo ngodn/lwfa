@@ -1,0 +1,27 @@
+{
+  "name": "lwfa",
+  "short_name": "lwfa",
+  "description": "Literally work from anywhere",
+  "background_color": "#0C0D10",
+  "theme_color": "#0C0D10",
+  "display": "standalone",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/png/android-chrome-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/png/android-chrome-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/png/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
