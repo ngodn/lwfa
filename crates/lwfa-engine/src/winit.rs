@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::Renderer;
 use smithay::backend::winit::{self, WinitEvent};
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::EventLoop;
@@ -83,8 +84,8 @@ pub fn init_winit(
     let backend = Rc::new(RefCell::new(backend));
     let last_redraw = Rc::new(Cell::new(Instant::now()));
 
-    /// When the on-screen path last presented, used to tell a host-driven
-    /// redraw from a spurious one. See the check inside the Redraw handler.
+    // When the on-screen path last presented, used to tell a host-driven
+    // redraw from a spurious one. See the check inside the Redraw handler.
     let last_present = Rc::new(Cell::new(None::<Instant>));
 
     // Heartbeat counters. See the heartbeat source further down.
@@ -317,6 +318,24 @@ pub fn init_winit(
                     // no backend buffer at all.
                     state.stream_frames(backend.renderer());
 
+                    // Free what the renderer has finished with.
+                    //
+                    // Smithay does not delete GPU objects the moment they are
+                    // dropped: textures, sync fences and the pixel buffers used
+                    // for readback all go onto a queue, and the queue is only
+                    // drained here. Capture allocates a pixel buffer and a fence
+                    // for *every frame of every window*, so leaving this out
+                    // leaks on the order of a hundred objects a second.
+                    //
+                    // It ran for hours before anyone noticed, and then failed in
+                    // a way that pointed nowhere near the cause: EGL refused to
+                    // create another fence, the renderer lost its context, and
+                    // Smithay panicked deep inside a draw call. The one clue was
+                    // BAD_ALLOC from `eglCreateSyncKHR`.
+                    if let Err(err) = backend.renderer().cleanup_texture_cache() {
+                        tracing::warn!("could not free finished GPU resources: {err}");
+                    }
+
                     // Debug: dump one PNG per window so capture can be
                     // verified against what is actually on screen. Off unless
                     // LWFA_CAPTURE_DUMP names a directory.
@@ -410,6 +429,23 @@ pub fn init_winit(
                 {
                     let backend = &mut *backend.borrow_mut();
                     state.stream_frames(backend.renderer());
+
+                    // The same on the stalled path, which captures just as
+                    // hard and for just as long. See the note on the redraw
+                    // path above.
+                    if let Err(err) = backend.renderer().cleanup_texture_cache() {
+                        tracing::warn!("could not free finished GPU resources: {err}");
+                    }
+
+                    // The capture dump belongs on this path too, not only on
+                    // the redraw one. Otherwise the one tool for inspecting
+                    // what capture produces goes silent in precisely the
+                    // situation worth inspecting: nobody at the host, someone
+                    // watching remotely. It also makes the dump look like
+                    // evidence that streaming had stopped, which it is not.
+                    if let Some(dir) = capture_dump_dir() {
+                        state.dump_captures(backend.renderer(), &dir);
+                    }
                 }
 
                 // Frame callbacks matter more than the capture here. A Wayland
