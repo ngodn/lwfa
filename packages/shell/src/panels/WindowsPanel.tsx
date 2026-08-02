@@ -345,8 +345,12 @@ const WindowItem = memo(function WindowItem({
             >
               Own column
             </Action>
+            {/* Pausing the window that is filling the screen would freeze
+              * the whole display on its last frame, so while it is
+              * fullscreen this control waits. */}
             <Action
               icon={paused ? <Play aria-hidden /> : <Pause aria-hidden />}
+              disabled={fullscreen}
               onClick={() => togglePaused(row.id)}
             >
               {paused ? "Resume" : "Pause"}

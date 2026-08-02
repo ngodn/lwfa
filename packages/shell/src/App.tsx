@@ -45,7 +45,13 @@ import { AudioFormat } from "@lwfa/proto";
 import type { Codec } from "@lwfa/proto";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
 import { clearFormat } from "@/lib/streamFormat"
-import { clearPaused, forgetPaused, pausedNow } from "@/lib/paused"
+import {
+  clearPaused,
+  forgetPaused,
+  pausedNow,
+  setPaused,
+  subscribe as subscribePaused,
+} from "@/lib/paused"
 import { setPrefs, usePrefs } from "@/lib/prefs"
 import {
   appsRequested,
@@ -98,6 +104,7 @@ import {
   focusWindow,
   focusWorkspace,
   focusedWindow,
+  fullscreenWindow,
   intersectsViewport,
   layout,
   moveToWorkspace,
@@ -107,6 +114,7 @@ import {
   sendToWorkspace,
   setFullscreen,
   setColumnWidth,
+  streamList,
   toggleFullscreen,
 } from "./strip.js";
 
@@ -402,17 +410,13 @@ export function App(): React.ReactElement {
     // Ask for pixels only for columns the viewport can actually show. This is
     // what keeps the encoder budget bounded by viewport width rather than by
     // how many windows are open. See docs/architecture.md section 2.3.
+    // Paused windows are simply not asked for, and during fullscreen `layout`
+    // has already dropped everything else, so the one window being watched
+    // gets the entire budget. See `streamList` for the rules together.
     connection.current?.send({
       type: "setStreams",
       windows: streamingRef.current
-        ? windows
-            .filter((w) => intersectsViewport(w.rect, out, configRef.current))
-            // Paused windows are simply not asked for. The application keeps
-            // running; this device stops paying for its pixels, and the budget
-            // goes to the windows that are still being watched. See
-            // `lib/paused`.
-            .filter((w) => !pausedNow().has(w.id))
-            .map((w) => w.id)
+        ? streamList(windows, out, configRef.current, pausedNow(), fullscreenWindow(next))
         : [],
       // What this browser can actually decode, asked of it rather than
       // guessed. Over plain HTTP there is no VideoDecoder at all, and claiming
@@ -428,8 +432,44 @@ export function App(): React.ReactElement {
       stripRef.current = next;
       setStrip(next);
       push(next, out, animate);
+      // A window filling the screen is being watched by definition, so a
+      // pause left on it from earlier stops meaning anything. Cleared after
+      // the push, which already streams it regardless (see `streamList`);
+      // this keeps the store, and the panel reading it, honest.
+      const fs = fullscreenWindow(next);
+      if (fs !== null) setPaused(fs, false);
     },
     [push],
+  );
+
+  // A pause takes effect when it is pressed, not at the next reflow.
+  //
+  // The stream list is sent from `push`, which runs on strip transitions, and
+  // toggling a pause is not one: without this the engine kept encoding a
+  // "paused" window until some unrelated transition happened to resend the
+  // list, and the panel only looked right because the surface holds its last
+  // frame.
+  useEffect(
+    () =>
+      subscribePaused(() => {
+        const out = outputRef.current;
+        if (out.width <= 0) return;
+        const state = stripRef.current;
+        connection.current?.send({
+          type: "setStreams",
+          windows: streamingRef.current
+            ? streamList(
+                layout(state, out, configRef.current),
+                out,
+                configRef.current,
+                pausedNow(),
+                fullscreenWindow(state),
+              )
+            : [],
+          codecs: codecsRef.current,
+        });
+      }),
+    [],
   );
 
   useEffect(() => {

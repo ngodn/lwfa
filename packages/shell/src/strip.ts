@@ -366,6 +366,37 @@ export function intersectsViewport(
     : rect.x + rect.width > 0 && rect.x < output.width
 }
 
+/**
+ * Which of these windows to ask the engine for pixels for.
+ *
+ * The rules live together because they interact. A window is streamed when it
+ * is on screen and not paused; the fullscreen window is streamed no matter
+ * what the paused set says. Fullscreen leaves exactly one window in the
+ * layout, so honouring a stale pause on it would freeze the entire screen on
+ * the last frame received. Entering fullscreen also clears that pause (see
+ * `App`), which keeps the panel honest; this is the backstop that keeps the
+ * screen alive even if a path misses it.
+ *
+ * During fullscreen every other window has already been dropped by `layout`,
+ * which is what makes them "auto pause": they are simply not in `placed`, so
+ * they are not asked for, and the moment fullscreen ends they are back.
+ */
+export function streamList(
+  placed: WindowLayout[],
+  output: Output,
+  config: StripConfig,
+  paused: ReadonlySet<WindowId>,
+  fullscreen: WindowId | null,
+): WindowId[] {
+  return placed
+    .filter(
+      (w) =>
+        w.id === fullscreen ||
+        (intersectsViewport(w.rect, output, config) && !paused.has(w.id)),
+    )
+    .map((w) => w.id)
+}
+
 // ---------------------------------------------------------------------------
 // Transitions
 //
@@ -634,6 +665,11 @@ export function fillsOutput(rect: WindowLayout["rect"], output: Output): boolean
 /** Is the focused workspace showing a window fullscreen? */
 export function isFullscreen(state: StripState): boolean {
   return currentWorkspace(state).fullscreen !== null
+}
+
+/** The window the focused workspace is showing fullscreen, if any. */
+export function fullscreenWindow(state: StripState): WindowId | null {
+  return currentWorkspace(state).fullscreen
 }
 
 /**
