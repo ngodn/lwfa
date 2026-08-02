@@ -136,7 +136,7 @@ export const DEFAULT_LAYOUT: Pad[] = [
     id: "lstick",
     kind: "stick",
     face: "lstick",
-    x: 18, y: 78, size: 26,
+    x: 18, y: 78, size: 22,
     directions: [17, 32, 31, 30], // W D S A, for the keyboard mode
   },
 
@@ -151,7 +151,7 @@ export const DEFAULT_LAYOUT: Pad[] = [
     id: "rstick",
     kind: "stick",
     face: "rstick",
-    x: 80, y: 82, size: 24,
+    x: 80, y: 82, size: 22,
     directions: [103, 106, 108, 105],
   },
 

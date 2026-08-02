@@ -38,10 +38,45 @@ function readPads(): Pad[] {
         typeof (pad as Pad).x === "number" &&
         typeof (pad as Pad).y === "number",
     )
-    return withPadsAddedSince(kept)
+    return withRetunedSizes(withPadsAddedSince(kept))
   } catch {
     return DEFAULT_LAYOUT
   }
+}
+
+/**
+ * Sizes a past default gave a pad, by id. See `withRetunedSizes`.
+ *
+ * Append-only: when a default size changes again, the size it is moving
+ * *from* joins this list.
+ */
+const RETIRED_SIZES: Record<string, number[]> = {
+  lstick: [26],
+  rstick: [24],
+}
+
+/**
+ * Follow a retuned default size, without touching anyone's own tuning.
+ *
+ * The layout is stored whole, so a device that has ever opened the gamepad
+ * keeps the sizes from that day forever, and a defaults change reaches
+ * nobody who matters. A stored size that still equals what the default used
+ * to be means the user never resized that pad, so it follows the new
+ * default; any other value is a choice someone made with their thumbs and
+ * is kept exactly.
+ */
+function withRetunedSizes(stored: Pad[]): Pad[] {
+  let changed = false
+  const next = stored.map((pad) => {
+    const retired = RETIRED_SIZES[pad.id]
+    const fresh = DEFAULT_LAYOUT.find((d) => d.id === pad.id)
+    if (retired && fresh && retired.includes(pad.size) && pad.size !== fresh.size) {
+      changed = true
+      return { ...pad, size: fresh.size }
+    }
+    return pad
+  })
+  return changed ? next : stored
 }
 
 /**

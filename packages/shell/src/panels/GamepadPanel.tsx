@@ -6,8 +6,8 @@
  * thing it is controlling, and it has to stay there after this panel closes.
  */
 
-import { memo } from "react"
-import { Gamepad2, Pencil, RotateCcw } from "lucide-react"
+import { memo, useState } from "react"
+import { Copy, Gamepad2, Pencil, RotateCcw } from "lucide-react"
 import { patchPrefs, usePrefs, type GamepadSkin } from "@/lib/prefs"
 import { DEFAULT_LAYOUT } from "@/gamepad/model"
 import { setGamepad, useGamepad } from "@/gamepad/store"
@@ -54,6 +54,7 @@ function GamepadPanel() {
             {editing ? "Done" : "Edit"}
           </Button>
         </FieldRow>
+        <CopyLayout />
       </PanelSection>
 
       <PanelSection
@@ -130,5 +131,43 @@ function GamepadPanel() {
     </div>
   )
 }
+
+/**
+ * Put this device's arrangement on the clipboard, as JSON.
+ *
+ * The layout lives in this browser's storage and nowhere else, so there is
+ * otherwise no way to get a carefully tuned arrangement off a tablet: no
+ * console to open, no file to reach. One tap here, paste it anywhere. It is
+ * also how a layout worth making the default gets sent home.
+ */
+const CopyLayout = memo(function CopyLayout() {
+  const { pads } = useGamepad()
+  const [copied, setCopied] = useState(false)
+  return (
+    <FieldRow>
+      <Field
+        label="Copy layout"
+        hint="Puts this arrangement on the clipboard as text."
+      />
+      <Button
+        size="sm"
+        variant="outline"
+        className="gap-1.5"
+        onClick={() => {
+          void navigator.clipboard
+            ?.writeText(JSON.stringify(pads, null, 1))
+            .then(() => {
+              setCopied(true)
+              globalThis.setTimeout(() => setCopied(false), 1500)
+            })
+            .catch(() => {})
+        }}
+      >
+        <Copy className="size-3.5" aria-hidden />
+        {copied ? "Copied" : "Copy"}
+      </Button>
+    </FieldRow>
+  )
+})
 
 export default memo(GamepadPanel)
