@@ -369,30 +369,36 @@ export function intersectsViewport(
 /**
  * Which of these windows to ask the engine for pixels for.
  *
- * The rules live together because they interact. A window is streamed when it
- * is on screen and not paused; the fullscreen window is streamed no matter
- * what the paused set says. Fullscreen leaves exactly one window in the
- * layout, so honouring a stale pause on it would freeze the entire screen on
- * the last frame received. Entering fullscreen also clears that pause (see
- * `App`), which keeps the panel honest; this is the backstop that keeps the
- * screen alive even if a path misses it.
+ * The rules live together because they interact. A window is a candidate when
+ * the viewport can actually show it; the fullscreen window is one no matter
+ * what, because during fullscreen every other window has already been dropped
+ * by `layout`, so the one window being watched gets the entire budget.
  *
- * During fullscreen every other window has already been dropped by `layout`,
- * which is what makes them "auto pause": they are simply not in `placed`, so
- * they are not asked for, and the moment fullscreen ends they are back.
+ * `pauseInactive` is the global lever (see `Prefs.stream.pauseInactive`):
+ * when it is on, only the focused window streams and every other candidate
+ * freezes on its last frame until it is focused again. The engine notices a
+ * window leaving this list and tells its application to stop rendering, so
+ * the saving is real, not cosmetic. When nothing is focused the candidates
+ * all stream: a session with no focus yet must not open on a wall of stills.
  */
 export function streamList(
   placed: WindowLayout[],
   output: Output,
   config: StripConfig,
-  paused: ReadonlySet<WindowId>,
+  focused: WindowId | null,
+  pauseInactive: boolean,
   fullscreen: WindowId | null,
 ): WindowId[] {
   return placed
     .filter(
+      (w) => w.id === fullscreen || intersectsViewport(w.rect, output, config),
+    )
+    .filter(
       (w) =>
-        w.id === fullscreen ||
-        (intersectsViewport(w.rect, output, config) && !paused.has(w.id)),
+        !pauseInactive ||
+        focused === null ||
+        w.id === focused ||
+        w.id === fullscreen,
     )
     .map((w) => w.id)
 }

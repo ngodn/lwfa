@@ -24,7 +24,7 @@
  * One row is open at a time, so the list never becomes a wall of controls.
  */
 
-import { memo, useCallback, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useState } from "react"
 import {
   ArrowLeftToLine,
   ArrowRightToLine,
@@ -33,8 +33,6 @@ import {
   LayoutGrid,
   Maximize2,
   Minimize2,
-  Pause,
-  Play,
   Plus,
   X,
 } from "lucide-react"
@@ -44,7 +42,6 @@ import { currentWorkspace, focusedWindow, isFullscreen } from "@/strip"
 import { patchPrefs, usePrefs } from "@/lib/prefs"
 import { WIDTH_PRESETS } from "@/strip"
 import { setArrange } from "@/lib/arrange"
-import { togglePaused, usePaused } from "@/lib/paused"
 import { pendingKeys, usePendingPrefix } from "@/lib/pending"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -95,11 +92,18 @@ function WindowsPanel() {
 
   // One row open at a time. Held here rather than in each row so opening one
   // closes the last without them having to know about each other.
-  const [open, setOpen] = useState<WindowId | null>(null)
+  const [open, setOpen] = useState<WindowId | null>(focused)
   const toggle = useCallback(
     (id: WindowId) => setOpen((current) => (current === id ? null : id)),
     [],
   )
+  // The focused window's actions are the ones about to be used, so its row
+  // opens itself as focus moves: focusing from the list, from the desktop, or
+  // from the keyboard all land with the right controls already showing.
+  // Toggling still works; the next focus change simply reasserts it.
+  useEffect(() => {
+    setOpen(focused)
+  }, [focused])
 
   return (
     /*
@@ -245,7 +249,6 @@ const WindowItem = memo(function WindowItem({
   const { windows } = useSessionState()
   const actions = useSessionActions()
   const info = windows.get(row.id)
-  const paused = usePaused().has(row.id)
 
   // A window the engine has announced but not yet described. Shown as a shape
   // of the right size rather than as the word "Window 7", which looks like a
@@ -291,14 +294,6 @@ const WindowItem = memo(function WindowItem({
             <span className="min-w-0 flex-1 truncate text-sm">{title}</span>
           )}
 
-          {paused ? (
-            <span
-              className="shrink-0 rounded-md bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning"
-              title="Not being streamed to this device"
-            >
-              Paused
-            </span>
-          ) : null}
           {row.heads ? (
             <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground tabular-nums">
               {widthLabel(row.width)}
@@ -345,16 +340,10 @@ const WindowItem = memo(function WindowItem({
             >
               Own column
             </Action>
-            {/* Pausing the window that is filling the screen would freeze
-              * the whole display on its last frame, so while it is
-              * fullscreen this control waits. */}
-            <Action
-              icon={paused ? <Play aria-hidden /> : <Pause aria-hidden />}
-              disabled={fullscreen}
-              onClick={() => togglePaused(row.id)}
-            >
-              {paused ? "Resume" : "Pause"}
-            </Action>
+            {/* No per-window pause here any more: whether inactive windows
+              * stream is one global choice, in Settings under Stream. A
+              * per-row toggle fought with it and made "why is this window
+              * frozen" a two-place question. */}
             <Action
               icon={<X aria-hidden />}
               danger

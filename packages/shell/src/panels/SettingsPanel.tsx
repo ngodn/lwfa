@@ -269,6 +269,76 @@ function SettingsPanel() {
  * phone on a train, and "how much video would you like" has a different answer
  * for each. None of it changes what anyone else sees.
  */
+/**
+ * The pause-inactive switch, with a speed bump on the way off.
+ *
+ * Turning it off means every visible window streams, encodes and decodes at
+ * once, which is the single easiest way to make a session with a few windows
+ * feel broken everywhere. So the off direction asks first, inline rather than
+ * in a dialog: the panel is non-modal over a live desktop, and a portal'd
+ * confirmation box would be a heavier thing than the choice deserves.
+ * Turning it back on is always instant and never asks.
+ */
+function PauseInactive({ value, disabled }: { value: boolean; disabled: boolean }) {
+  const [confirming, setConfirming] = useState(false)
+
+  return (
+    <>
+      <FieldRow>
+        <Field
+          label="Pause inactive windows"
+          hint={
+            value
+              ? "Only the focused window streams live"
+              : "Every visible window streams live"
+          }
+        />
+        <Switch
+          checked={value}
+          disabled={disabled}
+          onCheckedChange={(next) => {
+            if (next) {
+              patchPrefs("stream", { pauseInactive: true })
+              setConfirming(false)
+            } else {
+              setConfirming(true)
+            }
+          }}
+          aria-label="Pause inactive windows"
+        />
+      </FieldRow>
+      {confirming ? (
+        <div className="space-y-3 rounded-lg border border-warning/40 bg-warning/10 p-3">
+          <p className="text-sm">
+            <span className="font-medium">Streaming every window costs real performance.</span>{" "}
+            <span className="text-muted-foreground">
+              Each one keeps rendering, encoding and decoding even while you
+              work elsewhere. With several windows open this is what makes the
+              whole session feel laggy.
+            </span>
+          </p>
+          <div className="flex gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-11 flex-1"
+              onClick={() => {
+                patchPrefs("stream", { pauseInactive: false })
+                setConfirming(false)
+              }}
+            >
+              Stream them all anyway
+            </Button>
+            <Button size="sm" className="h-11 flex-1" onClick={() => setConfirming(false)}>
+              Keep pausing
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
 function StreamSettings() {
   const { stream, motion } = usePrefs()
   const { permissions } = useSessionState()
@@ -316,6 +386,7 @@ function StreamSettings() {
             aria-label="Show the desktop"
           />
         </FieldRow>
+        <PauseInactive value={stream.pauseInactive} disabled={!stream.enabled} />
       </PanelSection>
 
       <PanelSection

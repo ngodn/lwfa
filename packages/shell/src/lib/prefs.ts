@@ -189,6 +189,20 @@ export interface Prefs {
      * hand. The engine honours the lowest request among everyone listening.
      */
     audioQuality: "auto" | "high" | "medium" | "low"
+    /**
+     * Stream only the focused window; the rest freeze on their last frame.
+     *
+     * On by default because it is the single biggest performance lever the
+     * shell has. An unfocused window that stops being streamed is also told
+     * by the engine to stop *rendering* (the xdg `suspended` state), so this
+     * frees the GPU, the encoder, the network and this device's decoder all
+     * at once. Focus a window and it resumes instantly.
+     *
+     * Off means every visible window streams live, which reads nicer on a
+     * big screen with a wired connection and is exactly what makes a session
+     * with five windows lag everywhere else.
+     */
+    pauseInactive: boolean
   }
   motion: {
     /**
@@ -245,6 +259,7 @@ export const DEFAULT_PREFS: Prefs = {
     volume: 1,
     localPlayback: false,
     audioQuality: "auto",
+    pauseInactive: true,
   },
   motion: {
     animate: true,

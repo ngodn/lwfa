@@ -46,13 +46,6 @@ export interface WindowSurfaceProps {
    * Drives whether it is drawn as a card or edge to edge. See `fillsOutput`.
    */
   filling: boolean
-  /**
-   * Whether this device has stopped asking for this window's pixels.
-   *
-   * The picture stays: it is the last frame that arrived. Marked so a still
-   * image is read as a choice rather than as a window that has hung.
-   */
-  paused: boolean
   focused: boolean
   label: string
   /**
@@ -87,7 +80,6 @@ export const WindowSurface = memo(function WindowSurface({
   rect,
   z,
   filling,
-  paused,
   focused,
   label,
   streamed,
@@ -219,7 +211,7 @@ export const WindowSurface = memo(function WindowSurface({
         WebkitTouchCallout: "none",
       }}
       role="application"
-      aria-label={paused ? `${label} (paused)` : label}
+      aria-label={label}
       onPointerDown={(event) => {
         onFocus(id)
         const point = windowPoint(event, event.currentTarget, contentSize())
@@ -291,19 +283,13 @@ export const WindowSurface = memo(function WindowSurface({
     >
       <canvas ref={canvas} className="block h-full w-full" />
       {/*
-        * A paused window keeps its last frame, which on its own is
-        * indistinguishable from an application that has locked up. The badge is
-        * the difference between "I did that" and "something is broken".
-        *
-        * Small and in a corner rather than an overlay across the picture: the
-        * frame underneath is still the useful thing, and dimming it would make
-        * a deliberate saving look like a fault.
+        * No "paused" badge for unfocused windows on purpose. With
+        * pause-inactive on, a frozen side window is the normal state of the
+        * desktop, not an exception worth labelling: it holds the frame it had
+        * at the moment it lost focus, and focusing it resumes it instantly.
+        * Badging every unfocused window would put a permanent label on most
+        * of the screen.
         */}
-      {paused ? (
-        <div className="pointer-events-none absolute top-2 right-2 rounded-md bg-black/70 px-2 py-1 text-[10px] font-medium text-white/90 backdrop-blur-sm">
-          Paused
-        </div>
-      ) : null}
       {frame ? null : (
         <span className="absolute inset-0 grid place-items-center px-4 text-center text-sm text-white/50">
           {streamed ? "Waiting for pixels\u2026" : "Off screen"}

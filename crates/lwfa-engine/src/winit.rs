@@ -320,11 +320,14 @@ pub fn init_winit(
                         tracing::trace!("redraw: too soon to present, skipping the on-screen half");
                     }
 
+                    // Streamed windows are paced at the redraw rate; everything
+                    // else gets a 1 Hz heartbeat. See `frame_throttle`.
                     state.space.elements().for_each(|window| {
+                        let throttle = state.frame_throttle(window);
                         window.send_frame(
                             &output,
                             state.start_time.elapsed(),
-                            Some(Duration::ZERO),
+                            throttle,
                             |_, _| Some(output.clone()),
                         )
                     });
@@ -474,11 +477,14 @@ pub fn init_winit(
                 // the windows would not just stop streaming, they would stop
                 // *running*: no clock ticking, no video playing, no cursor
                 // blinking, on a session someone is looking at right now.
+                // Throttled per window exactly like the redraw path, or the
+                // stall fallback would quietly undo the suspension.
                 state.space.elements().for_each(|window| {
+                    let throttle = state.frame_throttle(window);
                     window.send_frame(
                         &output,
                         state.start_time.elapsed(),
-                        Some(Duration::ZERO),
+                        throttle,
                         |_, _| Some(output.clone()),
                     )
                 });

@@ -83,6 +83,13 @@ pub struct Session {
 /// takes a moment. Anything past this is not slow, it is stuck.
 const FIRST_FRAME_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How often an unfocused window is captured: 20 fps.
+///
+/// The focused window gets the full redraw rate. The others are peripheral
+/// vision, where 20 fps is imperceptible; what is very perceptible is five
+/// windows each demanding 60 captures and encodes a second from one GPU.
+const UNFOCUSED_CAPTURE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
 pub struct Lwfa {
     /// Settings from `configs/defaults.toml`, resolved once at startup.
     pub config: crate::config::Config,
@@ -151,6 +158,13 @@ pub struct Lwfa {
     /// Empty is the normal case for a local shell, which composites natively
     /// and needs no streams at all.
     pub streaming: std::collections::HashSet<WindowId>,
+    /// When each streamed window was last captured, for the unfocused cap.
+    ///
+    /// The focused window is captured at the redraw rate; the others at
+    /// [`UNFOCUSED_CAPTURE_INTERVAL`]. A side window is something being
+    /// glanced at, and 20 fps is indistinguishable there while costing a
+    /// third of the capture and encode work of 60.
+    capture_pacing: std::collections::HashMap<WindowId, std::time::Instant>,
     pub loop_signal: LoopSignal,
     /// Kept because `X11Wm` registers its own event sources, and it is started
     /// from inside a callback where the loop itself is not reachable.
@@ -258,6 +272,7 @@ impl Lwfa {
             capture: SurfaceCapture::default(),
             encoders: None,
             streaming: std::collections::HashSet::new(),
+            capture_pacing: std::collections::HashMap::new(),
             space: Space::default(),
             loop_signal,
             loop_handle,
@@ -399,6 +414,7 @@ impl Lwfa {
         self.forget_reported(id);
         self.capture.forget(id);
         self.streaming.remove(&id);
+        self.capture_pacing.remove(&id);
         if let Some(worker) = self.encoders.as_ref() {
             worker.forget(id);
         }
@@ -592,8 +608,67 @@ impl Lwfa {
         }
         for id in self.streaming.difference(&wanted) {
             self.awaiting_first_frame.remove(id);
+            // Streaming is over for this window, so its encoder session is
+            // pure cost: consumer NVIDIA drivers cap concurrent NVENC
+            // sessions, and an idle one still holds a slot another window
+            // could be using. The next request rebuilds it with an IDR
+            // anyway, which a newly attached decoder needs regardless.
+            if let Some(worker) = self.encoders.as_ref() {
+                worker.forget(*id);
+            }
         }
         self.streaming = wanted;
+        self.sync_suspended();
+    }
+
+    /// Tell every application whether anyone can actually see it.
+    ///
+    /// A window nobody streams is invisible in every sense that matters, and
+    /// xdg-shell has a word for that: the `suspended` toplevel state. Clients
+    /// that honour it (Firefox, mpv, GTK and Qt applications, most games that
+    /// pace themselves with frame callbacks) stop rendering entirely, which is
+    /// the difference between "we stopped encoding it" and "it stopped costing
+    /// GPU". The 1 Hz frame-callback heartbeat in `frame_throttle` stays even
+    /// while suspended, so a client that ignores the state, or one waiting on
+    /// a callback when the state flips, can never freeze for good; that is the
+    /// failure mode Chromium once shipped against compositors that withheld
+    /// callbacks outright.
+    fn sync_suspended(&mut self) {
+        for id in self.layout.all_ids() {
+            let Some(window) = self.layout.window(id) else {
+                continue;
+            };
+            // X11 windows have no such concept; the callback throttle still
+            // covers them.
+            let Some(toplevel) = window.toplevel() else {
+                continue;
+            };
+            let suspend = !self.streaming.contains(&id);
+            let changed = toplevel.with_pending_state(|state| {
+                if suspend {
+                    state.states.set(xdg_toplevel::State::Suspended)
+                } else {
+                    state.states.unset(xdg_toplevel::State::Suspended)
+                }
+            });
+            if changed {
+                toplevel.send_pending_configure();
+            }
+        }
+    }
+
+    /// How often this window's application deserves a "draw again" callback.
+    ///
+    /// Streamed windows are paced by the redraw loop, exactly as before.
+    /// Everything else gets a callback at most once a second: enough that a
+    /// client blocked on one always wakes up and one that ignores `suspended`
+    /// only wastes a frame a second, but no longer an invitation to render a
+    /// game at 60 fps behind a stream nobody is receiving.
+    pub fn frame_throttle(&self, window: &Window) -> Option<std::time::Duration> {
+        match self.layout.id_of(window) {
+            Some(id) if self.streaming.contains(&id) => Some(std::time::Duration::ZERO),
+            _ => Some(std::time::Duration::from_secs(1)),
+        }
     }
 
     /// Start or stop capturing audio, to match whether anyone is listening.
@@ -1213,6 +1288,17 @@ impl Lwfa {
                 return;
             }
 
+            // The unfocused capture cap. See `capture_pacing` on the struct.
+            // Skipping costs nothing: damage keeps its commit counters, so
+            // whatever changed is picked up whole on the next eligible pass.
+            if Some(id) != self.focused {
+                if let Some(last) = self.capture_pacing.get(&id) {
+                    if now.duration_since(*last) < UNFOCUSED_CAPTURE_INTERVAL {
+                        continue;
+                    }
+                }
+            }
+
             let size = window.geometry().size.to_physical(1);
             let t0 = PROFILE.then(std::time::Instant::now);
 
@@ -1224,6 +1310,7 @@ impl Lwfa {
             else {
                 continue;
             };
+            self.capture_pacing.insert(id, now);
 
             if let Some(t0) = t0 {
                 tracing::info!(

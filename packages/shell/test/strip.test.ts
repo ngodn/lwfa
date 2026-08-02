@@ -595,26 +595,38 @@ describe("fullscreen", () => {
 /**
  * The stream list: which windows this device asks the engine for pixels for.
  *
- * This is where "fullscreen pauses everything else" actually happens, so it is
- * pinned here. During fullscreen `layout` emits one window and nothing else,
- * so the others are not asked for and their share of the encoder budget goes
- * to the one being watched; the moment fullscreen ends they are asked for
- * again. No pause state is written anywhere in that round trip, which is what
- * makes the resume automatic and unable to leak.
+ * This is where both performance rules actually happen, so they are pinned
+ * here. Pause-inactive keeps the list to the focused window; fullscreen works
+ * because `layout` emits one window and nothing else, so the others are not
+ * asked for and their share of the encoder budget goes to the one being
+ * watched. No pause state is written anywhere in either round trip, which is
+ * what makes resume automatic and unable to leak.
  */
 describe("streamList", () => {
-  const none: ReadonlySet<WindowId> = new Set()
-
-  it("asks for what is visible and skips what is paused", () => {
+  it("streams every visible window when pause-inactive is off", () => {
     const placed = layout(withWindows([1, 2]), wide, config)
-    expect(streamList(placed, wide, config, none, null)).toEqual([1, 2])
-    expect(streamList(placed, wide, config, new Set([1 as WindowId]), null)).toEqual([2])
+    expect(streamList(placed, wide, config, 1 as WindowId, false, null)).toEqual([1, 2])
+  })
+
+  it("streams only the focused window when pause-inactive is on", () => {
+    const placed = layout(withWindows([1, 2]), wide, config)
+    expect(streamList(placed, wide, config, 1 as WindowId, true, null)).toEqual([1])
+    expect(streamList(placed, wide, config, 2 as WindowId, true, null)).toEqual([2])
+  })
+
+  it("streams everything visible when nothing is focused yet", () => {
+    // A session with no focus must not open on a wall of stills.
+    const placed = layout(withWindows([1, 2]), wide, config)
+    expect(streamList(placed, wide, config, null, true, null)).toEqual([1, 2])
   })
 
   it("does not ask for columns beyond the viewport", () => {
     const off = { id: 9 as WindowId, rect: { x: 2000, y: 8, width: 600, height: 1000 }, z: 1 }
     const on = { id: 1 as WindowId, rect: { x: 8, y: 8, width: 600, height: 1000 }, z: 0 }
-    expect(streamList([on, off], wide, config, none, null)).toEqual([1])
+    expect(streamList([on, off], wide, config, null, false, null)).toEqual([1])
+    // Off screen beats focused: pixels for a window the viewport cannot show
+    // are pixels wasted, whatever the focus says.
+    expect(streamList([on, off], wide, config, 9 as WindowId, true, null)).toEqual([])
   })
 
   it("streams only the fullscreen window while one is up, and all of them after", () => {
@@ -623,38 +635,28 @@ describe("streamList", () => {
     const strip = withWindows([1, 2])
     const up = toggleFullscreen(strip, wide, config)
     expect(
-      streamList(layout(up, wide, config), wide, config, none, fullscreenWindow(up)),
+      streamList(layout(up, wide, config), wide, config, null, false, fullscreenWindow(up)),
     ).toEqual([2])
 
     const down = toggleFullscreen(up, wide, config)
     expect(
-      streamList(layout(down, wide, config), wide, config, none, fullscreenWindow(down)),
+      streamList(layout(down, wide, config), wide, config, null, false, fullscreenWindow(down)),
     ).toEqual([1, 2])
   })
 
-  it("streams the fullscreen window even if it was paused", () => {
-    // A window paused in the panel and then sent fullscreen must not honour
-    // the stale pause: it is the only window in the layout, so honouring it
-    // would freeze the entire screen on the last frame received. Entering
-    // fullscreen also clears the pause; this is the backstop.
+  it("always streams the fullscreen window, whatever focus says", () => {
+    // The fullscreen window is the only one in the layout; anything that
+    // dropped it from the list would freeze the entire screen.
     const up = toggleFullscreen(withWindows([1, 2]), wide, config)
     expect(
       streamList(
         layout(up, wide, config),
         wide,
         config,
-        new Set([2 as WindowId]),
+        1 as WindowId,
+        true,
         fullscreenWindow(up),
       ),
-    ).toEqual([2])
-  })
-
-  it("keeps honouring pauses on windows that are not the fullscreen one", () => {
-    // Belt and braces: layout already dropped them during fullscreen, so this
-    // only matters on the way back out.
-    const strip = withWindows([1, 2])
-    expect(
-      streamList(layout(strip, wide, config), wide, config, new Set([1 as WindowId]), null),
     ).toEqual([2])
   })
 })

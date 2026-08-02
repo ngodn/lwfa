@@ -45,13 +45,6 @@ import { AudioFormat } from "@lwfa/proto";
 import type { Codec } from "@lwfa/proto";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
 import { clearFormat } from "@/lib/streamFormat"
-import {
-  clearPaused,
-  forgetPaused,
-  pausedNow,
-  setPaused,
-  subscribe as subscribePaused,
-} from "@/lib/paused"
 import { setPrefs, usePrefs } from "@/lib/prefs"
 import {
   appsRequested,
@@ -335,6 +328,9 @@ export function App(): React.ReactElement {
   }, []);
   const animateRef = useRef(prefs.motion.animate);
   animateRef.current = prefs.motion.animate;
+  // Read by `push`, which is deliberately dependency-free; the effect keyed
+  // on the preference below keeps it current and resends the list.
+  const pauseInactiveRef = useRef(prefs.stream.pauseInactive);
 
   /** Forward input aimed at a window, tagging it with which window it hit. */
   const sendInput = useCallback((id: WindowId, event: SurfaceInput) => {
@@ -410,16 +406,23 @@ export function App(): React.ReactElement {
       connection.current?.send({ type: "focusWindow", id: focused });
     }
 
-    // Ask for pixels only for columns the viewport can actually show. This is
-    // what keeps the encoder budget bounded by viewport width rather than by
-    // how many windows are open. See docs/architecture.md section 2.3.
-    // Paused windows are simply not asked for, and during fullscreen `layout`
-    // has already dropped everything else, so the one window being watched
-    // gets the entire budget. See `streamList` for the rules together.
+    // Ask for pixels only for columns the viewport can actually show, and
+    // with `pauseInactive` on (the default) only the focused one of those.
+    // This is what keeps the encoder budget bounded rather than growing with
+    // how many windows are open. See `streamList` for the rules together.
+    // Focus changes always come through `update`, so the list follows focus
+    // without anything extra here.
     connection.current?.send({
       type: "setStreams",
       windows: streamingRef.current
-        ? streamList(windows, out, configRef.current, pausedNow(), fullscreenWindow(next))
+        ? streamList(
+            windows,
+            out,
+            configRef.current,
+            focused,
+            pauseInactiveRef.current,
+            fullscreenWindow(next),
+          )
         : [],
       // What this browser can actually decode, asked of it rather than
       // guessed. Over plain HTTP there is no VideoDecoder at all, and claiming
@@ -435,45 +438,34 @@ export function App(): React.ReactElement {
       stripRef.current = next;
       setStrip(next);
       push(next, out, animate);
-      // A window filling the screen is being watched by definition, so a
-      // pause left on it from earlier stops meaning anything. Cleared after
-      // the push, which already streams it regardless (see `streamList`);
-      // this keeps the store, and the panel reading it, honest.
-      const fs = fullscreenWindow(next);
-      if (fs !== null) setPaused(fs, false);
     },
     [push],
   );
 
-  // A pause takes effect when it is pressed, not at the next reflow.
-  //
-  // The stream list is sent from `push`, which runs on strip transitions, and
-  // toggling a pause is not one: without this the engine kept encoding a
-  // "paused" window until some unrelated transition happened to resend the
-  // list, and the panel only looked right because the surface holds its last
-  // frame.
-  useEffect(
-    () =>
-      subscribePaused(() => {
-        const out = outputRef.current;
-        if (out.width <= 0) return;
-        const state = stripRef.current;
-        connection.current?.send({
-          type: "setStreams",
-          windows: streamingRef.current
-            ? streamList(
-                layout(state, out, configRef.current),
-                out,
-                configRef.current,
-                pausedNow(),
-                fullscreenWindow(state),
-              )
-            : [],
-          codecs: codecsRef.current,
-        });
-      }),
-    [],
-  );
+  // Flipping the pause-inactive preference takes effect when it is flipped,
+  // not at the next reflow. The list is otherwise sent from `push`, which
+  // runs on strip transitions, and a settings toggle is not one.
+  const pauseInactive = prefs.stream.pauseInactive;
+  useEffect(() => {
+    pauseInactiveRef.current = pauseInactive;
+    const out = outputRef.current;
+    if (out.width <= 0) return;
+    const state = stripRef.current;
+    connection.current?.send({
+      type: "setStreams",
+      windows: streamingRef.current
+        ? streamList(
+            layout(state, out, configRef.current),
+            out,
+            configRef.current,
+            focusedWindow(state),
+            pauseInactive,
+            fullscreenWindow(state),
+          )
+        : [],
+      codecs: codecsRef.current,
+    });
+  }, [pauseInactive]);
 
   useEffect(() => {
     if (!password) return;
@@ -619,9 +611,6 @@ export function App(): React.ReactElement {
           });
           dropFrame(message.id);
           decoderRef.current?.forget(message.id);
-          // Ids are unique only within a run of the engine, so a paused one
-          // left behind would freeze an unrelated window later.
-          forgetPaused(message.id);
           update((state, out) =>
             removeWindow(state, message.id, out, configRef.current),
           );
@@ -796,7 +785,6 @@ export function App(): React.ReactElement {
       conn.close();
       decoder.close();
       clearFrames();
-      clearPaused();
       opusStream.close();
       // The old answer would otherwise linger and claim a codec is in use
       // after the stream has stopped.

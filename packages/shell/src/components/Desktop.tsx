@@ -30,7 +30,6 @@ import { WindowSurface, type SurfaceInput } from "@/WindowSurface"
 import type { Output } from "@/strip"
 import { fillsOutput, stripBounds } from "@/strip"
 import { useArranging } from "@/lib/arrange"
-import { usePaused } from "@/lib/paused"
 import { ArrangeBar } from "@/components/ArrangeBar"
 import { ArrangeLayer, type SceneTransform } from "@/components/ArrangeLayer"
 import { cn } from "@/lib/utils"
@@ -67,7 +66,6 @@ export const Desktop = memo(function Desktop({
   onInput,
 }: DesktopProps) {
   const arrangingNow = useArranging()
-  const paused = usePaused()
   /** How the scene maps onto the screen. Only tracked while arranging. */
   const [transform, setTransform] = useState<SceneTransform | null>(null)
   const frameRef = useRef<HTMLDivElement | null>(null)
@@ -216,7 +214,6 @@ export const Desktop = memo(function Desktop({
             rect={w.rect}
             z={w.z}
             filling={fillsOutput(w.rect, output)}
-            paused={paused.has(w.id)}
             focused={w.id === focused}
             label={labelFor(windows.get(w.id), w.id)}
             streamed={streamedIds.has(w.id)}
