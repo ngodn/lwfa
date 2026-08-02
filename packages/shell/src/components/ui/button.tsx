@@ -1,5 +1,6 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
+import { Loader2 } from "lucide-react"
 import { Slot } from "radix-ui"
 
 import { cn } from "@/lib/utils"
@@ -38,26 +39,63 @@ const buttonVariants = cva(
   }
 )
 
+/**
+ * `loading` swaps the leading icon for a spinner and blocks further presses.
+ *
+ * Built in rather than left to each caller, because the thing it prevents is
+ * everywhere: over a network, a press that starts an application or writes to a
+ * database has no visible effect for hundreds of milliseconds, and a button
+ * that looks idle in that gap gets pressed again. The spinner *replaces* the
+ * icon rather than joining it so the button does not change width mid-press,
+ * which on a touch target moves everything next to it under the user's finger.
+ *
+ * Not used for anything the shell does locally. Layout, focus and workspace
+ * changes apply on the same frame, and a spinner on those would invent a delay
+ * to apologise for.
+ */
 function Button({
   className,
   variant = "default",
   size = "default",
   asChild = false,
+  loading = false,
+  disabled,
+  children,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
+    loading?: boolean
   }) {
   const Comp = asChild ? Slot.Root : "button"
+
+  // `asChild` hands rendering to the caller's element, so there is nothing to
+  // wrap and no icon of ours to swap.
+  const content =
+    loading && !asChild ? (
+      <>
+        <Loader2 className="animate-spin" aria-hidden />
+        {React.Children.toArray(children).filter(
+          (child) => typeof child === "string" || typeof child === "number",
+        )}
+      </>
+    ) : (
+      children
+    )
 
   return (
     <Comp
       data-slot="button"
       data-variant={variant}
       data-size={size}
+      data-loading={loading || undefined}
+      aria-busy={loading || undefined}
+      disabled={disabled || loading}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
-    />
+    >
+      {content}
+    </Comp>
   )
 }
 

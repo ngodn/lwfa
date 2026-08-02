@@ -14,11 +14,13 @@
  * what makes this split actually work rather than merely look tidy.
  */
 
-import { memo, useCallback, useLayoutEffect, useState } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useState } from "react"
 import { getPrefs, resolveEdge, usePrefs } from "@/lib/prefs"
 import { NavRail, shellDirection, usePortrait, type NavTarget } from "@/components/NavRail"
 import { PanelHost } from "@/components/PanelHost"
 import { InputDock } from "@/components/InputDock"
+import { useArranging } from "@/lib/arrange"
+import { AlreadyRunning } from "@/components/AlreadyRunning"
 import { toggleDock } from "@/lib/dock"
 import { NAV_ITEMS } from "@/nav/registry"
 import { useSessionActions } from "@/session"
@@ -73,6 +75,24 @@ export const ShellChrome = memo(function ShellChrome({
 
   const close = useCallback(() => setActive(null), [])
 
+  /**
+   * Entering arrange mode closes whatever panel opened it.
+   *
+   * Arrange mode is the desktop, full width, with controls on the windows
+   * themselves. A panel left open covers the thing being arranged, and worse:
+   * the panel is non-modal, so the click that dismisses it also lands on a
+   * window underneath, which focuses that window and leaves the mode. Pressing
+   * "Arrange windows" and then clicking anywhere would undo itself.
+   *
+   * Handled here rather than in the panel because closing is this component's
+   * state, and because any future way into the mode gets the same behaviour
+   * without having to remember to ask for it.
+   */
+  const arranging = useArranging()
+  useEffect(() => {
+    if (arranging) setActive(null)
+  }, [arranging])
+
   // On the document element, not on the div below. Radix portals overlays to
   // `document.body`, so a variable set on a descendant is invisible to the
   // panel that needs it, and the panel silently lays itself out over the rail.
@@ -95,6 +115,7 @@ export const ShellChrome = memo(function ShellChrome({
           <InputDock onOpenSettings={setActive} />
         </main>
         <PanelHost active={active} onClose={close} />
+        <AlreadyRunning />
       </div>
     </TooltipProvider>
   )

@@ -6,7 +6,19 @@
  */
 
 import { memo, useState } from "react"
-import { Check, Monitor, Plus, Trash2, X } from "lucide-react"
+import {
+  Check,
+  Eye,
+  Gamepad2,
+  Monitor,
+  Plus,
+  Smartphone,
+  Tablet,
+  Trash2,
+  X,
+} from "lucide-react"
+import type { PeerInfo } from "@lwfa/proto"
+import { LogOut, Pencil } from "lucide-react"
 import {
   connectTo,
   forgetConnection,
@@ -14,15 +26,19 @@ import {
   useConnections,
   type Connection,
 } from "@/lib/connections"
-import { useSessionState } from "@/session"
+import { useSessionActions, useSessionState } from "@/session"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
 import { PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
 function ConnectionsPanel() {
-  const { endpoint, account, status } = useSessionState()
+  const { endpoint, account, status, peers, session, primary } = useSessionState()
+  // Only the owner can decide who else is on the machine. The engine enforces
+  // it; this just stops offering buttons that would be refused.
+  const owner = account === "owner"
   const connections = useConnections()
   const [adding, setAdding] = useState(false)
 
@@ -68,8 +84,31 @@ function ConnectionsPanel() {
       </PanelSection>
 
       <PanelSection
+        title="Devices watching right now"
+        description="All devices see the same windows. One decides the layout."
+      >
+        {peers.length === 0 ? (
+          <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
+            Just this one.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {peers.map((peer) => (
+              <PeerRow
+                key={peer.id}
+                peer={peer}
+                you={peer.id === session}
+                manageable={owner && peer.id !== session}
+              />
+            ))}
+          </ul>
+        )}
+        {!primary ? <TakeControl /> : null}
+      </PanelSection>
+
+      <PanelSection
         title="Saved machines"
-        description="Stored on this device only. Switching reloads the shell, because window ids, frames and encoder sessions all belong to one engine."
+        description="Stored on this device. Switching reloads the page."
       >
         {others.length === 0 ? (
           <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
@@ -96,6 +135,107 @@ function ConnectionsPanel() {
       )}
     </div>
   )
+}
+
+/**
+ * One device attached to this session.
+ *
+ * Deliberately shows the mode as well as the device. "iPad, viewing" and
+ * "iPad, can interact" are very different things to have connected to your
+ * desktop, and the whole point of the access controls is that you can tell
+ * which one you handed out.
+ */
+const PeerRow = memo(function PeerRow({
+  peer,
+  you,
+  manageable,
+}: {
+  peer: PeerInfo
+  you: boolean
+  manageable: boolean
+}) {
+  const actions = useSessionActions()
+  const Icon = deviceIcon(peer.device)
+  const viewing = peer.mode === "view"
+
+  return (
+    <li className="space-y-2 rounded-lg border bg-card p-2">
+      <div className="flex items-center gap-2">
+        <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">
+            {peer.device}
+            {you ? <span className="ml-1.5 text-xs text-muted-foreground">(this one)</span> : null}
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">{peer.account}</span>
+        </div>
+        {viewing ? (
+          <Badge variant="outline" className="shrink-0 gap-1">
+            <Eye className="size-3" aria-hidden />
+            Viewing
+          </Badge>
+        ) : null}
+        {peer.primary ? (
+          <Badge className="shrink-0 gap-1">
+            <Gamepad2 className="size-3" aria-hidden />
+            Driving
+          </Badge>
+        ) : null}
+      </div>
+
+      {manageable ? (
+        <div className="flex flex-wrap gap-1.5">
+          {/*
+            * Per connection, not per account. This is the "someone is on my
+            * desktop right now" control: hand them the keys for a minute, take
+            * them back, or end it. What the account is allowed in general is a
+            * different question, and lives in Access.
+            */}
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() =>
+              actions.setSessionMode(peer.id, viewing ? "interact" : "view")
+            }
+          >
+            {viewing ? (
+              <Pencil className="size-3.5" aria-hidden />
+            ) : (
+              <Eye className="size-3.5" aria-hidden />
+            )}
+            {viewing ? "Let them interact" : "Viewing only"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 text-muted-foreground hover:text-destructive"
+            onClick={() => actions.endSession(peer.id)}
+          >
+            <LogOut className="size-3.5" aria-hidden />
+            Disconnect
+          </Button>
+        </div>
+      ) : null}
+    </li>
+  )
+})
+
+function TakeControl() {
+  const actions = useSessionActions()
+  return (
+    <Button variant="outline" className="w-full gap-2" onClick={actions.takeControl}>
+      <Gamepad2 className="size-4" aria-hidden />
+      Drive from this device
+    </Button>
+  )
+}
+
+/** Best guess from the device string the engine derived from a user agent. */
+function deviceIcon(device: string) {
+  if (device === "iPad") return Tablet
+  if (device === "iPhone" || device === "Android") return Smartphone
+  return Monitor
 }
 
 const ConnectionRow = memo(function ConnectionRow({ entry }: { entry: Connection }) {
@@ -156,7 +296,7 @@ function AddConnection({ onDone }: { onDone: () => void }) {
           required
         />
         <p className="text-xs text-muted-foreground">
-          Port {DEFAULT_PORT} is assumed. A full <code className="font-mono">ws://host:port</code> works too.
+          Port {DEFAULT_PORT} is assumed. <code className="font-mono">ws://host:port</code> also works.
         </p>
       </div>
 

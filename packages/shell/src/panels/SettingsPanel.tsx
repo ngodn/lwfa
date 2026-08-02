@@ -1,11 +1,19 @@
 /**
- * Settings, which for now means the shape of the navigation itself.
+ * Settings for this device.
  *
- * The rail can sit on any edge, its buttons can be reordered, and any of them
- * can be switched off. Reordering is done with move buttons rather than drag
- * and drop: this list is operated on a touchscreen as often as with a mouse,
- * a drag inside an already-scrolling sheet is fiddly on both, and buttons are
- * reachable by keyboard without any extra work.
+ * # Why tabs
+ *
+ * These are unrelated groups that happen to share a home, and they grew past
+ * the point where one scroll was findable: the rail's shape, the order of its
+ * buttons, and what the connection is doing have nothing to do with each other,
+ * and hunting past forty rows of button ordering to pause the video is not a
+ * settings screen, it is a haystack. Tabs make each group one tap away and keep
+ * the sheet's scroll short enough to be worth scrolling.
+ *
+ * Reordering is done with move buttons rather than drag and drop: this list is
+ * operated on a touchscreen as often as with a mouse, a drag inside an
+ * already-scrolling sheet is fiddly on both, and buttons are reachable by
+ * keyboard without any extra work.
  */
 
 import { memo, useCallback } from "react"
@@ -23,6 +31,11 @@ import {
   RotateCcw,
   Wand2,
 } from "lucide-react"
+import { useEffect, useState } from "react"
+import { useSessionState } from "@/session"
+import * as audio from "@/lib/audio"
+import { choose, decodable } from "@/lib/codecs"
+import type { Codec } from "@lwfa/proto"
 import {
   getPrefs,
   patchPrefs,
@@ -33,6 +46,9 @@ import {
 } from "@/lib/prefs"
 import { NAV_ITEMS } from "@/nav/registry"
 import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
@@ -75,10 +91,25 @@ function SettingsPanel() {
   }, [])
 
   return (
-    <div className="space-y-6 pt-2">
+    <Tabs defaultValue="navigation" className="pt-2">
+      {/* Sticky, because these lists are long and losing the way back to the
+        * other groups halfway down is the whole failure tabs exist to avoid. */}
+      <TabsList className="sticky top-0 z-10 w-full">
+        <TabsTrigger value="navigation" className="flex-1">
+          Navigation
+        </TabsTrigger>
+        <TabsTrigger value="buttons" className="flex-1">
+          Buttons
+        </TabsTrigger>
+        <TabsTrigger value="stream" className="flex-1">
+          Stream
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="navigation" className="space-y-6">
       <PanelSection
-        title="Navigation edge"
-        description="Where the bar sits. Auto puts it down the side in landscape, where height is plentiful and width is not, and along the bottom in portrait, where it is the other way round and a thumb is already there."
+        title="Position"
+        description="Auto follows the shape of the screen."
       >
         <ToggleGroup
           type="single"
@@ -101,7 +132,10 @@ function SettingsPanel() {
         </ToggleGroup>
       </PanelSection>
 
-      <PanelSection title="Button size">
+      <PanelSection
+        title="Button size"
+        description="Bigger targets for touch, smaller for a mouse."
+      >
         <ToggleGroup
           type="single"
           value={nav.size}
@@ -119,9 +153,12 @@ function SettingsPanel() {
         </ToggleGroup>
       </PanelSection>
 
+      </TabsContent>
+
+      <TabsContent value="buttons" className="space-y-6">
       <PanelSection
         title="Buttons"
-        description="Order, which end of the bar they sit at, and whether they appear at all. Anchored buttons are pushed to the far end, where a thumb reaches them; everything else stays at the near end, out of accidental reach. When the bar runs out of room, buttons merge into grouped ones rather than disappearing."
+        description="Reorder, hide, or pin buttons."
       >
         <ul className="divide-y rounded-lg border">
           {nav.order.map((id, index) => {
@@ -201,11 +238,19 @@ function SettingsPanel() {
         </ul>
       </PanelSection>
 
+      </TabsContent>
+
+      <TabsContent value="stream" className="space-y-6">
+        <StreamSettings />
+      </TabsContent>
+
+      {/* Outside the tabs on purpose: it resets all of them, so filing it under
+        * one would be a lie about what it does. */}
       <PanelSection title="Reset">
         <FieldRow>
           <Field
             label="Restore defaults"
-            hint="Theme, navigation, keyboard and gamepad preferences on this device."
+            hint="Resets this device only."
           />
           <Button variant="outline" size="sm" onClick={resetPrefs} className="gap-2">
             <RotateCcw className="size-3.5" aria-hidden />
@@ -213,6 +258,281 @@ function SettingsPanel() {
           </Button>
         </FieldRow>
       </PanelSection>
+    </Tabs>
+  )
+}
+
+/**
+ * What this device is asking the engine to send it.
+ *
+ * Per device, deliberately. The same session can be a laptop on ethernet and a
+ * phone on a train, and "how much video would you like" has a different answer
+ * for each. None of it changes what anyone else sees.
+ */
+function StreamSettings() {
+  const { stream, motion } = usePrefs()
+  const { permissions } = useSessionState()
+  /**
+   * What this device can decode, asked of it once when the panel opens.
+   *
+   * Drives both which choices are offered and what the status section reports,
+   * so the panel can never offer a codec that would produce a black window.
+   */
+  const [decodes, setDecodes] = useState<Codec[]>([])
+  useEffect(() => {
+    let live = true
+    void decodable().then((codecs) => live && setDecodes(codecs))
+    return () => {
+      live = false
+    }
+  }, [])
+  const hardware = decodes.length > 0
+
+  /**
+   * The codec that will actually be used, by the same rule the engine applies:
+   * the preference narrows what the device offers, and the best survivor wins.
+   */
+  const inUse = (() => {
+    if (stream.codec === "jpeg") return null
+    const allowed = stream.codec === "auto" ? decodes : decodes.filter((c) => c === stream.codec)
+    const chosen = choose(allowed)
+    return chosen === "hevc" ? "HEVC, hardware" : chosen === "h264" ? "H.264, hardware" : null
+  })()
+
+  return (
+    <>
+      <PanelSection
+        title="Video"
+        description="Pause video to save battery. Stays connected."
+      >
+        <FieldRow>
+          <Field
+            label="Show the desktop"
+            hint={stream.enabled ? "Receiving video" : "Paused"}
+          />
+          <Switch
+            checked={stream.enabled}
+            onCheckedChange={(enabled) => patchPrefs("stream", { enabled })}
+            aria-label="Show the desktop"
+          />
+        </FieldRow>
+      </PanelSection>
+
+      <PanelSection
+        title="Video quality"
+        description="Video uses less bandwidth. JPEG keeps text sharper."
+      >
+        <ToggleGroup
+          type="single"
+          value={stream.codec}
+          onValueChange={(value) =>
+            value && patchPrefs("stream", { codec: value as typeof stream.codec })
+          }
+          variant="outline"
+          className="w-full"
+          disabled={!stream.enabled}
+        >
+          <ToggleGroupItem value="auto" className="h-11 flex-1">
+            Auto
+          </ToggleGroupItem>
+          {/* Only offered where the device can actually decode them, so a
+            * choice can never produce a black window. */}
+          {decodes.includes("hevc") ? (
+            <ToggleGroupItem value="hevc" className="h-11 flex-1">
+              HEVC
+            </ToggleGroupItem>
+          ) : null}
+          {decodes.includes("h264") ? (
+            <ToggleGroupItem value="h264" className="h-11 flex-1">
+              H.264
+            </ToggleGroupItem>
+          ) : null}
+          <ToggleGroupItem value="jpeg" className="h-11 flex-1">
+            JPEG
+          </ToggleGroupItem>
+        </ToggleGroup>
+
+        {/*
+          * Not a setting, an explanation. WebCodecs is only exposed in a secure
+          * context, so the same browser has a hardware decoder on localhost and
+          * none at all over plain HTTP on a LAN address. Without saying so, the
+          * "automatic" option silently does nothing and looks broken.
+          */}
+        {!hardware ? (
+          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+            Over plain HTTP the browser blocks hardware decoding, so
+            Automatic uses JPEG. Serve the shell over HTTPS to enable H.264.
+          </p>
+        ) : null}
+      </PanelSection>
+
+      <PanelSection
+        title="Sound"
+        description="Sound from apps running on the desktop."
+      >
+        <FieldRow>
+          <Field
+            label="Hear the desktop"
+            hint={stream.audio ? "About 1.5 Mbit/s" : "Muted"}
+          />
+          <Switch
+            checked={stream.audio}
+            onCheckedChange={(audio) => patchPrefs("stream", { audio })}
+            aria-label="Hear the desktop"
+          />
+        </FieldRow>
+        {/*
+          * There is no way to detect the iOS mute switch, so this says it
+          * rather than leaving someone to conclude the feature is broken.
+          */}
+        {stream.audio && isApple() ? (
+          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+            No sound? Check the ringer switch. iOS mutes web audio when the
+            ringer is off.
+          </p>
+        ) : null}
+        {stream.audio ? <AudioDiagnostics /> : null}
+        {stream.audio ? (
+          <FieldRow>
+            <Field
+              label="Also play on the desktop's speakers"
+              hint={
+                stream.localPlayback
+                  ? "Anyone in that room hears it too"
+                  : "Only devices listening like this one"
+              }
+            />
+            <Switch
+              checked={stream.localPlayback}
+              onCheckedChange={(localPlayback) => patchPrefs("stream", { localPlayback })}
+              aria-label="Also play on the desktop's speakers"
+            />
+          </FieldRow>
+        ) : null}
+        {stream.audio ? (
+          <FieldRow>
+            <Field label="Volume" hint={`${Math.round(stream.volume * 100)}%`} />
+            <Slider
+              className="w-40"
+              min={0}
+              max={1}
+              step={0.05}
+              value={[stream.volume]}
+              onValueChange={([volume]) =>
+                patchPrefs("stream", { volume: volume ?? 1 })
+              }
+              aria-label="Volume"
+            />
+          </FieldRow>
+        ) : null}
+      </PanelSection>
+
+      <PanelSection
+        title="Motion"
+        description="Slide windows to their new positions."
+      >
+        <FieldRow>
+          <Field label="Animate windows" hint={motion.animate ? "Sliding" : "Instant"} />
+          <Switch
+            checked={motion.animate}
+            onCheckedChange={(animate) => patchPrefs("motion", { animate })}
+            aria-label="Animate windows"
+          />
+        </FieldRow>
+      </PanelSection>
+
+      <PanelSection
+        title="Status"
+      >
+        <dl className="space-y-1.5 text-xs">
+          <Readout
+            label="Encoding in use"
+            value={
+              !stream.enabled
+                ? "Nothing"
+                : (inUse ?? "JPEG")
+            }
+          />
+          <Readout label="Sound" value={stream.audio ? "48kHz stereo, uncompressed" : "Muted"} />
+          {stream.audio ? (
+            <Readout
+              label="Playback"
+              value={hardware ? "Audio worklet" : "Scheduled buffers"}
+            />
+          ) : null}
+          <Readout
+            label="This session"
+            value={permissions.mode === "interact" ? "Can interact" : "Viewing only"}
+          />
+        </dl>
+      </PanelSection>
+    </>
+  )
+}
+
+/**
+ * Whether this is an Apple mobile device, for the mute-switch note.
+ *
+ * An iPad in desktop mode reports itself as a Macintosh, so the touch count is
+ * what separates it from a real Mac. Same tell as `describeDevice` in App.
+ */
+function isApple(): boolean {
+  const ua = navigator.userAgent
+  return /iPad|iPhone/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
+}
+
+/**
+ * Live state of the audio graph.
+ *
+ * Deliberately blunt. "Running, worklet, 1423 chunks" and "suspended, 0 chunks"
+ * are different problems with the same symptom, and without this the only way
+ * to tell them apart is a laptop and a debugger, which is precisely what nobody
+ * has when the thing that is silent is a tablet.
+ */
+function AudioDiagnostics() {
+  const [state, setState] = useState(() => audio.diagnostics())
+  useEffect(() => {
+    const timer = setInterval(() => setState(audio.diagnostics()), 700)
+    return () => clearInterval(timer)
+  }, [])
+
+  const stalled = state.contextState !== "running"
+  const starved = state.contextState === "running" && state.chunks === 0
+
+  return (
+    <div
+      className={cn(
+        "space-y-1 rounded-lg border p-3 text-xs",
+        stalled || starved ? "border-warning/40 bg-warning/10" : "border-dashed",
+      )}
+    >
+      <dl className="space-y-1">
+        <Readout label="Audio context" value={state.contextState} />
+        <Readout label="Playback path" value={state.path} />
+        <Readout label="Chunks received" value={String(state.chunks)} />
+        <Readout label="Dropouts" value={String(state.underruns)} />
+      </dl>
+      {stalled ? (
+        <p className="pt-1 text-muted-foreground">
+          The browser has not started audio. Tap anywhere on the page: it will
+          not begin until the page has been touched.
+        </p>
+      ) : null}
+      {starved ? (
+        <p className="pt-1 text-muted-foreground">
+          Playing, but nothing is arriving from the machine. That is the
+          connection or the engine, not this device.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function Readout({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-right">{value}</dd>
     </div>
   )
 }

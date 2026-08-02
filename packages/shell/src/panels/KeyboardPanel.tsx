@@ -24,7 +24,7 @@ function KeyboardPanel() {
         <FieldRow>
           <Field
             label="Show the keyboard"
-            hint="Docks across the bottom, with the desktop above it."
+            hint="Docks below the desktop."
           />
           <Button
             size="sm"
@@ -40,8 +40,8 @@ function KeyboardPanel() {
       </PanelSection>
 
       <PanelSection
-        title="Shortcut in the navigation"
-        description="A one-tap Escape next to the gamepad button. Escape closes menus and dialogs and leaves vim's insert mode, and reaching it through the whole keyboard is a lot of taps for one key."
+        title="Escape key"
+        description="A one-tap Escape button in the navigation bar."
       >
         <FieldRow>
           <Field label="Show the Escape button" />
@@ -62,7 +62,7 @@ function KeyboardPanel() {
 
       <PanelSection
         title="Modifiers"
-        description="Combo mode keeps Ctrl, Alt, Shift and Super held until you tap them again, so one finger can build a combination. Normal mode releases them after the next key."
+        description="Combo mode holds modifiers until you tap them again."
       >
         <FieldRow>
           <Field label="Start in combo mode" />
@@ -79,7 +79,6 @@ function KeyboardPanel() {
         <FieldRow>
           <Field
             label="Vibrate on press"
-            hint="Ignored by devices without a vibration motor, which includes every iPad."
           />
           <Switch
             checked={prefs.keyboard.haptics}

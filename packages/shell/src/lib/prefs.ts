@@ -39,9 +39,21 @@ export type NavEdge = "left" | "right" | "top" | "bottom"
  */
 export type NavEdgePref = NavEdge | "auto"
 
-/** Resolve `auto` against a viewport. */
-export function resolveEdge(pref: NavEdgePref, portrait: boolean): NavEdge {
-  if (pref !== "auto") return pref
+const EDGES: readonly NavEdge[] = ["left", "right", "top", "bottom"]
+
+/**
+ * Resolve an edge preference against a viewport.
+ *
+ * Validates rather than trusting. Preferences come from `localStorage`, which
+ * means they can be older than the code, newer than the code, or hand-edited,
+ * and an unrecognised value must not reach a component that will position
+ * itself with it. The failure mode is nasty and was seen in practice: a stale
+ * hot-reload left one component new enough to write `"auto"` and another old
+ * enough to pass it straight to a sheet as a side, which is not a direction, so
+ * the panel laid itself out off-screen and the shell looked broken.
+ */
+export function resolveEdge(pref: NavEdgePref | string, portrait: boolean): NavEdge {
+  if (EDGES.includes(pref as NavEdge)) return pref as NavEdge
   return portrait ? "bottom" : "left"
 }
 export type ThemeMode = "light" | "dark" | "system"
@@ -98,11 +110,86 @@ export interface Prefs {
     /** Opacity of the pad over the game, 0.2â€“1. */
     opacity: number
     haptics: boolean
+    /**
+     * What the pad actually sends.
+     *
+     * `controller` creates a virtual gamepad on the machine, which is what
+     * Steam and anything built with SDL look for, and is the only mode that
+     * can express an analog stick. `keyboard` sends the keycodes each control
+     * is bound to, which is what emulators and older titles want, and is the
+     * fallback when the machine will not allow a virtual device.
+     */
+    mode: "controller" | "keyboard"
   }
   keyboard: {
     /** Keep modifiers latched until tapped again, for one-finger combos. */
     stickyModifiers: boolean
     haptics: boolean
+  }
+  stream: {
+    /**
+     * Whether to ask for pixels at all.
+     *
+     * Off is a real mode, not a debug switch: a second device left open on a
+     * desk does not need to be decoding video, and on a phone it is the
+     * difference between a warm pocket and a cold one. The session stays
+     * connected and the layout stays live; only the frames stop.
+     */
+    enabled: boolean
+    /**
+     * Which encoding to ask for.
+     *
+     * `auto` means H.264 when the browser can decode it. `jpeg` forces the
+     * fallback, which is worth having as a choice rather than only as a
+     * consequence: H.264 is far cheaper on bandwidth but it is lossy in a way
+     * that smears text, and on a fast LAN a still terminal looks better as
+     * JPEG. It is also the first thing to try when video goes wrong.
+     */
+    /**
+     * Which codec to ask for.
+     *
+     * "auto" takes the best the device can decode. Naming one pins it, which
+     * is useful for comparing them by eye. "jpeg" turns video off entirely and
+     * keeps text at its sharpest.
+     *
+     * A choice can only narrow what the hardware offers, never widen it: ask
+     * for HEVC on a device without an HEVC decoder and you get JPEG, because
+     * the alternative is a black window.
+     */
+    codec: "auto" | "hevc" | "h264" | "jpeg"
+    /**
+     * Whether to hear the machine.
+     *
+     * Off by default, and deliberately so. This carries every sound the
+     * machine makes, not only the ones lwfa's own windows produce, because
+     * there is no reliable link from a Wayland window to the audio node its
+     * client writes to. A page that started playing the room the moment it
+     * loaded would be a surprise of the worst kind.
+     */
+    audio: boolean
+    /** Playback volume for that audio, 0 to 1. Per device. */
+    volume: number
+    /**
+     * Also play the session's audio on the machine's own speakers.
+     *
+     * Off by default. Applications lwfa starts are pointed at a private audio
+     * device that goes nowhere, so the machine is silent and only whoever is
+     * listening remotely hears anything. Turning this on adds a loopback from
+     * that device back to the real output.
+     *
+     * Machine-wide rather than per device: there is one set of speakers.
+     */
+    localPlayback: boolean
+  }
+  motion: {
+    /**
+     * Animate window movement.
+     *
+     * Separate from the operating system's reduced-motion setting, which is
+     * always obeyed regardless. This is for someone who wants motion in
+     * general and not here.
+     */
+    animate: boolean
   }
   /**
    * Layout policy the user can change at runtime.
@@ -136,10 +223,21 @@ export const DEFAULT_PREFS: Prefs = {
     skin: "neutral",
     opacity: 0.85,
     haptics: true,
+    mode: "controller",
   },
   keyboard: {
     stickyModifiers: true,
     haptics: true,
+  },
+  stream: {
+    enabled: true,
+    codec: "auto",
+    audio: false,
+    volume: 1,
+    localPlayback: false,
+  },
+  motion: {
+    animate: true,
   },
   layout: {
     orientation: ORIENTATION,
@@ -167,9 +265,18 @@ function hydrate(raw: unknown): Prefs {
   const centred = sanitiseZone(stored.nav?.order, stored.nav?.centred, "centred")
   return {
     theme: stored.theme ?? DEFAULT_PREFS.theme,
-    nav: { ...DEFAULT_PREFS.nav, ...stored.nav, order, anchored, centred },
+    nav: {
+      ...DEFAULT_PREFS.nav,
+      ...stored.nav,
+      edge: sanitiseEdge(stored.nav?.edge),
+      order,
+      anchored,
+      centred,
+    },
     gamepad: { ...DEFAULT_PREFS.gamepad, ...stored.gamepad },
     keyboard: { ...DEFAULT_PREFS.keyboard, ...stored.keyboard },
+    stream: { ...DEFAULT_PREFS.stream, ...stored.stream },
+    motion: { ...DEFAULT_PREFS.motion, ...stored.motion },
     layout: { ...DEFAULT_PREFS.layout, ...stored.layout },
     followEngineScroll: stored.followEngineScroll ?? DEFAULT_PREFS.followEngineScroll,
   }
@@ -189,6 +296,13 @@ function hydrate(raw: unknown): Prefs {
  * still has, which keeps their arrangement intact and still lands the newcomer
  * next to the thing it belongs with.
  */
+/** An edge preference we recognise, or `auto`. */
+function sanitiseEdge(stored: unknown): NavEdgePref {
+  return stored === "auto" || EDGES.includes(stored as NavEdge)
+    ? (stored as NavEdgePref)
+    : DEFAULT_PREFS.nav.edge
+}
+
 function sanitiseOrder(stored: NavItemId[] | undefined): NavItemId[] {
   const known = new Set<string>(NAV_ITEM_IDS)
   const result = (stored ?? []).filter((id) => known.has(id))

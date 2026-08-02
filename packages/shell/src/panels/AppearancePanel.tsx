@@ -23,7 +23,7 @@ function AppearancePanel() {
     <div className="space-y-6 pt-2">
       <PanelSection
         title="Theme"
-        description="System follows the device, and changes as soon as it does."
+        description="System follows your device setting."
       >
         <ToggleGroup
           type="single"
@@ -47,7 +47,7 @@ function AppearancePanel() {
         <FieldRow>
           <Field
             label="Follow the engine's scroll"
-            hint="Mirror where the physical display is scrolled to, instead of fitting the strip to this viewport."
+            hint="Mirror the desktop's scroll position."
           />
           <Switch
             checked={prefs.followEngineScroll}
@@ -60,7 +60,7 @@ function AppearancePanel() {
 
       <PanelSection
         title="Touch feedback"
-        description="Short vibration when an on-screen control is pressed. Ignored by devices without a vibration motor, which includes every iPad."
+        description="Vibrate when a control is pressed."
       >
         <FieldRow>
           <Label htmlFor="kb-haptics" className="font-normal">

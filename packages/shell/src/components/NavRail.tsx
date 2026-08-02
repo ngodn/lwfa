@@ -21,8 +21,11 @@
  */
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { describeStatus } from "@/lib/status"
 import { cn } from "@/lib/utils"
 import { resolveEdge, usePrefs, type NavEdge, type NavItemId } from "@/lib/prefs"
+import { useSessionState } from "@/session"
+import type { Status } from "@/connection"
 import { useDock } from "@/lib/dock"
 import {
   NAV_GROUPS,
@@ -180,6 +183,19 @@ interface RailButtonProps {
   onSelect: (target: NavTarget) => void
 }
 
+/**
+ * Connection state, reduced to the three things worth a colour.
+ *
+ * Green when it is working, amber while it is trying, red when it is not.
+ * Deliberately coarse: the exact state is a word away in the panel, and a
+ * light on a button is for noticing, not for reading.
+ */
+function toneFor(status: Status): "good" | "busy" | "bad" {
+  // One table decides what each state means, so the dot on the rail and the
+  // words in the session panel can never disagree. See `lib/status`.
+  return describeStatus(status).tone
+}
+
 const RailButton = memo(function RailButton({
   slot,
   edge,
@@ -191,6 +207,14 @@ const RailButton = memo(function RailButton({
   const meta = slot.kind === "item" ? slot.item : slot.group
   const Icon = meta.icon
   const glyph = slot.kind === "item" ? slot.item.glyph : undefined
+
+  // Only the session button carries the connection light. Putting it on every
+  // button would be noise; putting it on none costs the one thing the badge it
+  // replaces was actually good for.
+  const carriesStatus =
+    slot.kind === "item" ? slot.id === "info" : slot.group.members.includes("info")
+  const { status } = useSessionState()
+  const statusTone = carriesStatus ? toneFor(status) : null
 
   const handle = useCallback(() => {
     onSelect(
@@ -230,6 +254,23 @@ const RailButton = memo(function RailButton({
                 panel behind it holds more than its label suggests. */}
             {slot.kind === "group" ? (
               <span className="absolute right-1 bottom-1 size-1 rounded-full bg-current opacity-60" />
+            ) : null}
+            {/* Connection health, on the button that already means "session".
+                It used to be a badge floating over the desktop, which put a
+                permanent widget on top of the thing you are actually looking
+                at to tell you something that is almost always "fine". A dot on
+                the button says the same in the space the button already
+                occupies, and is only eye-catching when it is not green. */}
+            {statusTone ? (
+              <span
+                className={cn(
+                  "absolute top-1 right-1 size-1.5 rounded-full",
+                  statusTone === "good" && "bg-success",
+                  statusTone === "busy" && "bg-warning animate-pulse",
+                  statusTone === "bad" && "bg-destructive",
+                )}
+                aria-hidden
+              />
             ) : null}
           </Button>
         </TooltipTrigger>

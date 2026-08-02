@@ -78,9 +78,14 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
   // easy to get subtly wrong; a style attribute simply wins. It also lets the
   // panel start where the rail ends, so switching panels does not mean closing
   // the one you are in.
+  //
+  // The sizes are a compromise: wide enough that a row of labelled buttons fits
+  // without wrapping to one per line, narrow enough to leave the desktop behind
+  // it usable, and capped by the viewport so a phone gets a full-width sheet
+  // rather than one hanging off the edge.
   const geometry: React.CSSProperties = vertical
-    ? { [side]: "var(--rail-size)", width: "min(26rem, calc(100vw - var(--rail-size)))", maxWidth: "none" }
-    : { [side]: "var(--rail-size)", height: "min(30rem, calc(100dvh - var(--rail-size)))", maxHeight: "none" }
+    ? { [side]: "var(--rail-size)", width: "min(30rem, calc(100vw - var(--rail-size)))", maxWidth: "none" }
+    : { [side]: "var(--rail-size)", height: "min(32rem, calc(100dvh - var(--rail-size)))", maxHeight: "none" }
 
   return (
     // `modal={false}`: this is a side panel over a live desktop, not a dialog.

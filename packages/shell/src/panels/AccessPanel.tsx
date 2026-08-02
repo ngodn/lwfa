@@ -67,7 +67,7 @@ function AccessPanel() {
 
       <PanelSection
         title="Accounts"
-        description="Each has its own password. Whoever has that password gets exactly these permissions."
+        description="Each account has its own password and permissions."
       >
         {error ? (
           <p
@@ -349,7 +349,7 @@ const NewAccount = memo(function NewAccount() {
           required
         />
         <p className="text-xs text-muted-foreground">
-          This is the whole credential: whoever has it gets this account.
+          Anyone with this password gets this account.
         </p>
       </div>
 

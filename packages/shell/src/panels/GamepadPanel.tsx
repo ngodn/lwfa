@@ -31,7 +31,7 @@ function GamepadPanel() {
     <div className="space-y-6 pt-2">
       <PanelSection>
         <FieldRow>
-          <Field label="Show the gamepad" hint="Drawn over the desktop, above every window." />
+          <Field label="Show the gamepad" hint="Drawn over the desktop." />
           <Switch
             checked={visible}
             onCheckedChange={(v) => setGamepad({ visible: v, editing: v ? editing : false })}
@@ -40,7 +40,7 @@ function GamepadPanel() {
         <FieldRow>
           <Field
             label="Edit layout"
-            hint="Drag the pads to rearrange them. The dot grid appears only while editing."
+            hint="Drag the controls to rearrange them."
           />
           <Button
             size="sm"
@@ -58,7 +58,7 @@ function GamepadPanel() {
 
       <PanelSection
         title="Buttons"
-        description="Labels only. What each control sends does not change with the skin."
+        description="Changes button labels only."
       >
         <ToggleGroup
           type="single"
@@ -97,7 +97,7 @@ function GamepadPanel() {
 
       <PanelSection title="Feedback">
         <FieldRow>
-          <Field label="Vibrate on press" hint="Ignored on devices with no vibration motor." />
+          <Field label="Vibrate on press" />
           <Switch
             checked={prefs.gamepad.haptics}
             onCheckedChange={(haptics) => patchPrefs("gamepad", { haptics })}
@@ -109,7 +109,6 @@ function GamepadPanel() {
         <FieldRow>
           <Field
             label="Restore the default arrangement"
-            hint="WASD on the left, face buttons on the right, triggers along the top."
           />
           <Button
             size="sm"
@@ -124,7 +123,7 @@ function GamepadPanel() {
         {!visible ? (
           <p className="flex items-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
             <Gamepad2 className="size-4 shrink-0" aria-hidden />
-            Switch the gamepad on to see and edit it.
+            Turn the gamepad on to edit it.
           </p>
         ) : null}
       </PanelSection>

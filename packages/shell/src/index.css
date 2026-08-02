@@ -30,14 +30,22 @@
   --radius: 0.65rem;
 
   /* Light. Used far less than dark, but a tablet in daylight wants it. */
-  --background: oklch(0.985 0 0);
+  /* Paper. See brand/README.md. */
+  --background: oklch(0.953 0.009 84.6);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.62 0.19 259.8);
-  --primary-foreground: oklch(0.985 0 0);
+  /*
+   * Signal orange, the brand's only accent.
+   *
+   * Ink on it rather than white: white gives 3.7:1, which fails for button
+   * text, and ink gives 5.25:1. Both are brand colours, so this costs nothing
+   * and the label stays readable at small sizes.
+   */
+  --primary: oklch(0.641 0.19 35.7);
+  --primary-foreground: oklch(0.159 0.007 271);
   --secondary: oklch(0.955 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.955 0 0);
@@ -48,13 +56,14 @@
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.9 0 0);
   --input: oklch(0.9 0 0);
-  --ring: oklch(0.62 0.19 259.8);
+  --ring: oklch(0.641 0.19 35.7);
 
   --success: oklch(0.62 0.16 149);
   --warning: oklch(0.72 0.17 70);
 
   /* Behind the strip. Kept in step with [window].backdrop in the engine. */
-  --backdrop: oklch(0.22 0.012 275);
+  /* Ink, matching the engine's own backdrop so the two agree. */
+  --backdrop: oklch(0.159 0.007 271);
 
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -70,8 +79,9 @@
   --card-foreground: oklch(0.96 0 0);
   --popover: oklch(0.195 0.009 275);
   --popover-foreground: oklch(0.96 0 0);
-  --primary: oklch(0.7 0.16 258);
-  --primary-foreground: oklch(0.16 0.01 275);
+  /* Signal orange, lifted a little so it carries on ink. */
+  --primary: oklch(0.70 0.185 36);
+  --primary-foreground: oklch(0.159 0.007 271);
   --secondary: oklch(0.25 0.009 275);
   --secondary-foreground: oklch(0.96 0 0);
   --muted: oklch(0.25 0.009 275);
@@ -82,12 +92,12 @@
   --destructive-foreground: oklch(0.98 0 0);
   --border: oklch(1 0 0 / 11%);
   --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.7 0.16 258);
+  --ring: oklch(0.70 0.185 36);
 
   --success: oklch(0.7 0.15 150);
   --warning: oklch(0.78 0.15 75);
 
-  --backdrop: oklch(0.16 0.01 275);
+  --backdrop: oklch(0.159 0.007 271);
 
   --sidebar: oklch(0.175 0.009 275);
   --sidebar-foreground: oklch(0.96 0 0);
@@ -149,11 +159,29 @@
     height: 100%;
   }
 
+  /* The page itself must not move. Ever.
+   *
+   * A desktop is not a document. On a tablet the browser will happily take a
+   * swipe that was meant for a window and pan the whole page with it, or
+   * rubber-band it, or reveal Safari's toolbars, and then the thing under your
+   * finger is somewhere else than where you put it down. `overflow: hidden`
+   * plus a fixed body removes the page's ability to scroll at all, which is
+   * the only reliable way to say this on iOS; `overscroll-behavior` alone
+   * stops chaining but not the viewport pan.
+   *
+   * Individual scrollable things inside (panels, the app list) still scroll
+   * normally, and the surfaces that must not be scrolled set
+   * `touch-action: none` themselves. */
+  html,
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    /* A desktop does not bounce. Rubber-banding the page while dragging a
-       window on a tablet is disorienting and makes precise input impossible. */
-    overscroll-behavior: none;
+    position: fixed;
+    inset: 0;
     -webkit-tap-highlight-color: transparent;
   }
 

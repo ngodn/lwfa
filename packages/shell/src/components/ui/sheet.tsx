@@ -72,8 +72,11 @@ function SheetContent({
         {...props}
       >
         {children}
+        {/* A 44px target around a 16px icon. The icon alone was the size of the
+            glyph, which on a tablet is the hardest thing in the shell to hit
+            and is the only way out of a panel. */}
         {showCloseButton && (
-          <SheetPrimitive.Close className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
+          <SheetPrimitive.Close className="absolute top-2 right-2 grid size-11 place-items-center rounded-lg opacity-70 ring-offset-background transition-opacity hover:bg-accent hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none">
             <XIcon className="size-4" />
             <span className="sr-only">Close</span>
           </SheetPrimitive.Close>
