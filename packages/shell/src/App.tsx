@@ -13,10 +13,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DecodedFrame,
+  PeerInfo,
   Permissions,
+  SessionId,
   ToShell,
   WindowId,
   WindowInfo,
+  WindowLayout,
 } from "@lwfa/proto";
 
 /**
@@ -35,9 +38,15 @@ import {
   loadPassword,
   savePassword,
 } from "./credentials.js";
-import { FrameDecoder, supportsH264 } from "./decode.js";
+import { FrameDecoder } from "./decode.js";
+import { decodable, decodesOpus } from "@/lib/codecs";
+import { OpusStream } from "@/lib/opus";
+import { AudioFormat } from "@lwfa/proto";
+import type { Codec } from "@lwfa/proto";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
-import { usePrefs } from "@/lib/prefs"
+import { clearFormat } from "@/lib/streamFormat"
+import { clearPaused, forgetPaused, pausedNow } from "@/lib/paused"
+import { setPrefs, usePrefs } from "@/lib/prefs"
 import {
   appsRequested,
   clearApps,
@@ -46,7 +55,14 @@ import {
   setAppIcons,
   setApps,
 } from "@/lib/apps"
+import * as audio from "@/lib/audio"
+import { engineFor } from "@/lib/engineUrl"
+import { requestLeadership } from "@/lib/leader"
 import { log } from "@/lib/log"
+import { pendingKeys, resolvePending } from "@/lib/pending"
+import { blocked, clearBlocked } from "@/lib/alreadyRunning"
+import { motion } from "@/lib/motion"
+import { WINDOW_SPRING } from "@/generated/config"
 import {
   accountsRequested,
   clearAccounts,
@@ -55,7 +71,6 @@ import {
 } from "@/lib/accounts"
 import { ShellChrome } from "@/components/ShellChrome";
 import { Desktop } from "@/components/Desktop";
-import { SessionBadge } from "@/components/SessionBadge";
 import {
   SessionActionsProvider,
   SessionStateProvider,
@@ -63,7 +78,7 @@ import {
   type SessionState,
 } from "./session.js";
 import type { SurfaceInput } from "./WindowSurface.js";
-import { evdevFromCode, isShellKey } from "./input.js";
+import { evdevFromCode, isShellKey, isTextEntry } from "./input.js";
 import {
   DEFAULT_CONFIG,
   EMPTY,
@@ -86,32 +101,97 @@ import {
   intersectsViewport,
   layout,
   moveToWorkspace,
+  moveWindow,
   reflow,
   removeWindow,
+  sendToWorkspace,
+  setFullscreen,
+  setColumnWidth,
+  toggleFullscreen,
 } from "./strip.js";
 
 /**
- * Spring for strip scrolling. Quick, with a touch of overshoot so it reads as
- * physical. The engine integrates it; this only names it.
+ * The spring windows move on, from `configs/defaults.toml`.
+ *
+ * Sent to the engine *and* used by the browser's own animator. The engine
+ * integrates it for the physical display and `lib/motion` integrates it for
+ * this page, both through `@lwfa/spring`, so a window scrolling past looks the
+ * same whether you are sitting at the machine or holding a tablet.
  */
-const SCROLL_SPRING = { stiffness: 220, damping: 26, mass: 1 };
+const SCROLL_SPRING = WINDOW_SPRING;
 
 /**
  * Where the engine is.
  *
- * Defaults to whatever host served this page, so opening the shell at
- * `http://192.168.1.x:6733` from a tablet finds the engine on the same machine
- * with nothing to configure. Override with `?engine=ws://host:port` when the
- * two are not co-located.
+ * Defaults to whatever host served this page, so opening the shell from a
+ * tablet finds the engine on the same machine with nothing to configure.
+ * Override with `?engine=ws://host:port`, which is how a second engine is
+ * tested without restarting the one hosting the session. See `engineUrl`.
  */
-const ENGINE_BASE =
-  new URLSearchParams(location.search).get("engine") ??
-  `ws://${location.hostname || "localhost"}:6734`;
+const ENGINE_BASE = engineFor(location, location.search);
+
+/**
+ * What to call this device in the list of connected sessions.
+ *
+ * Worked out here rather than from the `User-Agent`, because on the device this
+ * project exists for the user agent is a lie: an iPad running Safari reports
+ * `Macintosh; Intel Mac OS X` and mentions iPad nowhere. The tell is
+ * `maxTouchPoints`, which a real Mac reports as 0.
+ *
+ * Only ever shown to the user so they can tell their own devices apart, so a
+ * wrong guess costs a confusing label and nothing else.
+ */
+function describeDevice(): string {
+  const ua = navigator.userAgent
+  const touch = navigator.maxTouchPoints > 1
+
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && touch)) return "iPad"
+  if (/iPhone/.test(ua)) return "iPhone"
+  if (/Android/.test(ua)) return /Mobile/.test(ua) ? "Android phone" : "Android tablet"
+  if (/CrOS/.test(ua)) return "Chromebook"
+  if (/Macintosh/.test(ua)) return "Mac"
+  if (/Windows/.test(ua)) return "Windows PC"
+  if (/Linux/.test(ua)) return "Linux"
+  return "Unknown device"
+}
+
+/**
+ * A stable id for this browser, so a reconnection can be recognised as one.
+ *
+ * Survives refreshes because it lives in `localStorage`, which is exactly the
+ * point: without it the engine cannot tell a page reload from a second device
+ * arriving, so it keeps the dead session around until the socket times out and
+ * counts two viewers where there is one. That costs a full resync, a capture
+ * invalidation, and a round of encoder rebuilds per reload.
+ *
+ * Not a credential and not trusted for anything. The token authenticates; this
+ * only says "the connection you had a moment ago was also me".
+ */
+function clientId(): string {
+  const key = "lwfa.client"
+  try {
+    const saved = localStorage.getItem(key)
+    if (saved) return saved
+    const fresh = crypto.randomUUID()
+    localStorage.setItem(key, fresh)
+    return fresh
+  } catch {
+    // Private browsing, or storage disabled. A per-load id is still better
+    // than none: it at least collapses the double connection React makes on
+    // mount, which is the noisiest case.
+    return crypto.randomUUID()
+  }
+}
+
+/** Stable for the life of the page, so every reconnect carries the same id. */
+const CLIENT_ID = clientId()
 
 /** The engine URL with the password attached, which is how it is authenticated. */
 function engineUrl(password: string): string {
   const url = new URL(ENGINE_BASE);
   url.searchParams.set("token", password);
+  url.searchParams.set("device", describeDevice());
+  url.searchParams.set("client", CLIENT_ID);
   return url.toString();
 }
 
@@ -156,9 +236,66 @@ export function App(): React.ReactElement {
   const [output, setOutput] = useState<Output>({ width: 0, height: 0 });
   const [windows, setWindows] = useState<Map<WindowId, WindowInfo>>(new Map());
   const [strip, setStrip] = useState<StripState>(EMPTY);
-  const [streaming] = useState(true);
+  // Streaming is a preference, not fixed state. See `Prefs.stream`.
+  const streaming = prefs.stream.enabled;
+  /**
+   * What this browser can actually decode, best first.
+   *
+   * Probed with `VideoDecoder.isConfigSupported` rather than inferred, because
+   * HEVC support is a property of the hardware and not of the browser: two
+   * devices running the same Safari differ on it. Deciding from the user agent
+   * gets it wrong in both directions. See `lib/codecs`.
+   *
+   * Empty until the probe answers, and empty forever where WebCodecs is
+   * missing, which is any plain-HTTP origin. The engine reads that as JPEG.
+   */
+  const [decodes, setDecodes] = useState<Codec[]>([]);
+  useEffect(() => {
+    let live = true;
+    void decodable().then((codecs) => {
+      if (live) setDecodes(codecs);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // The preference narrows what the hardware offers; it can never widen it.
+  // "Auto" is everything the device can do, and naming one codec pins it, so
+  // a JPEG preference is expressed by an empty list.
+  const wantCodecs = useMemo<Codec[]>(() => {
+    const choice = prefs.stream.codec;
+    if (choice === "jpeg") return [];
+    if (choice === "auto") return decodes;
+    return decodes.filter((codec) => codec === choice);
+  }, [prefs.stream.codec, decodes]);
+  /**
+   * Whether this connection decides layout.
+   *
+   * A session can have several devices attached at once, but a window has
+   * exactly one size, so there is exactly one arrangement and exactly one
+   * connection that chooses it. A follower still sends input and still asks
+   * for the streams it needs; it just renders the arrangement it is sent
+   * instead of computing one. See `ToShell.role`.
+   */
+  const [primary, setPrimary] = useState(true);
+  const primaryRef = useRef(true);
+  const [peers, setPeers] = useState<PeerInfo[]>([]);
+  const [sessionId, setSessionId] = useState<SessionId>(0);
+  /** The arrangement a follower was sent, in the engine's output space. */
+  const [followed, setFollowed] = useState<WindowLayout[]>([]);
 
   const connection = useRef<Connection | null>(null);
+  /** The last box `Desktop` measured, whether or not it was sent. */
+  const lastViewport = useRef<{ width: number; height: number; scale: number } | null>(null);
+  /**
+   * True between asking the engine to resize and being told it has.
+   *
+   * Layout is held back in that window, so windows are configured once for the
+   * shape they will keep rather than once for the old shape and again for the
+   * new one. See the `hello` handler.
+   */
+  const awaitingOutput = useRef(false);
   const decoderRef = useRef<FrameDecoder | null>(null);
   // Refs so the message handler, which is created once, always reads current
   // values instead of the ones captured when the socket opened.
@@ -169,6 +306,24 @@ export function App(): React.ReactElement {
 
   const streamingRef = useRef(streaming);
   streamingRef.current = streaming;
+  const wantsAudio = prefs.stream.audio;
+  const codecsRef = useRef(wantCodecs);
+  codecsRef.current = wantCodecs;
+
+  /**
+   * Whether this browser can decode Opus, probed once.
+   *
+   * A ref rather than state: it is read when a `setAudio` is sent and never
+   * rendered, so making it state would re-render the desktop for nothing.
+   */
+  const opusRef = useRef(false);
+  useEffect(() => {
+    void decodesOpus().then((yes) => {
+      opusRef.current = yes;
+    });
+  }, []);
+  const animateRef = useRef(prefs.motion.animate);
+  animateRef.current = prefs.motion.animate;
 
   /** Forward input aimed at a window, tagging it with which window it hit. */
   const sendInput = useCallback((id: WindowId, event: SurfaceInput) => {
@@ -224,11 +379,21 @@ export function App(): React.ReactElement {
   /** Push the current strip to the engine as a target plus a spring. */
   const push = useCallback((next: StripState, out: Output, animate = true) => {
     const windows = layout(next, out, configRef.current);
-    connection.current?.send({
-      type: "setLayout",
-      windows,
-      animate: animate ? { spring: SCROLL_SPRING } : null,
-    });
+    // A follower's arrangement is not its own to declare. Sending it anyway
+    // would be dropped by the engine, but it would also mean two devices
+    // computing conflicting geometry and each briefly rendering its own.
+    if (primaryRef.current) {
+      connection.current?.send({
+        type: "setLayout",
+        windows,
+        animate: animate ? { spring: SCROLL_SPRING } : null,
+      });
+    }
+    // The same declaration, to the same effect, for the surfaces in this page.
+    // Told here rather than in a render effect so the browser and the engine
+    // are given one description of the move at one instant, instead of the
+    // engine hearing about it now and the DOM finding out after React commits.
+    if (primaryRef.current) motion.set(windows, animate && animateRef.current);
     const focused = focusedWindow(next);
     if (focused !== null) {
       connection.current?.send({ type: "focusWindow", id: focused });
@@ -242,12 +407,17 @@ export function App(): React.ReactElement {
       windows: streamingRef.current
         ? windows
             .filter((w) => intersectsViewport(w.rect, out, configRef.current))
+            // Paused windows are simply not asked for. The application keeps
+            // running; this device stops paying for its pixels, and the budget
+            // goes to the windows that are still being watched. See
+            // `lib/paused`.
+            .filter((w) => !pausedNow().has(w.id))
             .map((w) => w.id)
         : [],
-      // Tell the engine what this browser can actually decode. Over plain HTTP
-      // there is no WebCodecs VideoDecoder, and asking for H.264 anyway would
-      // mean permanently blank windows.
-      h264: supportsH264(),
+      // What this browser can actually decode, asked of it rather than
+      // guessed. Over plain HTTP there is no VideoDecoder at all, and claiming
+      // a codec anyway would mean permanently blank windows.
+      codecs: codecsRef.current,
     });
   }, []);
 
@@ -270,6 +440,10 @@ export function App(): React.ReactElement {
         case "hello": {
           setPermissions(message.permissions);
           setAccount(message.account);
+          setSessionId(message.session);
+          setPrimary(message.primary);
+          primaryRef.current = message.primary;
+          setPeers(message.peers);
           const out = {
             width: message.output.width,
             height: message.output.height,
@@ -290,8 +464,40 @@ export function App(): React.ReactElement {
           }
           stripRef.current = next;
           setStrip(next);
-          // No animation on resync: windows should appear in place, not fly in.
-          push(next, out, false);
+
+          // Do not lay windows out for an output that is about to change.
+          //
+          // The engine's output is whatever the last primary asked for, which
+          // on a fresh connection is rarely this device's shape. Laying out
+          // against it and *then* reporting the viewport resizes every window
+          // twice, and a resize is an H.264 `configure`: the session cannot
+          // change resolution mid-stream, so each one is torn down and rebuilt
+          // at 90-160ms. A single reconnect was rebuilding every streamed
+          // window two or three times over, which is most of what "the engine
+          // freezes when I refresh" was.
+          //
+          // So when the shape is already wrong, ask for the right one and let
+          // `outputChanged` drive the first layout.
+          const measured = lastViewport.current;
+          const mismatched =
+            primaryRef.current &&
+            measured !== null &&
+            (measured.width !== out.width || measured.height !== out.height);
+
+          if (mismatched) {
+            awaitingOutput.current = true;
+            connection.current?.send({ type: "setViewport", ...measured });
+            // A backend that cannot resize (the TTY one owns a real display)
+            // never answers, and the session must not sit there empty waiting.
+            window.setTimeout(() => {
+              if (!awaitingOutput.current) return;
+              awaitingOutput.current = false;
+              push(stripRef.current, outputRef.current, false);
+            }, 1500);
+          } else {
+            // No animation on resync: windows should appear in place.
+            push(next, out, false);
+          }
           break;
         }
 
@@ -302,12 +508,52 @@ export function App(): React.ReactElement {
           };
           outputRef.current = out;
           setOutput(out);
+          // Whether this is the answer we were waiting for or an ordinary
+          // resize, the response is the same: lay out for the shape we now
+          // have. Clearing the flag stops the safety timer firing a second
+          // layout on top of this one.
+          awaitingOutput.current = false;
           update((state) => reflow(state, out, configRef.current), false);
+          break;
+        }
+
+        case "role": {
+          setPrimary(message.primary);
+          primaryRef.current = message.primary;
+          // Taking over means this page starts deciding again, so the
+          // arrangement it was following is no longer what to render. The
+          // engine sends a fresh `hello` alongside this, which rebuilds the
+          // strip; clearing here stops one frame of the old one showing
+          // through in between.
+          if (message.primary) setFollowed([]);
+          break;
+        }
+
+        case "layout": {
+          // Only meaningful while following. The primary computes its own, and
+          // a stale broadcast arriving after a handover must not overwrite it.
+          if (primaryRef.current) break;
+          const out = {
+            width: message.output.width,
+            height: message.output.height,
+          };
+          outputRef.current = out;
+          setOutput(out);
+          setFollowed(message.windows);
+          break;
+        }
+
+        case "peers": {
+          setPeers(message.peers);
           break;
         }
 
         case "windowOpened":
           log("info", `window ${message.window.id} opened (${message.window.appId ?? "?"})`);
+          clearLaunchFor(message.window.appId);
+          // A window appearing is the end of the "already open" story too: the
+          // program was closed on the desktop and has opened in here.
+          clearBlocked();
           setWindows((prev) =>
             new Map(prev).set(message.window.id, message.window),
           );
@@ -330,6 +576,9 @@ export function App(): React.ReactElement {
           });
           dropFrame(message.id);
           decoderRef.current?.forget(message.id);
+          // Ids are unique only within a run of the engine, so a paused one
+          // left behind would freeze an unrelated window later.
+          forgetPaused(message.id);
           update((state, out) =>
             removeWindow(state, message.id, out, configRef.current),
           );
@@ -357,13 +606,42 @@ export function App(): React.ReactElement {
           setAccounts(message.accounts)
           break
 
+        case "fullscreenRequest":
+          // The fullscreen button inside a video player. The engine forwards
+          // it because the arrangement is decided here; see `setFullscreen`.
+          update((st, o) =>
+            setFullscreen(st, message.window, message.fullscreen, o, configRef.current),
+          );
+          break;
+
+        case "alreadyRunning":
+          // Not an error: the engine did exactly the right thing by refusing
+          // to spawn. The dialog asks what to do about it.
+          resolvePending(`launch:${message.command}`);
+          blocked({
+            command: message.command,
+            terminal: message.terminal,
+            program: message.program,
+            pid: message.pid,
+          });
+          break;
+
         case "error":
-          // Only account administration reports errors so far. Routing by the
-          // request name keeps this from becoming a global error bus that
-          // every panel has to filter.
+          // Routing by the request name keeps this from becoming a global
+          // error bus that every panel has to filter.
           log("error", `${message.request}: ${message.message}`);
           if (message.request.endsWith("Account") || message.request === "listAccounts") {
             setAccountError(message.message)
+          }
+          if (message.request === "setGamepad") {
+            // The machine would not give us a virtual controller, usually
+            // because this user cannot write to /dev/uinput. Drop to sending
+            // keycodes, or the pad would send button messages the engine has
+            // nothing to deliver them to and every control would be dead.
+            setPrefs((prev) => ({
+              ...prev,
+              gamepad: { ...prev.gamepad, mode: "keyboard" },
+            }))
           }
           break
 
@@ -399,6 +677,8 @@ export function App(): React.ReactElement {
             );
           } else if (key === "4") {
             update(cycleWidthAt);
+          } else if (key === "f") {
+            update(toggleFullscreenAt);
           } else if (key === "w") {
             const focused = focusedWindow(stripRef.current);
             if (focused !== null)
@@ -418,9 +698,22 @@ export function App(): React.ReactElement {
       void decoder.handle(frame);
     };
 
+    // One decoder for the session: Opus predicts from previous packets, so it
+    // has to persist across them.
+    const opusStream = new OpusStream((pcm) => audio.play(pcm));
+
     const conn = new Connection(engineUrl(password), {
       onMessage: handleMessage,
       onFrame: handleFrame,
+      onAudio: (chunk, format, frames) => {
+        // Opus is decoded into the PCM the player already takes, rather than
+        // giving the player a second way to make sound. See `lib/opus`.
+        if (format === AudioFormat.Opus) {
+          opusStream.push(chunk, frames);
+          return;
+        }
+        audio.play(chunk);
+      },
       onStatus: (s, detail) => {
         setStatus(s);
         setStatusDetail(detail);
@@ -436,11 +729,35 @@ export function App(): React.ReactElement {
       },
     });
     connection.current = conn;
-    conn.connect();
+
+    // Connect only once this tab is the one that should hold the session.
+    //
+    // The engine identifies a browser by an id in `localStorage`, which every
+    // tab of that browser shares, so two tabs present the same identity and
+    // the engine treats each as the other reconnecting. Electing a leader is
+    // what makes exactly one of them right, rather than leaving them to argue.
+    // See `lib/leader`.
+    // "Waiting", not "connecting": until this tab holds the lock there is no
+    // attempt in flight, and a tab queued behind another would otherwise show
+    // a spinner forever that looked exactly like a connection about to
+    // succeed. See `lib/status`.
+    setStatus("waiting");
+    const leadership = requestLeadership(() => {
+      setStatus("connecting");
+      conn.connect();
+    });
     return () => {
+      // Released before closing, so a waiting tab is promoted the moment this
+      // one lets go rather than after its socket has finished dying.
+      leadership.release();
       conn.close();
       decoder.close();
       clearFrames();
+      clearPaused();
+      opusStream.close();
+      // The old answer would otherwise linger and claim a codec is in use
+      // after the stream has stopped.
+      clearFormat();
       // Another machine has a different set of applications and accounts.
       clearApps();
       clearAccounts();
@@ -457,6 +774,11 @@ export function App(): React.ReactElement {
 
     const forward = (event: KeyboardEvent, pressed: boolean) => {
       if (isShellKey(event)) return;
+      // Typing into the shell's own text fields is not input for the machine.
+      // Without this the capture-phase listener eats the keystroke before the
+      // browser can insert it, so the search box never fills and the letters
+      // arrive in whatever window has focus on the far end instead.
+      if (isTextEntry(event.target)) return;
       // Drop browser autorepeat. Wayland tells clients the repeat rate and
       // they generate their own repeats, and the compositor's keyboard handle
       // repeats too. Forwarding the browser's as well means a held key repeats
@@ -490,10 +812,23 @@ export function App(): React.ReactElement {
     };
   }, [status]);
 
+  // What this page actually renders: its own arrangement when it is driving,
+  // the one it was sent when it is not.
   const placed = useMemo(
-    () => (output.width > 0 ? layout(strip, output, configRef.current) : []),
-    [strip, output],
+    () =>
+      primary
+        ? output.width > 0
+          ? layout(strip, output, configRef.current)
+          : []
+        : followed,
+    [primary, strip, output, followed],
   );
+
+  // A follower is not told about layout through `push`, so the animator has to
+  // be told here instead. Same declaration, same instant, one frame later.
+  useEffect(() => {
+    if (!primary) motion.set(followed, prefs.motion.animate);
+  }, [primary, followed, prefs.motion.animate]);
 
   // Stable across renders, so every WindowSurface keeps its memo. Building
   // these inline would hand each surface a fresh function on every frame and
@@ -506,10 +841,87 @@ export function App(): React.ReactElement {
   // Stable, so the observer in Desktop is not torn down every render.
   const reportViewport = useCallback(
     (width: number, height: number, scale: number) => {
+      // Remembered even when it is not sent, because this device may become
+      // the primary later and will then have to resize the output to itself.
+      // Measuring again at that point would mean reaching back into `Desktop`
+      // for a box it already measured.
+      lastViewport.current = { width, height, scale }
+      // Only the primary resizes the compositor. Two devices reporting their
+      // own viewports would resize the output back and forth forever, and
+      // every window with it. A follower fits the output it is given into its
+      // own screen instead; see `Desktop`.
+      if (!primaryRef.current) return
       connection.current?.send({ type: "setViewport", width, height, scale })
     },
     [],
   )
+
+  // Audio follows the preference, on both ends.
+  //
+  // Two things have to agree: this page has to have an audio graph running,
+  // and the engine has to be capturing and sending. Tied to one effect so they
+  // cannot drift apart into "playing silence" or "sending to nobody".
+  //
+  // Also keyed on the session id: a reconnect is a new session on the engine,
+  // and it has never been told that this device wants sound.
+  useEffect(() => {
+    if (!wantsAudio) {
+      connection.current?.send({ type: "setAudio", enabled: false, local: prefs.stream.localPlayback, opus: opusRef.current });
+      void audio.stop();
+      return;
+    }
+
+    let cancelled = false;
+    void audio.start().then((ok) => {
+      if (cancelled) return;
+      if (!ok) {
+        log("warn", "audio could not start on this device");
+        return;
+      }
+      audio.setVolume(prefs.stream.volume);
+      connection.current?.send({ type: "setAudio", enabled: true, local: prefs.stream.localPlayback, opus: opusRef.current });
+    });
+    // Browsers hold a new AudioContext suspended until the page has been
+    // touched. If audio was on from a saved preference, this is what starts it
+    // at the first tap rather than leaving it silently muted.
+    const release = audio.unlock();
+    return () => {
+      cancelled = true;
+      release();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantsAudio, sessionId]);
+
+  useEffect(() => {
+    audio.setVolume(prefs.stream.volume);
+  }, [prefs.stream.volume]);
+
+  // Local playback is a property of the machine, so it is sent whenever it
+  // changes rather than only when audio is switched on.
+  useEffect(() => {
+    if (!wantsAudio) return;
+    connection.current?.send({ type: "setAudio", enabled: true, local: prefs.stream.localPlayback, opus: opusRef.current });
+  }, [wantsAudio, prefs.stream.localPlayback]);
+
+  // Re-report the viewport whenever this device starts driving a session.
+  //
+  // Keyed on the session id as well as the role, because both are reasons the
+  // engine may not know this device's shape:
+  //
+  // - Being handed the wheel. The measurement did not change, so nothing else
+  //   would send it: `Desktop` reports on mount and on resize, and a handover
+  //   is neither.
+  // - Reconnecting. The engine restarted or the network dropped, and the
+  //   session on the other side is a new one that has never been told. This
+  //   was a real bug: the page stayed mounted across the reconnect, so the one
+  //   report at mount had already happened and the compositor sat at its
+  //   default size while the browser scaled the whole desktop down to fit.
+  useEffect(() => {
+    if (!primary) return
+    const measured = lastViewport.current
+    if (!measured) return
+    connection.current?.send({ type: "setViewport", ...measured })
+  }, [primary, sessionId])
 
   const streamedIds = useMemo(() => {
     if (!streaming) return new Set<WindowId>();
@@ -539,11 +951,28 @@ export function App(): React.ReactElement {
         update((st, o) => focusWindow(st, id, o, configRef.current)),
       closeWindow: (id) => send({ type: "closeWindow", id }),
       spawn: (command, terminal = false) => send({ type: "spawn", command, terminal }),
+      closeAndSpawn: (command, terminal, pid, force) =>
+        send({ type: "closeAndSpawn", command, terminal, pid, force }),
       focusColumn: (delta) => update(delta < 0 ? focusLeftAt : focusRightAt),
       focusInStack: (delta) => update(delta < 0 ? focusUpAt : focusDownAt),
       consume: () => update(consumeAt),
       expel: () => update(expelAt),
+      moveWindow: (id, target) =>
+        update((st, o) => moveWindow(st, id, target, o, configRef.current)),
+      sendToWorkspace: (id, index) =>
+        update((st, o) => sendToWorkspace(st, id, index, o, configRef.current)),
       cycleWidth: () => update(cycleWidthAt),
+      setColumnWidth: (id, preset) =>
+        update((st, o) => setColumnWidth(st, id, preset, o, configRef.current)),
+      takeControl: () => send({ type: "takeControl" }),
+      signOut: () => {
+        clearPassword();
+        setPassword(null);
+      },
+      endSession: (target) => send({ type: "endSession", session: target }),
+      setSessionMode: (target, mode) =>
+        send({ type: "setSessionMode", session: target, mode }),
+      toggleFullscreen: () => update(toggleFullscreenAt),
       focusWorkspace: (index) =>
         update((st, o) =>
           focusWorkspace(st, index - st.focus, o, configRef.current),
@@ -563,8 +992,11 @@ export function App(): React.ReactElement {
       endpoint: ENGINE_BASE,
       permissions,
       account,
+      session: sessionId,
+      primary,
+      peers,
     }),
-    [status, statusDetail, output, windows, strip],
+    [status, statusDetail, output, windows, strip, primary, peers, sessionId],
   );
 
   if (!password) {
@@ -595,19 +1027,6 @@ export function App(): React.ReactElement {
             onFocus={focusById}
             onInput={sendInput}
           />
-          <SessionBadge
-            status={status}
-            detail={statusDetail}
-            endpoint={ENGINE_BASE}
-            workspace={strip.focus + 1}
-            workspaces={strip.workspaces.length}
-            streaming={streaming}
-            hardwareDecode={supportsH264()}
-            onSignOut={() => {
-              clearPassword();
-              setPassword(null);
-            }}
-          />
         </ShellChrome>
       </SessionStateProvider>
     </SessionActionsProvider>
@@ -630,6 +1049,38 @@ const focusUpAt: Transition = (s) => focusUp(s);
 const focusDownAt: Transition = (s) => focusDown(s);
 const consumeAt: Transition = (s, o, c) => consumeIntoColumn(s, o, c);
 const expelAt: Transition = (s, o, c) => expelFromColumn(s, o, c);
+/**
+ * Stop the launcher spinner for whichever launch this window belongs to.
+ *
+ * A guess, and knowingly so. Nothing on the wire ties a window back to the
+ * `spawn` that caused it: there is no request id, and an application's app id
+ * is its own choice, not its command line. So this matches on the command's
+ * basename, which covers the common cases (`/usr/lib/firefox/firefox` against
+ * `firefox`), and otherwise clears the oldest launch still waiting.
+ *
+ * Being wrong costs a spinner stopping a moment early on the wrong row, which
+ * nobody will notice. The alternative, waiting for certainty, means a spinner
+ * that runs for the full timeout every time an application picks an app id that
+ * looks nothing like its binary, and that is very visible.
+ */
+function clearLaunchFor(appId: string | null): void {
+  const waiting = pendingKeys("launch:");
+  if (waiting.length === 0) return;
+
+  const id = (appId ?? "").toLowerCase();
+  const matched = id
+    ? waiting.find((key) => {
+        const command = key.slice("launch:".length);
+        const binary = command.split(/\s+/)[0] ?? "";
+        const base = (binary.split("/").pop() ?? "").toLowerCase();
+        return base.length > 0 && (id.includes(base) || base.includes(id));
+      })
+    : undefined;
+
+  resolvePending(matched ?? waiting[0]!);
+}
+
 const cycleWidthAt: Transition = (s, o, c) => cycleWidth(s, o, c);
+const toggleFullscreenAt: Transition = (s, o, c) => toggleFullscreen(s, o, c);
 const moveWorkspaceUpAt: Transition = (s, o, c) => moveToWorkspace(s, -1, o, c);
 const moveWorkspaceDownAt: Transition = (s, o, c) => moveToWorkspace(s, 1, o, c);

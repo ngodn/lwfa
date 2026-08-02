@@ -7,7 +7,7 @@
  */
 
 import { memo, useEffect, useRef, useState } from "react"
-import { KeyRound, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -40,11 +40,32 @@ export const Login = memo(function Login({ error, busy, onSubmit }: LoginProps) 
           if (trimmed) onSubmit(trimmed)
         }}
       >
-        <header className="space-y-2 text-center">
-          <div className="mx-auto grid size-11 place-items-center rounded-xl border bg-card">
-            <KeyRound className="size-5 text-muted-foreground" aria-hidden />
-          </div>
-          <h1 className="text-xl font-semibold tracking-tight">lwfa</h1>
+        <header className="space-y-3 text-center">
+          {/*
+            * The mark, not a stock key icon.
+            *
+            * This is the one screen that is lwfa's own rather than a frame
+            * around somebody else's application, so it is the one place the
+            * brand belongs. The lockup carries the wordmark, so the heading
+            * below it would repeat the name: the name is in the picture.
+            *
+            * Two files rather than one that adapts, because the mark is drawn
+            * for its ground: `on-dark` and `on-light` are different artwork,
+            * not the same artwork recoloured. Swapped by the `dark` class the
+            * shell sets, not by a media query, since the theme is a preference
+            * here and not the device's. See brand/README.md.
+            */}
+          <img
+            src="/brand/lockup-horizontal-on-light.svg"
+            alt="lwfa"
+            className="mx-auto h-10 w-auto dark:hidden"
+          />
+          <img
+            src="/brand/lockup-horizontal-on-dark.svg"
+            alt=""
+            aria-hidden
+            className="mx-auto hidden h-10 w-auto dark:block"
+          />
           <p className="text-sm text-muted-foreground">
             Enter the password from this machine&rsquo;s <code className="font-mono">.env</code>
           </p>

@@ -9,7 +9,9 @@ import {
   PROTOCOL_VERSION,
   ProtocolError,
   type DecodedFrame,
+  decodeAudio,
   decodeFrame,
+  type AudioFormat,
   decodeToShell,
   encode,
   type ToEngine,
@@ -22,9 +24,31 @@ import {
  */
 export const REPLACED_REASON = "replaced-by-newer-shell"
 
+/**
+ * Close reason for a socket the *same* client has superseded by reconnecting.
+ *
+ * Distinct from {@link REPLACED_REASON} because the right response is the
+ * opposite. Being replaced by another device means stop; being superseded by
+ * your own newer socket means carry on, because the newer socket is this same
+ * connection. Sending the first for both made a raced reconnect look like a
+ * takeover and the shell stopped trying.
+ *
+ * Must match `SUPERSEDED_REASON` in `crates/lwfa-engine/src/shell.rs`.
+ */
+export const SUPERSEDED_REASON = "superseded-by-reconnect"
+
 export type Status =
   | "connecting"
   | "connected"
+  /**
+   * Another tab of this browser holds the session, and this one is queued.
+   *
+   * Not a failure and not a connection attempt: nothing is being tried and
+   * nothing is wrong. It was reported as "connecting" until it was given a
+   * name of its own, which meant a tab that would never connect looked exactly
+   * like one that was about to. See `lib/leader`.
+   */
+  | "waiting"
   | "disconnected"
   | "incompatible"
   /** A newer shell took over. This one has stopped on purpose. */
@@ -41,6 +65,14 @@ export interface ConnectionHandlers {
   onMessage: (message: ToShell) => void
   /** A window's pixels. Binary frames, not JSON. */
   onFrame: (frame: DecodedFrame) => void
+  /** One chunk of PCM. Interleaved 16-bit, at the header's rate. */
+  /**
+   * One chunk of audio, with what it is.
+   *
+   * The format can change mid-stream: a listener joining who cannot decode
+   * Opus drops everyone back to PCM, and each chunk says which it is.
+   */
+  onAudio: (chunk: ArrayBuffer, format: AudioFormat, frames: number) => void
   onStatus: (status: Status, detail?: string) => void
 }
 
@@ -91,6 +123,23 @@ export class Connection {
 
     socket.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
+        // Audio first: it is the cheaper check, and on a session with sound
+        // there are more audio chunks per second than video frames.
+        const audio = decodeAudio(event.data)
+        if (audio) {
+          // Sliced rather than passed whole, because the worklet takes
+          // ownership of the buffer it is given and the header is not part of
+          // what it should play.
+          this.#handlers.onAudio(
+            audio.payload.buffer.slice(
+              audio.payload.byteOffset,
+              audio.payload.byteOffset + audio.payload.byteLength,
+            ) as ArrayBuffer,
+            audio.header.format,
+            audio.header.frames,
+          )
+          return
+        }
         const frame = decodeFrame(event.data)
         if (!frame) {
           console.warn("dropping an undecodable binary frame")
@@ -134,8 +183,38 @@ export class Connection {
     }
 
     socket.onclose = (event) => {
+      // A close from a socket this connection has already moved on from.
+      //
+      // Reconnecting replaces `#socket` before the old one has finished
+      // dying, so its `onclose` still fires afterwards and would otherwise be
+      // acted on as though it were the live socket. That was not theoretical:
+      // the engine closes a superseded socket with a reason that tells the
+      // client to stop retrying, so a retry that raced its predecessor made
+      // the shell give up permanently and sit on "connecting" until the page
+      // was reloaded.
+      if (socket !== this.#socket) return
+
       this.#socket = null
       if (this.#closed) return
+
+      if (event.reason === SUPERSEDED_REASON) {
+        // Another connection of this same browser holds the newer socket.
+        //
+        // Getting here at all means the socket that superseded this one is not
+        // ours, because a retry of our own would have been caught by the stale
+        // check above. So a second tab, or a page that outlived its reload, is
+        // now the live session for this browser and this one has lost.
+        //
+        // Stop. Reconnecting looks reasonable and is a trap: the new socket
+        // would supersede theirs, theirs would supersede ours back, and the
+        // two would trade the session forever. That is not theoretical, it is
+        // what happened when this branch retried: connect, evict, reconnect,
+        // every 290ms, two hundred sessions deep, with the audio capture
+        // starting and stopping on each pass.
+        this.#closed = true
+        this.#handlers.onStatus("replaced")
+        return
+      }
 
       if (event.reason === REPLACED_REASON) {
         // A newer shell took over. Reconnecting would displace it, and it

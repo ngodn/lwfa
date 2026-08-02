@@ -14,9 +14,17 @@
  */
 
 import { createContext, use } from "react"
-import type { Permissions, ToEngine, WindowId, WindowInfo } from "@lwfa/proto"
+import type {
+  PeerInfo,
+  Permissions,
+  SessionId,
+  SessionMode,
+  ToEngine,
+  WindowId,
+  WindowInfo,
+} from "@lwfa/proto"
 import type { Status } from "./connection.js"
-import type { Output, StripState } from "./strip.js"
+import type { MoveTarget, Output, StripState } from "./strip.js"
 
 /** Everything that changes while a session runs. */
 export interface SessionState {
@@ -36,6 +44,19 @@ export interface SessionState {
   permissions: Permissions
   /** Which account is connected. "owner" for AUTH_PASS. */
   account: string
+  /** This connection's own id, so it can find itself in `peers`. */
+  session: SessionId
+  /**
+   * Whether this connection decides layout.
+   *
+   * Several devices can be attached to one session, but a window has exactly
+   * one size, so exactly one of them chooses the arrangement and the rest are
+   * told what it chose. A follower is not a spectator: it still sends input
+   * and still receives every frame.
+   */
+  primary: boolean
+  /** Everyone connected, including this session. */
+  peers: PeerInfo[]
 }
 
 /**
@@ -52,6 +73,12 @@ export interface SessionActions {
   focusWindow: (id: WindowId) => void
   closeWindow: (id: WindowId) => void
   spawn: (command: string, terminal?: boolean) => void
+  /**
+   * Close a program running on the desktop, then launch it here.
+   *
+   * Only sent after the user has been asked. See `lib/alreadyRunning`.
+   */
+  closeAndSpawn: (command: string, terminal: boolean, pid: number, force: boolean) => void
 
   focusColumn: (delta: -1 | 1) => void
   focusInStack: (delta: -1 | 1) => void
@@ -59,7 +86,38 @@ export interface SessionActions {
   consume: () => void
   /** Push the focused window out into a column of its own. */
   expel: () => void
+  /**
+   * Move a window to a chosen place. What a drag in arrange mode does.
+   *
+   * Unlike `consume` and `expel`, which step the focused window in a fixed
+   * direction, this names its destination outright.
+   */
+  moveWindow: (id: WindowId, target: MoveTarget) => void
+  /**
+   * Send a window to a workspace without following it.
+   *
+   * Unlike `moveToWorkspace`, which is the keyboard command and follows.
+   */
+  sendToWorkspace: (id: WindowId, index: number) => void
   cycleWidth: () => void
+  /** Set a named window's column to a chosen width preset. */
+  setColumnWidth: (id: WindowId, preset: number) => void
+  /** Fill the whole client viewport with the focused window, or go back. */
+  toggleFullscreen: () => void
+  /** Ask to become the connection that decides layout. */
+  takeControl: () => void
+  /**
+   * Forget the stored password and return to the login screen.
+   *
+   * An action rather than a prop threaded down to the one panel that offers
+   * it: the panel host renders panels without props, and passing this through
+   * would mean every panel's type knowing about it.
+   */
+  signOut: () => void
+  /** Disconnect another session. The owner's alone. */
+  endSession: (session: SessionId) => void
+  /** Change what a live session may do, without touching its account. */
+  setSessionMode: (session: SessionId, mode: SessionMode) => void
 
   focusWorkspace: (index: number) => void
   moveToWorkspace: (delta: -1 | 1) => void

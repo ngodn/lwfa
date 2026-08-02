@@ -204,10 +204,15 @@ pub fn token_matches(expected: &str, presented: &str) -> bool {
 /// raw query value rejects every password that is not purely alphanumeric,
 /// which is easy to miss when the only password ever tested is hex.
 pub fn token_from_query(uri: &str) -> Option<String> {
+    param_from_query(uri, TOKEN_PARAM)
+}
+
+/// One query parameter, percent-decoded.
+pub fn param_from_query(uri: &str, name: &str) -> Option<String> {
     let query = uri.split_once('?')?.1;
     query.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=')?;
-        (key == TOKEN_PARAM).then(|| percent_decode(value))
+        (key == name).then(|| percent_decode(value))
     })
 }
 
