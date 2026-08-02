@@ -92,10 +92,6 @@ pub fn init_winit(
     let redraws = Rc::new(Cell::new(0u32));
     let ticks = Rc::new(Cell::new(0u32));
 
-    // Whether the one-time swap interval fix has run. See
-    // `never_block_on_present`.
-    let swap_never_blocks = Rc::new(Cell::new(false));
-
     let mode = Mode {
         size: backend.borrow().window_size(),
         refresh: 60_000,
@@ -284,12 +280,6 @@ pub fn init_winit(
                                     return;
                                 }
                             };
-                            // Once, now that the surface is current: presents
-                            // must never wait for the host. See the function.
-                            if !swap_never_blocks.get() {
-                                never_block_on_present(renderer);
-                                swap_never_blocks.set(true);
-                            }
                             if let Err(err) = smithay::desktop::space::render_output::<
                                 _,
                                 WaylandSurfaceRenderElement<GlesRenderer>,
@@ -516,27 +506,13 @@ pub fn init_winit(
     Ok(())
 }
 
-/// Stop `eglSwapBuffers` from ever waiting on the host compositor.
-///
-/// EGL's default swap interval is 1, and Smithay asks for a vsync-less config
-/// but never actually lowers the interval. On Wayland an interval of 1 means
-/// the swap waits for the host's frame callback, and a host that has hidden
-/// this window sends none: the whole engine froze in `ppoll` inside
-/// `eglSwapBuffersWithDamageKHR`, remote session and all, the first time it
-/// presented from a hidden workspace. Traced with `eu-stack`; the block sat
-/// in `wl_display_dispatch_queue` under the swap.
-///
-/// Interval 0 makes the swap return immediately. The host still decides what
-/// it shows; nothing tears, because the host composites, and the nested
-/// window is a preview besides. Called once, with the surface current.
-///
-/// SAFETY: the display handle is valid for the renderer's lifetime, the
-/// context and surface are current when this is called, and interval 0 is
-/// always within the range the chosen config advertises.
-#[allow(unsafe_code)]
-fn never_block_on_present(renderer: &GlesRenderer) {
-    let display = renderer.egl_context().display().get_display_handle().handle;
-    unsafe {
-        smithay::backend::egl::ffi::egl::SwapInterval(display, 0);
-    }
-}
+// There used to be a `never_block_on_present` here that called
+// `eglSwapInterval(0)` after `bind()`, meant to stop presents from waiting on
+// the host. It never once worked: Smithay renders through an FBO with the
+// context current *surfaceless* at that point, and the EGL spec makes
+// `eglSwapInterval` fail with `BAD_SURFACE` when no surface is bound to the
+// current context. So the call's entire observable effect was one scary EGL
+// error in the log at first present. The freeze it was aimed at is actually
+// prevented by the redraw scheduling above: presents only happen inside
+// host-driven `Redraw` events, and a host that has hidden the window sends
+// none, so there is never a swap waiting on a callback that is not coming.
