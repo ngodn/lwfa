@@ -34,6 +34,9 @@ importers:
       '@lwfa/proto':
         specifier: workspace:*
         version: link:../proto
+      '@lwfa/spring':
+        specifier: workspace:*
+        version: link:../spring
       '@radix-ui/react-dialog':
         specifier: ^1.1.23
         version: 1.1.23(@types/react-dom@19.2.1(@types/react@19.2.2))(@types/react@19.2.2)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)

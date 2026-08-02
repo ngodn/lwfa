@@ -15,7 +15,11 @@
     "test:watch": "vitest",
     "test:rust": "cargo test --workspace",
     "test:all": "pnpm test && pnpm run test:rust",
-    "typecheck": "pnpm run config && tsc --noEmit"
+    "typecheck": "pnpm run config && tsc --noEmit",
+    "e2e:audio": "node --experimental-strip-types scripts/e2e-audio.mjs",
+    "build": "pnpm --filter @lwfa/shell run build",
+    "start": "pnpm --filter @lwfa/shell run preview",
+    "engine:release": "cargo build --release -p lwfa-engine"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
