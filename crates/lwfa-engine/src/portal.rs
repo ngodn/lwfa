@@ -29,6 +29,10 @@
 //! shell, the human answers eventually, and the reply releases the handler.
 //! One dialog at a time, which is also what a human is capable of answering.
 
+// One unsafe block: `pre_exec`, to tie child lifetimes to ours. See
+// `dies_with_us`.
+#![allow(unsafe_code)]
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -67,10 +71,13 @@ impl Portal {
     /// Bring up the private bus, the backend, and the frontend.
     pub fn start(events: LoopSender<FileRequest>) -> Result<Self, String> {
         // A private bus whose address we learn from its own stdout.
-        let mut bus = Command::new("dbus-daemon")
+        let mut command = Command::new("dbus-daemon");
+        command
             .args(["--session", "--nofork", "--print-address"])
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        dies_with_us(&mut command);
+        let mut bus = command
             .spawn()
             .map_err(|err| format!("could not run dbus-daemon: {err}"))?;
         let stdout = bus.stdout.take().ok_or("dbus-daemon has no stdout")?;
@@ -113,13 +120,15 @@ impl Portal {
 
         // The frontend, told this desktop is called "lwfa" so it picks the
         // definition above, on the private bus so applications find it.
-        let frontend = Command::new(FRONTEND)
+        let mut command = Command::new(FRONTEND);
+        command
             .env("DBUS_SESSION_BUS_ADDRESS", &address)
             .env("XDG_DESKTOP_PORTAL_DIR", &dir)
             .env("XDG_CURRENT_DESKTOP", "lwfa")
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
+            .stderr(Stdio::null());
+        dies_with_us(&mut command);
+        let frontend = command.spawn();
         let frontend = match frontend {
             Ok(frontend) => frontend,
             Err(err) => {
@@ -154,6 +163,28 @@ impl Drop for Portal {
 
 /// Where the Arch package puts the frontend. Not in PATH by design there.
 const FRONTEND: &str = "/usr/lib/xdg-desktop-portal";
+
+/// Make a child exit when the engine does, however the engine goes.
+///
+/// `Drop` only runs on a graceful shutdown; a SIGKILL, a panic-abort, or an
+/// OOM leaves the children orphaned, and a `dbus-daemon` has no pipe to
+/// notice its parent by, so it would sit there forever. Six of them did,
+/// which is how this function came to exist. `PR_SET_PDEATHSIG` asks the
+/// kernel to deliver SIGTERM to the child the moment its parent dies, which
+/// covers every exit path at once.
+fn dies_with_us(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: `set_parent_process_death_signal` is a single prctl syscall,
+    // async-signal-safe, allocating nothing: exactly what pre_exec allows.
+    unsafe {
+        command.pre_exec(|| {
+            let _ = rustix::process::set_parent_process_death_signal(Some(
+                rustix::process::Signal::TERM,
+            ));
+            Ok(())
+        });
+    }
+}
 
 fn portal_dir() -> std::path::PathBuf {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
