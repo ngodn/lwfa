@@ -64,7 +64,10 @@ export interface Pad {
   /** For dpad and stick: up, right, down, left. */
   directions?: [number, number, number, number]
   /**
-   * For a stick: the keycode its *click* sends, which is L3 or R3.
+   * Unused. Stick clicks are separate buttons; see `DEFAULT_LAYOUT`.
+   *
+   * Kept so a layout saved before that change still parses rather than being
+   * thrown away, taking the rest of someone's arrangement with it.
    *
    * A stick that cannot be clicked is missing a button every shooter binds to
    * sprint or crouch, so the press is part of the stick rather than a separate
@@ -128,14 +131,13 @@ export const DEFAULT_LAYOUT: Pad[] = [
   // D-pad above the left stick, as on a DualShock.
   { id: "dpad", kind: "dpad", face: "dpad", x: 15, y: 44, size: 22, directions: [103, 106, 108, 105] },
 
-  // Left stick: WASD, clicking for L3.
+  // Left stick. No click binding: see the L3/R3 buttons below.
   {
     id: "lstick",
     kind: "stick",
     face: "lstick",
     x: 18, y: 78, size: 26,
-    directions: [17, 32, 31, 30], // W D S A
-    clickCode: 46, // C, the usual crouch
+    directions: [17, 32, 31, 30], // W D S A, for the keyboard mode
   },
 
   // Face cluster on the right, in the standard diamond.
@@ -144,21 +146,76 @@ export const DEFAULT_LAYOUT: Pad[] = [
   { id: "east", kind: "button", face: "east", x: 94, y: 51, size: 12, code: 48 }, // B
   { id: "south", kind: "button", face: "south", x: 86, y: 62, size: 12, code: 57 }, // Space
 
-  // Right stick: arrow keys, clicking for R3.
+  // Right stick. No click binding, for the same reason.
   {
     id: "rstick",
     kind: "stick",
     face: "rstick",
     x: 80, y: 82, size: 24,
     directions: [103, 106, 108, 105],
-    clickCode: 50, // M
   },
+
+  // L3 and R3 as buttons of their own, not as clicks on the sticks.
+  //
+  // A physical stick can be pushed straight down without moving; a thumb on
+  // glass cannot. Pressing to click and sliding to aim are the same gesture
+  // here, so a stick-click binding either fires when you meant to aim or never
+  // fires at all. Every shooter binds these to sprint and melee, so they get
+  // real buttons, next to the shoulders where a spare finger already is.
+  { id: "l3", kind: "button", face: "l3", x: 8, y: 41, size: 11, code: 46 }, // C, crouch
+  { id: "r3", kind: "button", face: "r3", x: 92, y: 41, size: 11, code: 50 }, // M
 
   // Centre cluster.
   { id: "select", kind: "button", face: "select", x: 42, y: 12, size: 9, code: 15 }, // Tab
   { id: "guide", kind: "button", face: "guide", x: 50, y: 12, size: 9, code: 125 }, // Super
   { id: "start", kind: "button", face: "start", x: 58, y: 12, size: 9, code: 1 }, // Esc
 ]
+
+/**
+ * Where each face sits in the W3C standard gamepad mapping.
+ *
+ * That mapping is what the browser's own Gamepad API reports, what the engine
+ * translates into Linux button codes, and therefore the one vocabulary shared
+ * by a physical controller and this drawn one. A face with no entry here is
+ * keyboard-only.
+ */
+export const FACE_TO_BUTTON: Partial<Record<PadFace, number>> = {
+  south: 0,
+  east: 1,
+  west: 2,
+  north: 3,
+  l1: 4,
+  r1: 5,
+  l2: 6,
+  r2: 7,
+  select: 8,
+  start: 9,
+  l3: 10,
+  r3: 11,
+  guide: 16,
+}
+
+/** The four buttons a d-pad press maps to: up, right, down, left. */
+export const DPAD_BUTTONS = [12, 15, 13, 14] as const
+
+/**
+ * The analog axis a shoulder trigger drives, alongside its button.
+ *
+ * A real trigger is a lever, and a game may read only how far it is pulled: a
+ * racing game asks the axis how much throttle, never whether the button is
+ * down. A drawn trigger is a tap, so it reports fully pulled or not at all,
+ * but it has to report on the axis as well or those games see nothing happen.
+ */
+export const TRIGGER_AXES: Partial<Record<PadFace, number>> = {
+  l2: 4,
+  r2: 5,
+}
+
+/** The axis pair each stick drives: [x, y]. */
+export const STICK_AXES: Partial<Record<PadFace, readonly [number, number]>> = {
+  lstick: [0, 1],
+  rstick: [2, 3],
+}
 
 /** Clamp a pad to the play area, so a drag cannot lose it off an edge. */
 export function clampPad(pad: Pad): Pad {

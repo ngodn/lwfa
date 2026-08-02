@@ -16,12 +16,43 @@
  * Both read the same `Pad[]`, so what you arrange is exactly what you play.
  */
 
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { Background, BackgroundVariant, ReactFlow, type Node, type NodeProps } from "@xyflow/react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import {
+  Background,
+  BackgroundVariant,
+  ReactFlow,
+  applyNodeChanges,
+  type Node,
+  type NodeChange,
+  type NodeProps,
+} from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { SKIN_LABELS, clampPad, type Pad } from "@/gamepad/model"
+import {
+  DPAD_BUTTONS,
+  FACE_TO_BUTTON,
+  SKIN_LABELS,
+  STICK_AXES,
+  TRIGGER_AXES,
+  clampPad,
+  type Pad,
+} from "@/gamepad/model"
 import type { GamepadSkin } from "@/lib/prefs"
 import { cn } from "@/lib/utils"
+
+/**
+ * What a control sends, in whichever language the session is speaking.
+ *
+ * A face means one thing to a controller and another to a keyboard, and the
+ * layout carries both so switching modes needs no re-binding.
+ */
+interface Binding {
+  /** evdev keycode, for the keyboard fallback. */
+  key?: number | undefined
+  /** W3C gamepad button index, when a controller is attached. */
+  button?: number | undefined
+  /** Analog axis to drive alongside the button. Triggers only. */
+  axis?: number | undefined
+}
 
 export interface GamepadOverlayProps {
   pads: Pad[]
@@ -30,7 +61,17 @@ export interface GamepadOverlayProps {
   haptics: boolean
   editing: boolean
   onChange: (pads: Pad[]) => void
+  /** Keyboard fallback, for the keyboard binding mode. */
   onKey: (code: number, pressed: boolean) => void
+  /**
+   * A controller button, by W3C index. See `FACE_TO_BUTTON`.
+   *
+   * Absent in keyboard mode, which is what makes this a fallback rather than a
+   * second thing to keep in sync: the pads call whichever is provided.
+   */
+  onButton?: ((button: number, pressed: boolean) => void) | undefined
+  /** A controller axis, -1 to 1. Absent in keyboard mode. */
+  onAxis?: ((axis: number, value: number) => void) | undefined
 }
 
 export const GamepadOverlay = memo(function GamepadOverlay(props: GamepadOverlayProps) {
@@ -45,6 +86,8 @@ const PlaySurface = memo(function PlaySurface({
   opacity,
   haptics,
   onKey,
+  onButton,
+  onAxis,
 }: GamepadOverlayProps) {
   return (
     <div
@@ -57,51 +100,104 @@ const PlaySurface = memo(function PlaySurface({
       aria-label="On-screen gamepad"
     >
       {pads.map((pad) => (
-        <PlayPad key={pad.id} pad={pad} skin={skin} haptics={haptics} onKey={onKey} />
+        <PlayPad
+          key={pad.id}
+          pad={pad}
+          skin={skin}
+          haptics={haptics}
+          onKey={onKey}
+          onButton={onButton}
+          onAxis={onAxis}
+        />
       ))}
     </div>
   )
 })
 
+/**
+ * Why every pad is a square that merely looks round.
+ *
+ * Hit testing respects `border-radius`. A round button in a square box is
+ * therefore transparent at its four corners, and the overlay behind it passes
+ * pointers through on purpose so the gaps between pads still reach the desktop.
+ * Put those together and a thumb landing slightly off centre on X misses the
+ * circle, falls through the corner, and clicks whatever the game is drawing
+ * underneath: the button does nothing and the game reacts instead. On glass,
+ * where nobody lands dead centre, that is most of the near misses.
+ *
+ * Measured rather than reasoned about: `elementFromPoint` at the centre of a
+ * pad returns the pad, and six pixels into its own top-left corner returns the
+ * window behind it.
+ *
+ * So the element that takes the pointer is the full square, and the circle is
+ * an inert span drawn inside it. The pad's whole box belongs to the pad; only
+ * the space genuinely between pads reaches the game.
+ */
 const PlayPad = memo(function PlayPad({
   pad,
   skin,
   haptics,
   onKey,
+  onButton,
+  onAxis,
 }: {
   pad: Pad
   skin: GamepadSkin
   haptics: boolean
   onKey: (code: number, pressed: boolean) => void
+  onButton?: ((button: number, pressed: boolean) => void) | undefined
+  onAxis?: ((axis: number, value: number) => void) | undefined
 }) {
-  // Which keycode each active pointer is holding, so a finger that slides off
-  // still releases the key it pressed. Without this a lifted finger can leave a
-  // direction held down and the character walks into a wall forever.
-  const holding = useRef(new Map<number, number>())
+  // What each active pointer is holding, so a finger that slides off still
+  // releases it. Without this a lifted finger can leave a direction held and
+  // the character walks into a wall forever.
+  //
+  // A binding rather than a keycode, because the same control means one thing
+  // to a controller and another to a keyboard.
+  const holding = useRef(new Map<number, Binding>())
 
   const buzz = useCallback(() => {
     if (haptics) globalThis.navigator?.vibrate?.(6)
   }, [haptics])
 
+  /**
+   * Send a binding, preferring the controller when one is attached.
+   *
+   * Not both: a game reading the pad *and* the keyboard would see every press
+   * twice, which in a menu means skipping two items at a time.
+   */
+  const emit = useCallback(
+    (binding: Binding, pressed: boolean) => {
+      if (onButton && binding.button !== undefined) {
+        onButton(binding.button, pressed)
+        // A trigger also moves its axis. See `TRIGGER_AXES`.
+        if (binding.axis !== undefined) onAxis?.(binding.axis, pressed ? 1 : 0)
+      } else if (binding.key !== undefined) {
+        onKey(binding.key, pressed)
+      }
+    },
+    [onKey, onButton, onAxis],
+  )
+
   const down = useCallback(
-    (event: React.PointerEvent<HTMLElement>, code: number) => {
+    (event: React.PointerEvent<HTMLElement>, binding: Binding) => {
       event.preventDefault()
       event.currentTarget.setPointerCapture(event.pointerId)
-      holding.current.set(event.pointerId, code)
+      holding.current.set(event.pointerId, binding)
       buzz()
-      onKey(code, true)
+      emit(binding, true)
     },
-    [buzz, onKey],
+    [buzz, emit],
   )
 
   const up = useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
-      const code = holding.current.get(event.pointerId)
-      if (code === undefined) return
+      const binding = holding.current.get(event.pointerId)
+      if (binding === undefined) return
       holding.current.delete(event.pointerId)
-      onKey(code, false)
+      emit(binding, false)
     },
-    [onKey],
+    [emit],
   )
 
   // Inset by half the pad, so a control near an edge stays fully reachable
@@ -119,22 +215,23 @@ const PlayPad = memo(function PlayPad({
   }
 
   if (pad.kind === "stick" && pad.directions) {
-    return <Stick pad={pad} style={style} haptics={haptics} onKey={onKey} />
+    return <Stick pad={pad} style={style} haptics={haptics} onKey={onKey} onAxis={onAxis} />
   }
 
   if (pad.kind === "dpad" && pad.directions) {
     const [up_, right, down_, left] = pad.directions
+    const [bUp, bRight, bDown, bLeft] = DPAD_BUTTONS
     return (
       <div className="absolute" style={style}>
         <div className="grid h-full w-full grid-cols-3 grid-rows-3">
           <span />
-          <Segment onDown={(e) => down(e, up_)} onUp={up} className="rounded-t-lg">▲</Segment>
+          <Segment onDown={(e) => down(e, { key: up_, button: bUp })} onUp={up} className="rounded-t-lg">▲</Segment>
           <span />
-          <Segment onDown={(e) => down(e, left)} onUp={up} className="rounded-l-lg">◀</Segment>
+          <Segment onDown={(e) => down(e, { key: left, button: bLeft })} onUp={up} className="rounded-l-lg">◀</Segment>
           <span className="border border-white/10 bg-black/30" />
-          <Segment onDown={(e) => down(e, right)} onUp={up} className="rounded-r-lg">▶</Segment>
+          <Segment onDown={(e) => down(e, { key: right, button: bRight })} onUp={up} className="rounded-r-lg">▶</Segment>
           <span />
-          <Segment onDown={(e) => down(e, down_)} onUp={up} className="rounded-b-lg">▼</Segment>
+          <Segment onDown={(e) => down(e, { key: down_, button: bDown })} onUp={up} className="rounded-b-lg">▼</Segment>
           <span />
         </div>
       </div>
@@ -144,23 +241,37 @@ const PlayPad = memo(function PlayPad({
   const label = SKIN_LABELS[skin]?.[pad.face] ?? pad.face
   return (
     <button
-      className={cn(
-        "absolute grid place-items-center border border-white/20 bg-black/45 text-white/90",
-        "backdrop-blur-sm transition-transform active:scale-95 active:bg-white/25",
-        pad.kind === "trigger" ? "rounded-lg text-xs" : "rounded-full text-base",
-        skin === "playstation" && pad.kind === "button" && "text-lg",
-      )}
+      // Square, and deliberately unstyled: see the note on `PlayPad`. The
+      // circle you see is the span inside, which takes no pointer events.
+      className="group absolute grid place-items-center"
       style={style}
-      onPointerDown={(event) => pad.code !== undefined && down(event, pad.code)}
+      onPointerDown={(event) =>
+        down(event, {
+          key: pad.code,
+          button: FACE_TO_BUTTON[pad.face],
+          axis: TRIGGER_AXES[pad.face],
+        })
+      }
       onPointerUp={up}
       onPointerCancel={up}
       onContextMenu={(event) => event.preventDefault()}
       aria-label={String(label)}
     >
-      {label}
+      <span
+        className={cn(
+          "pointer-events-none grid size-full place-items-center",
+          "border border-white/20 bg-black/45 text-white/90 backdrop-blur-sm",
+          "transition-transform group-active:scale-95 group-active:bg-white/25",
+          pad.kind === "trigger" ? "rounded-lg text-xs" : "rounded-full text-base",
+          skin === "playstation" && pad.kind === "button" && "text-lg",
+        )}
+      >
+        {label}
+      </span>
     </button>
   )
 })
+
 
 /**
  * An analog thumbstick.
@@ -178,28 +289,39 @@ const PlayPad = memo(function PlayPad({
  * never stops moving, which is the one place in this UI that genuinely cannot
  * afford it.
  *
- * A tap that never leaves the dead zone is a *click*: L3 or R3.
+ * There is no click-to-press: see `onPointerUp`.
  */
 const Stick = memo(function Stick({
   pad,
   style,
   haptics,
   onKey,
+  onAxis,
 }: {
   pad: Pad
   style: React.CSSProperties
   haptics: boolean
   onKey: (code: number, pressed: boolean) => void
+  onAxis?: ((axis: number, value: number) => void) | undefined
 }) {
   const nub = useRef<HTMLSpanElement | null>(null)
   const held = useRef<Set<number>>(new Set())
   const moved = useRef(false)
 
+  const axes = STICK_AXES[pad.face]
+  /** True when this stick reports a real position rather than four keys. */
+  const analog = onAxis !== undefined && axes !== undefined
+
   const release = useCallback(() => {
+    if (analog && axes) {
+      // Centre it. A stick left pushed is a character that keeps walking.
+      onAxis?.(axes[0], 0)
+      onAxis?.(axes[1], 0)
+    }
     for (const code of held.current) onKey(code, false)
     held.current.clear()
     nub.current?.style.setProperty("transform", "translate(-50%, -50%)")
-  }, [onKey])
+  }, [onKey, onAxis, analog, axes])
 
   /** Hold exactly the keys the current direction implies, and no others. */
   const apply = useCallback(
@@ -234,6 +356,30 @@ const Stick = memo(function Stick({
         `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`,
       )
 
+      if (analog && axes) {
+        // The whole point of a controller: how far, not merely which way.
+        //
+        // Normalised against the radius and given the same quarter-travel dead
+        // zone the key mapping uses, so a resting thumb reads as centred. Sent
+        // every move, because that is what analog means.
+        const dead = 0.25
+        const nx = dx / radius
+        const ny = dy / radius
+        const magnitude = Math.hypot(nx, ny)
+        if (magnitude > dead) {
+          moved.current = true
+          // Rescale so the stick still reaches 1.0 at the rim rather than
+          // starting at 0.25 the moment it leaves the dead zone.
+          const scale = (magnitude - dead) / (1 - dead) / magnitude
+          onAxis?.(axes[0], Math.max(-1, Math.min(1, nx * scale)))
+          onAxis?.(axes[1], Math.max(-1, Math.min(1, ny * scale)))
+        } else {
+          onAxis?.(axes[0], 0)
+          onAxis?.(axes[1], 0)
+        }
+        return
+      }
+
       const [up, right, down, left] = pad.directions!
       const wanted = new Set<number>()
       // A quarter of the travel. Below that a resting thumb sends nothing.
@@ -253,7 +399,11 @@ const Stick = memo(function Stick({
 
   return (
     <div
-      className="absolute grid place-items-center rounded-full border border-white/20 bg-black/35 backdrop-blur-sm"
+      // Square for the same reason the buttons are; see `PlayPad`. A stick
+      // matters more still: a thumb rolling out to the rim leaves the circle
+      // before it leaves the box, so the corners are exactly where a hard push
+      // lands.
+      className="absolute grid place-items-center"
       style={style}
       onPointerDown={(event) => {
         event.preventDefault()
@@ -266,11 +416,10 @@ const Stick = memo(function Stick({
         if (event.currentTarget.hasPointerCapture(event.pointerId)) track(event)
       }}
       onPointerUp={(event) => {
-        // Never left the dead zone: that was a click, not a push.
-        if (!moved.current && pad.clickCode !== undefined) {
-          onKey(pad.clickCode, true)
-          onKey(pad.clickCode, false)
-        }
+        // No click-to-press here. A thumb on glass cannot push straight down
+        // without sliding, so pressing and aiming are the same gesture and the
+        // binding either misfired or never fired. L3 and R3 are their own
+        // buttons; see `DEFAULT_LAYOUT`.
         release()
         event.currentTarget.releasePointerCapture(event.pointerId)
       }}
@@ -278,6 +427,7 @@ const Stick = memo(function Stick({
       onContextMenu={(event) => event.preventDefault()}
       aria-label={pad.face === "lstick" ? "Left stick" : "Right stick"}
     >
+      <span className="pointer-events-none absolute inset-0 rounded-full border border-white/20 bg-black/35 backdrop-blur-sm" />
       <span
         ref={nub}
         className="pointer-events-none absolute top-1/2 left-1/2 size-[45%] rounded-full border border-white/30 bg-white/25"
@@ -367,7 +517,14 @@ const EditCanvas = memo(function EditCanvas({ pads, skin, onChange }: GamepadOve
     return () => observer.disconnect()
   }, [])
 
-  const nodes = useMemo<PadNode[]>(() => {
+  /**
+   * Where the pads are, derived from the layout.
+   *
+   * Recomputed only when the layout or the box changes, *not* on every render:
+   * see `nodes` below for why that distinction is the whole difference between
+   * a smooth drag and a stuttering one.
+   */
+  const derived = useMemo<PadNode[]>(() => {
     if (!area) return []
     return pads.map((pad) => {
       const { x, y, px } = toPixels(pad, area.w, area.h)
@@ -383,8 +540,41 @@ const EditCanvas = memo(function EditCanvas({ pads, skin, onChange }: GamepadOve
     })
   }, [pads, skin, area])
 
+  /**
+   * The nodes React Flow is actually driving.
+   *
+   * React Flow's `nodes` prop is controlled, and a controlled `nodes` without
+   * `onNodesChange` cannot move: the library works out the dragged position,
+   * the next render hands it the old one back, and the pad fights the pointer
+   * the whole way. It looks like lag and it is really the node being reset
+   * sixty times a second.
+   *
+   * So the positions live here and React Flow is allowed to update them, which
+   * is the pattern its documentation asks for. The layout is only written back
+   * to preferences when the drag ends; a write per pointer move would mean
+   * serialising to `localStorage` on every frame.
+   */
+  const [nodes, setNodes] = useState<PadNode[]>(derived)
+
+  // Adopt a new layout, but never mid-drag: replacing the nodes while the
+  // pointer is down is the same fight in a different disguise.
+  const dragging = useRef(false)
+  useEffect(() => {
+    if (dragging.current) return
+    setNodes(derived)
+  }, [derived])
+
+  const onNodesChange = useCallback((changes: NodeChange<PadNode>[]) => {
+    setNodes((current) => applyNodeChanges(changes, current))
+  }, [])
+
+  const onNodeDragStart = useCallback(() => {
+    dragging.current = true
+  }, [])
+
   const onNodeDragStop = useCallback(
     (_: unknown, node: Node) => {
+      dragging.current = false
       if (!area) return
       onChange(
         pads.map((pad) => {
@@ -418,6 +608,8 @@ const EditCanvas = memo(function EditCanvas({ pads, skin, onChange }: GamepadOve
         nodes={nodes}
         edges={[]}
         nodeTypes={NODE_TYPES}
+        onNodesChange={onNodesChange}
+        onNodeDragStart={onNodeDragStart}
         onNodeDragStop={onNodeDragStop}
         // A layout editor is not a diagram: panning and zooming the canvas
         // would move the pads relative to the game behind them, which is
@@ -495,14 +687,23 @@ const ResizeBar = memo(function ResizeBar({
   )
 })
 
+/**
+ * No `backdrop-blur` here, unlike the pad you actually play with.
+ *
+ * A backdrop filter has to re-read and re-blur whatever is behind it whenever
+ * either one moves, and behind this is a live video of the desktop. During a
+ * drag that is a full-frame blur per pointer move, which is what made moving a
+ * pad feel like it was stepping rather than following. The playing pad keeps
+ * its blur: it sits still, so it is paid for once.
+ */
 const PadNodeView = memo(function PadNodeView({ data }: NodeProps<PadNode>) {
   const { pad, skin, px } = data
   const label = pad.kind === "dpad" ? "\u271b" : pad.kind === "stick" ? "\u25c9" : (SKIN_LABELS[skin]?.[pad.face] ?? pad.face)
   return (
     <div
       className={cn(
-        "grid place-items-center border-2 border-dashed border-primary/70 bg-primary/15",
-        "text-xs text-primary backdrop-blur-sm",
+        "grid place-items-center border-2 border-dashed border-primary/70 bg-primary/25",
+        "text-xs text-primary",
         pad.kind === "trigger" ? "rounded-lg" : "rounded-full",
       )}
       style={{ width: px, height: px }}
