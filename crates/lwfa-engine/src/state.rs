@@ -218,6 +218,10 @@ pub struct Lwfa {
     pub audio: Option<crate::audio::Capture>,
     /// The virtual microphone, while a session feeds one. See `mic.rs`.
     pub mic: Option<crate::mic::Mic>,
+    /// The virtual camera, while a session feeds one. See `camera.rs`.
+    pub camera: Option<crate::camera::Camera>,
+    /// Which session's camera the device carries. Same policy as the mic.
+    pub camera_session: Option<lwfa_proto::SessionId>,
     /// The file-chooser portal plumbing, when it came up. See `portal.rs`.
     pub portal: Option<crate::portal::Portal>,
     /// Open file dialogs, by the request id the shell echoes back.
@@ -383,6 +387,8 @@ impl Lwfa {
             audio: None,
             mic: None,
             mic_session: None,
+            camera: None,
+            camera_session: None,
             portal: None,
             pending_files: std::collections::HashMap::new(),
             next_file_request: 1,
@@ -828,6 +834,34 @@ impl Lwfa {
         if self.mic_session == Some(session) {
             if let Some(mic) = self.mic.as_ref() {
                 mic.feed(chunk);
+            }
+        }
+    }
+
+    /// Start or stop carrying this session's camera. Mirrors `set_mic`.
+    pub fn set_camera(&mut self, session: lwfa_proto::SessionId, enabled: bool) {
+        if enabled {
+            if self.camera.is_none() {
+                match crate::camera::Camera::start() {
+                    Ok(camera) => self.camera = Some(camera),
+                    Err(err) => {
+                        tracing::warn!("could not plug in the virtual camera: {err}");
+                        return;
+                    }
+                }
+            }
+            self.camera_session = Some(session);
+        } else if self.camera_session == Some(session) {
+            self.camera = None;
+            self.camera_session = None;
+        }
+    }
+
+    /// One encoded camera frame from a session, tag already stripped.
+    pub fn camera_chunk(&mut self, session: lwfa_proto::SessionId, frame: &[u8]) {
+        if self.camera_session == Some(session) {
+            if let Some(camera) = self.camera.as_ref() {
+                camera.feed(frame);
             }
         }
     }

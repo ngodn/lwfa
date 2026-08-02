@@ -56,6 +56,7 @@ import {
 } from "@/lib/apps"
 import * as audio from "@/lib/audio"
 import { setMicWanted, startMic, useMicWanted, type RunningMic } from "@/lib/mic"
+import { setCameraWanted, startCamera, useCameraWanted, type RunningCamera } from "@/lib/camera"
 import { clearFileRequest, fileMessage } from "@/lib/files"
 import { FileDialog } from "@/components/FileDialog"
 import { engineFor } from "@/lib/engineUrl"
@@ -986,6 +987,33 @@ export function App(): React.ReactElement {
       connection.current?.send({ type: "setMic", enabled: false });
     };
   }, [micWanted, sessionId]);
+
+  // The camera, same shape as the mic in every respect.
+  const cameraWanted = useCameraWanted();
+  useEffect(() => {
+    if (!cameraWanted) return;
+    const conn = connection.current;
+    if (!conn) return;
+    conn.send({ type: "setCamera", enabled: true });
+
+    let cancelled = false;
+    let running: RunningCamera | null = null;
+    void startCamera(conn)
+      .then((camera) => {
+        if (cancelled) camera.stop();
+        else running = camera;
+      })
+      .catch(() => {
+        setCameraWanted(false);
+        connection.current?.send({ type: "setCamera", enabled: false });
+      });
+
+    return () => {
+      cancelled = true;
+      running?.stop();
+      connection.current?.send({ type: "setCamera", enabled: false });
+    };
+  }, [cameraWanted, sessionId]);
 
   // Local playback and the quality choice are re-sent whenever they change
   // rather than only when audio is switched on.

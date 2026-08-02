@@ -344,6 +344,7 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
         ),
         ("set-gamepad", ToEngine::SetGamepad { enabled: true }),
         ("set-mic", ToEngine::SetMic { enabled: true }),
+        ("set-camera", ToEngine::SetCamera { enabled: true }),
         (
             "list-dir",
             ToEngine::ListDir {

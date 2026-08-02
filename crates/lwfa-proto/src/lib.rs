@@ -919,6 +919,14 @@ pub enum ToEngine {
         quality: AudioQuality,
     },
 
+    /// Start or stop feeding this session's camera to the desktop.
+    ///
+    /// Mirrors [`SetMic`](Self::SetMic) exactly: consent and lifecycle in
+    /// JSON, frames as binary messages tagged [`CAM_TAG`], the device
+    /// existing only while a session feeds it, most recent enabler winning.
+    #[serde(rename_all = "camelCase")]
+    SetCamera { enabled: bool },
+
     /// Ask for one directory of the machine, for the file dialog's browser.
     ///
     /// Bound to an open [`ToShell::FileChooser`] request rather than free-
@@ -1153,6 +1161,11 @@ pub const MIC_TAG_PCM: u8 = 0x02;
 /// request are sequential: the most recent [`ToEngine::FileUpload`] not yet
 /// closed by [`ToEngine::FileUploadDone`].
 pub const FILE_TAG: u8 = 0x03;
+
+/// Leading byte of a binary uplink message carrying one encoded camera
+/// frame: H.264 in Annex-B form, self-describing (the SPS in the stream
+/// carries the dimensions), so the tag is the whole header.
+pub const CAM_TAG: u8 = 0x04;
 
 /// How an audio payload is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

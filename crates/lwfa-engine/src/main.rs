@@ -18,6 +18,7 @@ mod accounts;
 mod apps;
 mod audio;
 mod auth;
+mod camera;
 mod capture;
 mod config;
 mod cuda;
@@ -466,6 +467,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // closed tab must not leave a device on the machine claiming to
             // carry a room it can no longer hear.
             state.set_mic(session, false);
+            state.set_camera(session, false);
             // File dialogs they were answering resolve as cancelled, so the
             // application under one sees a dismissed dialog, not a hang.
             state.cancel_files_for(session);
@@ -515,6 +517,10 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
         ShellEvent::FileChunk(session, bytes) => {
             // Tag stripped here; request id and payload parsed in state.
             state.file_chunk(session, &bytes[1..]);
+        }
+
+        ShellEvent::CamChunk(session, bytes) => {
+            state.camera_chunk(session, &bytes[1..]);
         }
 
         ShellEvent::Message(session, message) => {
@@ -882,6 +888,10 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
 
         ToEngine::SetMic { enabled } => {
             state.set_mic(session, enabled);
+        }
+
+        ToEngine::SetCamera { enabled } => {
+            state.set_camera(session, enabled);
         }
 
         ToEngine::ListDir { request, path } => {

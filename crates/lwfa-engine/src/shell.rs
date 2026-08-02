@@ -134,6 +134,8 @@ pub enum ShellEvent {
     /// reasoning; the socket orders chunks against the `FileUpload` and
     /// `FileUploadDone` that bracket them.
     FileChunk(SessionId, tungstenite::Bytes),
+    /// A binary uplink message: one encoded camera frame, tag included.
+    CamChunk(SessionId, tungstenite::Bytes),
     Disconnected(SessionId),
 }
 
@@ -954,6 +956,9 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                     }
                     Some(&lwfa_proto::FILE_TAG) => {
                         Some(ShellEvent::FileChunk(client.id, bytes))
+                    }
+                    Some(&lwfa_proto::CAM_TAG) => {
+                        Some(ShellEvent::CamChunk(client.id, bytes))
                     }
                     _ => None,
                 };

@@ -52,6 +52,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
 import { setMicWanted, useMicState, useMicWanted } from "@/lib/mic"
+import { setCameraWanted, useCameraState, useCameraWanted } from "@/lib/camera"
 import { cn } from "@/lib/utils"
 
 const EDGES: { value: NavEdgePref; label: string; icon: typeof PanelLeft }[] = [
@@ -312,6 +313,41 @@ function MicSettings() {
         <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
           Apps on the desktop now list an &ldquo;lwfa-Microphone&rdquo; input
           device. Pick it in the app that should hear you.
+        </p>
+      ) : null}
+    </>
+  )
+}
+
+/** The camera switch: MicSettings' twin, for the other lens. */
+function CameraSettings() {
+  const wanted = useCameraWanted()
+  const state = useCameraState()
+
+  const hint =
+    state.phase === "error"
+      ? state.reason
+      : state.phase === "live"
+        ? "Live"
+        : state.phase === "starting"
+          ? "Asking the browser…"
+          : "Off"
+
+  return (
+    <>
+      <FieldRow>
+        <Field label="Share this device's camera" hint={hint} />
+        <Switch
+          checked={wanted}
+          onCheckedChange={setCameraWanted}
+          aria-label="Share this device's camera"
+        />
+      </FieldRow>
+      {state.phase === "live" ? (
+        <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+          Apps on the desktop now list an &ldquo;lwfa-Camera&rdquo; device.
+          Pick it in the app that should see you. Chrome needs the
+          v4l2loopback module on the machine; Firefox sees it either way.
         </p>
       ) : null}
     </>
@@ -592,6 +628,13 @@ function StreamSettings() {
         description="Feed this device's microphone to the desktop."
       >
         <MicSettings />
+      </PanelSection>
+
+      <PanelSection
+        title="Camera"
+        description="Feed this device's camera to the desktop."
+      >
+        <CameraSettings />
       </PanelSection>
 
       <PanelSection

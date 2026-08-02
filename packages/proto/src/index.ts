@@ -451,6 +451,11 @@ export type ToEngine =
    */
   | { type: "setMic"; enabled: boolean }
   /**
+   * Start or stop feeding this session's camera to the desktop. Mirrors
+   * `setMic` exactly; frames travel as binary messages tagged `CAM_TAG`.
+   */
+  | { type: "setCamera"; enabled: boolean }
+  /**
    * Ask for one directory of the machine, for the file dialog's browser.
    * Only meaningful while a `fileChooser` request is open.
    */
@@ -489,6 +494,12 @@ export const MIC_TAG_PCM = 0x02
  * `FILE_TAG`.
  */
 export const FILE_TAG = 0x03
+
+/**
+ * Leading byte of a binary uplink message carrying one encoded camera
+ * frame: H.264 Annex-B, self-describing, so the tag is the whole header.
+ */
+export const CAM_TAG = 0x04
 
 /** Motion's defaults, matching `SpringSpec::default` on the Rust side. */
 export const DEFAULT_SPRING: SpringSpec = { stiffness: 100, damping: 10, mass: 1 }
@@ -1073,6 +1084,11 @@ export function decodeToEngine(text: string): ToEngine {
       const where = `${at}.setMic`
       noExtraKeys(o, ["type", "enabled"], where)
       return { type: "setMic", enabled: bool(o, "enabled", where) }
+    }
+    case "setCamera": {
+      const where = `${at}.setCamera`
+      noExtraKeys(o, ["type", "enabled"], where)
+      return { type: "setCamera", enabled: bool(o, "enabled", where) }
     }
     case "listDir": {
       const where = `${at}.listDir`

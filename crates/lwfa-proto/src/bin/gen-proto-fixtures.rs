@@ -334,6 +334,7 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
     ));
     to_engine.push(("set-gamepad", ToEngine::SetGamepad { enabled: true }));
     to_engine.push(("set-mic", ToEngine::SetMic { enabled: true }));
+    to_engine.push(("set-camera", ToEngine::SetCamera { enabled: true }));
     to_engine.push((
         "list-dir",
         ToEngine::ListDir {
