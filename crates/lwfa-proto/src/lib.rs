@@ -357,6 +357,39 @@ impl Codec {
     }
 }
 
+/// How many bits the session's sound deserves.
+///
+/// Derived on the ordering: `Auto < High < Medium < Low`, so "the most
+/// constrained listener wins" is a plain `max`. `Auto` sorts first because
+/// any explicit request beats the engine guessing.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioQuality {
+    /// Follow the same budget the video adapts on.
+    #[default]
+    Auto,
+    /// 128 kbit/s Opus: transparent for desktop audio.
+    High,
+    /// 96 kbit/s.
+    Medium,
+    /// 64 kbit/s: clearly compressed on music, fine for interface sounds.
+    Low,
+}
+
+impl AudioQuality {
+    /// Bits per second, or `None` for [`AudioQuality::Auto`].
+    pub fn bits(self) -> Option<i32> {
+        match self {
+            AudioQuality::Auto => None,
+            AudioQuality::High => Some(128_000),
+            AudioQuality::Medium => Some(96_000),
+            AudioQuality::Low => Some(64_000),
+        }
+    }
+}
+
 /// One resolved application icon, as a `data:` URI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -813,6 +846,14 @@ pub enum ToEngine {
         /// because the reason to stream audio is usually that nobody is in the
         /// room, and a desktop talking to an empty room is a surprise.
         local: bool,
+        /// How many bits the sound deserves.
+        ///
+        /// One capture is fanned out to everyone, so the *lowest* request
+        /// among the listeners wins: a constrained device must not be flooded
+        /// because another one asked for more. `Auto` follows the same budget
+        /// the video adapts on.
+        #[serde(default)]
+        quality: AudioQuality,
     },
 
     /// Which windows the shell wants pixels for, and in what form.

@@ -373,7 +373,7 @@ function StreamSettings() {
         <FieldRow>
           <Field
             label="Hear the desktop"
-            hint={stream.audio ? "About 1.5 Mbit/s" : "Muted"}
+            hint={stream.audio ? "Streaming" : "Muted"}
           />
           <Switch
             checked={stream.audio}
@@ -424,6 +424,46 @@ function StreamSettings() {
               aria-label="Volume"
             />
           </FieldRow>
+        ) : null}
+        {stream.audio ? (
+          <div className="space-y-1.5">
+            <Field
+              label="Sound quality"
+              hint={
+                stream.audioQuality === "auto"
+                  ? "Follows the connection, like the picture"
+                  : { high: "128 kbit/s", medium: "96 kbit/s", low: "64 kbit/s" }[
+                      stream.audioQuality
+                    ]
+              }
+            />
+            <ToggleGroup
+              type="single"
+              value={stream.audioQuality}
+              onValueChange={(value) => {
+                if (value) {
+                  patchPrefs("stream", {
+                    audioQuality: value as "auto" | "high" | "medium" | "low",
+                  })
+                }
+              }}
+              variant="outline"
+              className="w-full"
+            >
+              <ToggleGroupItem value="auto" className="h-11 flex-1">
+                Auto
+              </ToggleGroupItem>
+              <ToggleGroupItem value="high" className="h-11 flex-1">
+                High
+              </ToggleGroupItem>
+              <ToggleGroupItem value="medium" className="h-11 flex-1">
+                Medium
+              </ToggleGroupItem>
+              <ToggleGroupItem value="low" className="h-11 flex-1">
+                Low
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
         ) : null}
       </PanelSection>
 

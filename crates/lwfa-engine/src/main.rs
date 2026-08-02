@@ -515,6 +515,7 @@ fn new_session(
         // the room because it happened to open a page.
         audio: false,
         opus: false,
+        audio_quality: lwfa_proto::AudioQuality::default(),
     }
 }
 
@@ -822,10 +823,11 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             pad.axis(axis, value);
         }
 
-        ToEngine::SetAudio { enabled, local, opus } => {
+        ToEngine::SetAudio { enabled, local, opus, quality } => {
             if let Some(who) = state.sessions.get_mut(&session) {
                 who.audio = enabled;
                 who.opus = opus;
+                who.audio_quality = quality;
             }
             // Machine-wide rather than per session: there is one set of
             // speakers, so the last session to express a preference wins.
@@ -834,6 +836,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                 shell.clients().set_audio(session, enabled);
             }
             state.sync_audio_capture();
+            state.sync_audio_bitrate();
         }
 
         ToEngine::SetStreams { windows, codecs } => {
@@ -1057,6 +1060,7 @@ mod tests {
             codecs: Some(vec![lwfa_proto::Codec::H264]),
             audio: false,
             opus: false,
+            audio_quality: lwfa_proto::AudioQuality::default(),
         }
     }
 

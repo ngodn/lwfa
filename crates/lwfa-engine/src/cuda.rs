@@ -36,6 +36,10 @@
 //! through the same bindings the rest of the encoder already trusts.
 
 #![allow(unsafe_code)]
+// The driver struct's fields are named after the exact C symbols they hold,
+// because grepping a CUDA error message for the function name should land
+// here, not on a translation of it.
+#![allow(non_snake_case)]
 
 use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::ptr;

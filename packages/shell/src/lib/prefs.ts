@@ -180,6 +180,15 @@ export interface Prefs {
      * Machine-wide rather than per device: there is one set of speakers.
      */
     localPlayback: boolean
+    /**
+     * How many bits the sound deserves.
+     *
+     * "auto" follows the connection the way the video does: sound degrades
+     * last, since broken audio is more jarring than a softer picture. The
+     * named levels pin it, for anyone who would rather trade the bits by
+     * hand. The engine honours the lowest request among everyone listening.
+     */
+    audioQuality: "auto" | "high" | "medium" | "low"
   }
   motion: {
     /**
@@ -235,6 +244,7 @@ export const DEFAULT_PREFS: Prefs = {
     audio: false,
     volume: 1,
     localPlayback: false,
+    audioQuality: "auto",
   },
   motion: {
     animate: true,

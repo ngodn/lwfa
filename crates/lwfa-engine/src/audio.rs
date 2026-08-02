@@ -37,7 +37,7 @@
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
 
 use lwfa_proto::{AudioFormat, AudioHeader};
@@ -69,6 +69,8 @@ pub struct Capture {
     running: Arc<AtomicBool>,
     /// Whether listeners want Opus. Read by the capture thread per chunk.
     wants_opus: Arc<AtomicBool>,
+    /// Bits per second for Opus. Read by the capture thread per chunk.
+    opus_bitrate: Arc<AtomicI32>,
 }
 
 impl Capture {
@@ -79,6 +81,16 @@ impl Capture {
     /// format change and follows it without resynchronising.
     pub fn set_opus(&self, yes: bool) {
         self.wants_opus.store(yes, Ordering::Relaxed);
+    }
+
+    /// Spend this many bits per second on the sound, from the next chunk.
+    ///
+    /// Opus changes rate mid-stream without a hiccup: the encoder simply
+    /// spends fewer bits on the next frame, and the decoder never needs to be
+    /// told. This is what audio quality settings and the adaptive budget pull
+    /// on; nothing is rebuilt.
+    pub fn set_bitrate(&self, bits: i32) {
+        self.opus_bitrate.store(bits, Ordering::Relaxed);
     }
 }
 
@@ -143,6 +155,8 @@ pub fn start(
     let thread_running = Arc::clone(&running);
     let wants_opus = Arc::new(AtomicBool::new(opus));
     let thread_opus = Arc::clone(&wants_opus);
+    let opus_bitrate = Arc::new(AtomicI32::new(OPUS_BITRATE));
+    let thread_bitrate = Arc::clone(&opus_bitrate);
 
     if let Err(err) = thread::Builder::new()
         .name("lwfa-audio".into())
@@ -157,8 +171,18 @@ pub fn start(
             // waste. Opus never exceeds this for one frame at these settings.
             let mut packet = vec![0u8; 4000];
             let mut samples = vec![0i16; FRAMES_PER_CHUNK * CHANNELS as usize];
+            let mut applied_bitrate = OPUS_BITRATE;
 
             while thread_running.load(Ordering::Relaxed) {
+                // Follow the requested rate. Checked per chunk because that
+                // is this thread's natural heartbeat; applying is one setter
+                // on the live encoder, no restart.
+                let wanted_bitrate = thread_bitrate.load(Ordering::Relaxed);
+                if wanted_bitrate != applied_bitrate {
+                    opus.set_bitrate(wanted_bitrate);
+                    applied_bitrate = wanted_bitrate;
+                    tracing::info!("audio is now {} kbit/s", wanted_bitrate / 1000);
+                }
                 // Whole chunks only. A short read mid-frame would shift every
                 // subsequent sample by a byte and turn the stream into noise
                 // permanently, so this fills the buffer or gives up.
@@ -213,7 +237,12 @@ pub fn start(
             None => " from the default sink".to_string(),
         }
     );
-    Some(Capture { child, running, wants_opus })
+    Some(Capture {
+        child,
+        running,
+        wants_opus,
+        opus_bitrate,
+    })
 }
 
 /// An Opus encoder for this capture's fixed format.
@@ -245,6 +274,13 @@ impl Opus {
                 tracing::warn!("no Opus encoder ({err}); audio stays uncompressed");
                 Self { encoder: None }
             }
+        }
+    }
+
+    /// Change the rate mid-stream. Harmless when there is no encoder.
+    fn set_bitrate(&mut self, bits: i32) {
+        if let Some(encoder) = self.encoder.as_mut() {
+            let _ = encoder.set_bitrate(opus::Bitrate::Bits(bits));
         }
     }
 

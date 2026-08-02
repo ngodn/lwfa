@@ -319,16 +319,19 @@ export function App(): React.ReactElement {
   codecsRef.current = wantCodecs;
 
   /**
-   * Whether this browser can decode Opus, probed once.
+   * Whether this browser can decode Opus: `null` until the probe answers.
    *
-   * A ref rather than state: it is read when a `setAudio` is sent and never
-   * rendered, so making it state would re-render the desktop for nothing.
+   * State, not a ref, and nullable, both deliberately. The probe is async,
+   * and the audio effect used to read a ref that still held its `false`
+   * placeholder when a saved preference switched audio on at page load. The
+   * engine was then told this device cannot decode Opus and streamed raw PCM
+   * at 1.5 Mbit/s for the whole session: audio that sounded perfect while
+   * quietly eating the video's budget. Being state re-runs the effect when
+   * the real answer lands, and being nullable lets the effect wait for it.
    */
-  const opusRef = useRef(false);
+  const [opusKnown, setOpusKnown] = useState<boolean | null>(null);
   useEffect(() => {
-    void decodesOpus().then((yes) => {
-      opusRef.current = yes;
-    });
+    void decodesOpus().then(setOpusKnown);
   }, []);
   const animateRef = useRef(prefs.motion.animate);
   animateRef.current = prefs.motion.animate;
@@ -905,8 +908,11 @@ export function App(): React.ReactElement {
   // Also keyed on the session id: a reconnect is a new session on the engine,
   // and it has never been told that this device wants sound.
   useEffect(() => {
+    // Wait for the Opus probe. Telling the engine "no Opus" a moment before
+    // learning better means a session of uncompressed audio; see `opusKnown`.
+    if (opusKnown === null) return;
     if (!wantsAudio) {
-      connection.current?.send({ type: "setAudio", enabled: false, local: prefs.stream.localPlayback, opus: opusRef.current });
+      connection.current?.send({ type: "setAudio", enabled: false, local: prefs.stream.localPlayback, opus: opusKnown, quality: prefs.stream.audioQuality });
       void audio.stop();
       return;
     }
@@ -919,7 +925,7 @@ export function App(): React.ReactElement {
         return;
       }
       audio.setVolume(prefs.stream.volume);
-      connection.current?.send({ type: "setAudio", enabled: true, local: prefs.stream.localPlayback, opus: opusRef.current });
+      connection.current?.send({ type: "setAudio", enabled: true, local: prefs.stream.localPlayback, opus: opusKnown, quality: prefs.stream.audioQuality });
     });
     // Browsers hold a new AudioContext suspended until the page has been
     // touched. If audio was on from a saved preference, this is what starts it
@@ -930,18 +936,18 @@ export function App(): React.ReactElement {
       release();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wantsAudio, sessionId]);
+  }, [wantsAudio, sessionId, opusKnown]);
 
   useEffect(() => {
     audio.setVolume(prefs.stream.volume);
   }, [prefs.stream.volume]);
 
-  // Local playback is a property of the machine, so it is sent whenever it
-  // changes rather than only when audio is switched on.
+  // Local playback and the quality choice are re-sent whenever they change
+  // rather than only when audio is switched on.
   useEffect(() => {
-    if (!wantsAudio) return;
-    connection.current?.send({ type: "setAudio", enabled: true, local: prefs.stream.localPlayback, opus: opusRef.current });
-  }, [wantsAudio, prefs.stream.localPlayback]);
+    if (!wantsAudio || opusKnown === null) return;
+    connection.current?.send({ type: "setAudio", enabled: true, local: prefs.stream.localPlayback, opus: opusKnown, quality: prefs.stream.audioQuality });
+  }, [wantsAudio, opusKnown, prefs.stream.localPlayback, prefs.stream.audioQuality]);
 
   // Re-report the viewport whenever this device starts driving a session.
   //

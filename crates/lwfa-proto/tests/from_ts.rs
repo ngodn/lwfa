@@ -285,7 +285,15 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
         ),
         ("take-control", ToEngine::TakeControl),
         ("end-session", ToEngine::EndSession { session: 3 }),
-        ("set-audio", ToEngine::SetAudio { enabled: true, local: false, opus: true }),
+        (
+            "set-audio",
+            ToEngine::SetAudio {
+                enabled: true,
+                local: false,
+                opus: true,
+                quality: lwfa_proto::AudioQuality::Auto,
+            },
+        ),
         (
             "close-and-spawn",
             ToEngine::CloseAndSpawn {

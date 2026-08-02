@@ -36,16 +36,21 @@ use lwfa_proto::WindowId;
 /// logarithm of the bitrate, so even steps would be imperceptible at the top
 /// and brutal at the bottom.
 ///
-/// The ceiling is what the encoder used to be fixed at, and the floor is about
-/// where a desktop at this size stops being readable. Below that the answer is
-/// a smaller image, not fewer bits, which is a change this does not make.
-pub const STEPS: [u32; 6] = [
+/// The ceiling is chosen for a LAN, where the link is worth tens of times
+/// this and the budget is really bounded by what a browser can decode and a
+/// tablet can spend. It is a *total* across windows, with the focused one
+/// taking the larger share; see `allocate`. The floor is about where a
+/// desktop at this size stops being readable. Below that the answer is a
+/// smaller image, not fewer bits, which is a change this does not make.
+pub const STEPS: [u32; 8] = [
     500_000,
     1_000_000,
     2_000_000,
     4_000_000,
     8_000_000,
     16_000_000,
+    24_000_000,
+    32_000_000,
 ];
 
 /// Where a fresh connection starts.
@@ -55,11 +60,24 @@ pub const STEPS: [u32; 6] = [
 /// seconds are when somebody decides whether this works.
 const START: usize = 3;
 
-/// How long the connection has to stay clear before trying more, at first.
+/// How long the connection has to stay clear before trying more, once it has
+/// ever pushed back.
 ///
 /// Long enough that a quiet moment in a busy stream does not trigger a climb
 /// that immediately has to be undone, since each attempt costs a keyframe.
+/// Until the first drop the controller climbs much faster; see
+/// [`Controller::climb_wait`].
 const CLIMB_AFTER: Duration = Duration::from_secs(8);
+
+/// The climb interval while the link has never pushed back.
+///
+/// A connection that has absorbed everything thrown at it so far deserves
+/// optimism: this is TCP's slow start in spirit. On a clean LAN the budget
+/// reaches the ceiling in under ten seconds instead of half a minute, which
+/// is the difference between "the first minute looks bad" and nobody
+/// noticing the ramp at all. The first genuine drop switches to the patient
+/// schedule above.
+const EAGER_CLIMB: Duration = Duration::from_secs(2);
 
 /// The longest it will ever wait before trying again.
 ///
@@ -106,7 +124,7 @@ impl Controller {
             step: START,
             changed_at: now,
             clear_since: now,
-            climb_wait: CLIMB_AFTER,
+            climb_wait: EAGER_CLIMB,
         }
     }
 
@@ -133,8 +151,10 @@ impl Controller {
         if congested && self.step > 0 {
             self.step -= 1;
             self.changed_at = now;
-            // Wait longer before trying that level again. See `climb_wait`.
-            self.climb_wait = (self.climb_wait * 2).min(MAX_CLIMB_WAIT);
+            // Wait longer before trying that level again, and never less than
+            // the patient schedule: the first drop is also what ends the
+            // eager climb of a fresh connection. See `climb_wait`.
+            self.climb_wait = (self.climb_wait * 2).clamp(CLIMB_AFTER, MAX_CLIMB_WAIT);
             return Some(self.bitrate());
         }
 
@@ -143,7 +163,7 @@ impl Controller {
         // A long stretch with no trouble at all means the link is not the one
         // that was struggling earlier, so start being optimistic again.
         if clear_for >= BACKOFF_RESET {
-            self.climb_wait = CLIMB_AFTER;
+            self.climb_wait = EAGER_CLIMB;
         }
 
         if !congested && self.step + 1 < STEPS.len() && clear_for >= self.climb_wait {
@@ -234,29 +254,51 @@ mod tests {
     }
 
     #[test]
-    fn climbs_slower_than_it_drops() {
-        // The standard asymmetry. Overshooting down costs a little sharpness;
+    fn climbs_slower_than_it_drops_once_the_link_has_pushed_back() {
+        // The standard asymmetry, but it begins at the first failure. A fresh
+        // connection climbs eagerly, because a link that has absorbed
+        // everything so far has earned optimism; one that has already pushed
+        // back has not. Overshooting down costs a little sharpness;
         // overshooting up costs a stalled picture.
         let base = Instant::now();
-        let mut dropper = Controller::new(base);
-        let mut climber = Controller::new(base);
+        let mut controller = Controller::new(base);
+        controller.observe(true, at(base, 3)).expect("drops");
 
-        // One congested observation is enough to drop.
-        let mut fell_at = None;
-        for i in 1..40 {
-            if dropper.observe(true, at(base, i)).is_some() {
-                fell_at = Some(i);
+        // A second drop needs one settling period.
+        let mut fell_again = None;
+        for i in 4..40 {
+            let mut probe = Controller::new(base);
+            probe.observe(true, at(base, 3)).expect("drops");
+            if probe.observe(true, at(base, i)).is_some() {
+                fell_again = Some(i - 3);
                 break;
             }
         }
-        let mut rose_at = None;
-        for i in 1..40 {
-            if climber.observe(false, at(base, i)).is_some() {
-                rose_at = Some(i);
+        // A climb after that drop waits much longer than a settle.
+        let mut rose = None;
+        for i in 4..40 {
+            if controller.observe(false, at(base, i)).is_some() {
+                rose = Some(i - 3);
                 break;
             }
         }
-        assert!(fell_at.unwrap() < rose_at.unwrap());
+        assert!(
+            fell_again.unwrap() < rose.unwrap(),
+            "dropped again after {fell_again:?}s but climbed after {rose:?}s"
+        );
+    }
+
+    #[test]
+    fn a_fresh_connection_reaches_the_ceiling_quickly() {
+        // The eager phase. On a clean link the whole ramp takes seconds, not
+        // half a minute: the first minute is when somebody decides whether
+        // this works at all.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        for i in 1..=30 {
+            controller.observe(false, at(base, i));
+        }
+        assert_eq!(controller.bitrate(), STEPS[STEPS.len() - 1]);
     }
 
     #[test]
@@ -285,8 +327,8 @@ mod tests {
         let mut controller = Controller::new(base);
         controller.observe(true, at(base, 3)).expect("drops");
 
-        // Clear from here. The first climb must not come as quickly as it
-        // would have without a failure behind it.
+        // Clear from here. The first climb must wait the full patient period
+        // rather than the eager one a fresh connection gets.
         let mut climbed = None;
         for i in 4..20 {
             if controller.observe(false, at(base, i)).is_some() {
@@ -295,7 +337,7 @@ mod tests {
             }
         }
         assert!(
-            climbed.is_none_or(|secs| secs >= 3 + 16),
+            climbed.is_none_or(|secs| secs >= 3 + 8),
             "climbed back after only {climbed:?}s"
         );
     }

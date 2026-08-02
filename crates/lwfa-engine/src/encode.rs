@@ -329,7 +329,12 @@ impl Session {
         enc.set_bit_rate(bitrate as usize);
 
         let mut opts = ff::Dictionary::new();
-        opts.set("preset", "p1"); // fastest
+        // p4 rather than p1. p1 is NVENC's fastest and visibly worst preset,
+        // and it is why the stream looked soft even with bitrate to spare:
+        // preset, not bits, was the ceiling on quality. p4 costs a few more
+        // milliseconds on the dedicated encoder thread, which the zero-copy
+        // path has left mostly idle, and spends the same bits far better.
+        opts.set("preset", "p4");
         opts.set("tune", "ull"); // ultra low latency
         opts.set("zerolatency", "1");
         opts.set("delay", "0");

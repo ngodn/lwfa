@@ -133,9 +133,12 @@ enum Outgoing {
     /// Serialized once by whoever queues it; a broadcast to five devices
     /// shares one buffer five ways instead of serializing five times.
     Control(tungstenite::Utf8Bytes),
-    /// Already-encoded binary frame, header included. `Bytes`, so the fan-out
+    /// An encoded video frame, header included. `Bytes`, so the fan-out
     /// to several watching devices clones a reference count, not megabytes.
     Frame(tungstenite::Bytes),
+    /// A chunk of audio. Separate from [`Outgoing::Frame`] because the two
+    /// are accounted separately; see [`Slot::audio_in_flight`].
+    Audio(tungstenite::Bytes),
 }
 
 /// Serialize a control message for the wire.
@@ -158,9 +161,20 @@ fn control(message: &ToShell) -> Option<tungstenite::Utf8Bytes> {
 struct Slot {
     id: SessionId,
     outgoing: Sender<Outgoing>,
-    /// Frames queued but not yet written. Per client, so a slow device applies
-    /// backpressure to itself and not to everyone else.
+    /// Video frames queued or written but not yet accepted by the socket.
+    ///
+    /// Per client, so a slow device applies backpressure to itself and not to
+    /// everyone else. A frame counts until the connection thread's flush
+    /// succeeds, not merely until it is dequeued: bytes sitting in the
+    /// WebSocket's write buffer are still latency the viewer will feel, and
+    /// they are also the only honest signal of how the network is coping,
+    /// which is exactly what the bitrate controller adapts to.
     in_flight: Arc<AtomicUsize>,
+    /// Audio chunks in the same position. Counted apart from video because
+    /// the two must not starve each other: fifty small audio chunks a second
+    /// were able to occupy every video slot, which showed up as "the audio is
+    /// perfect and the picture is bad", the exact opposite of the intent.
+    audio_in_flight: Arc<AtomicUsize>,
     connected: Arc<AtomicBool>,
     /// Windows this client wants pixels for.
     ///
@@ -182,6 +196,13 @@ struct Slot {
     evict: Arc<AtomicBool>,
 }
 
+/// How many audio chunks may be unacknowledged per client.
+///
+/// Three 20ms chunks is 60ms of sound. A client further behind than that is
+/// better served by a moment of silence that recovers than by audio drifting
+/// ever further from the picture.
+const MAX_AUDIO_IN_FLIGHT: usize = 3;
+
 impl Slot {
     fn alive(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
@@ -189,6 +210,10 @@ impl Slot {
 
     fn has_room(&self, max_in_flight: usize) -> bool {
         self.alive() && self.in_flight.load(Ordering::Relaxed) < max_in_flight
+    }
+
+    fn has_audio_room(&self) -> bool {
+        self.alive() && self.audio_in_flight.load(Ordering::Relaxed) < MAX_AUDIO_IN_FLIGHT
     }
 }
 
@@ -346,14 +371,13 @@ impl FrameSink {
         let Ok(slots) = self.clients.slots.lock() else {
             return;
         };
-        let max = self.clients.max_in_flight;
         for slot in slots.iter() {
-            if !slot.audio.load(Ordering::Relaxed) || !slot.has_room(max) {
+            if !slot.audio.load(Ordering::Relaxed) || !slot.has_audio_room() {
                 continue;
             }
-            slot.in_flight.fetch_add(1, Ordering::Relaxed);
-            if slot.outgoing.send(Outgoing::Frame(chunk.clone())).is_err() {
-                slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+            slot.audio_in_flight.fetch_add(1, Ordering::Relaxed);
+            if slot.outgoing.send(Outgoing::Audio(chunk.clone())).is_err() {
+                slot.audio_in_flight.fetch_sub(1, Ordering::Relaxed);
             }
         }
         drop(slots);
@@ -472,6 +496,32 @@ impl ShellLink {
     }
 }
 
+/// A connection the accept thread is serving.
+struct Live {
+    id: SessionId,
+    socket: tungstenite::WebSocket<TcpStream>,
+    outgoing: Receiver<Outgoing>,
+    in_flight: Arc<AtomicUsize>,
+    audio_in_flight: Arc<AtomicUsize>,
+    connected: Arc<AtomicBool>,
+    evict: Arc<AtomicBool>,
+    superseded: Arc<AtomicBool>,
+    /// The last flush hit `WouldBlock`: bytes are sitting in tungstenite's
+    /// queue waiting for the kernel buffer to drain, so the poll watches this
+    /// socket for writability as well as readability.
+    write_blocked: bool,
+    /// Frames handed to the WebSocket but not yet accepted by the kernel.
+    ///
+    /// They stay counted in `in_flight` until a flush succeeds, because until
+    /// then they are latency the viewer will feel and the truthful congestion
+    /// signal the bitrate controller runs on. Decrementing at dequeue, as
+    /// this used to, meant a slow link could buffer *seconds* of video inside
+    /// the socket with the engine convinced everything was fine.
+    unacked_video: usize,
+    /// Audio chunks in the same position.
+    unacked_audio: usize,
+}
+
 /// How many shells may be connected at once.
 ///
 /// Not a resource limit so much as a sanity limit. Every connection costs a
@@ -502,21 +552,6 @@ fn accept_loop(
         return;
     }
 
-    /// A connection this thread is serving.
-    struct Live {
-        id: SessionId,
-        socket: tungstenite::WebSocket<TcpStream>,
-        outgoing: Receiver<Outgoing>,
-        in_flight: Arc<AtomicUsize>,
-        connected: Arc<AtomicBool>,
-        evict: Arc<AtomicBool>,
-        superseded: Arc<AtomicBool>,
-        /// The last flush hit `WouldBlock`: bytes are sitting in tungstenite's
-        /// queue waiting for the kernel buffer to drain, so the poll below
-        /// watches this socket for writability as well as readability.
-        write_blocked: bool,
-    }
-
     let mut live: Vec<Live> = Vec::new();
 
     loop {
@@ -545,6 +580,7 @@ fn accept_loop(
                     let id = clients.allocate();
                     let (outgoing_tx, outgoing_rx) = channel::<Outgoing>();
                     let in_flight = Arc::new(AtomicUsize::new(0));
+                    let audio_in_flight = Arc::new(AtomicUsize::new(0));
                     let connected = Arc::new(AtomicBool::new(true));
                     let evict = Arc::new(AtomicBool::new(false));
                     let superseded = Arc::new(AtomicBool::new(false));
@@ -552,6 +588,7 @@ fn accept_loop(
                         id,
                         outgoing: outgoing_tx,
                         in_flight: Arc::clone(&in_flight),
+                        audio_in_flight: Arc::clone(&audio_in_flight),
                         connected: Arc::clone(&connected),
                         streams: Mutex::new(HashSet::new()),
                         audio: AtomicBool::new(false),
@@ -563,10 +600,13 @@ fn accept_loop(
                         socket,
                         outgoing: outgoing_rx,
                         in_flight,
+                        audio_in_flight,
                         connected,
                         evict,
                         superseded: Arc::clone(&superseded),
                         write_blocked: false,
+                        unacked_video: 0,
+                        unacked_audio: 0,
                     });
 
                     tracing::info!(
@@ -606,15 +646,7 @@ fn accept_loop(
                 finished.push(index);
                 continue;
             }
-            let pumped = pump(
-                &mut client.socket,
-                client.id,
-                &events,
-                &client.outgoing,
-                &client.in_flight,
-            );
-            client.write_blocked = pumped.write_blocked;
-            if !pumped.alive {
+            if !pump(client, &events) {
                 finished.push(index);
             }
         }
@@ -876,41 +908,22 @@ fn say_goodbye(mut socket: tungstenite::WebSocket<TcpStream>, superseded: bool) 
     }
 }
 
-/// What [`pump`] observed on one connection.
-struct Pumped {
-    /// False when the connection is finished and should be dropped.
-    alive: bool,
-    /// Bytes are queued in tungstenite waiting for the socket to accept them,
-    /// so the poll should watch for writability.
-    write_blocked: bool,
-}
-
-impl Pumped {
-    fn dead() -> Self {
-        Self {
-            alive: false,
-            write_blocked: false,
-        }
-    }
-}
-
 /// Move one round of messages in both directions.
-fn pump(
-    socket: &mut tungstenite::WebSocket<TcpStream>,
-    session: SessionId,
-    events: &LoopSender<ShellEvent>,
-    outgoing: &Receiver<Outgoing>,
-    in_flight: &AtomicUsize,
-) -> Pumped {
+///
+/// Returns false when the connection is finished and should be dropped.
+fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
     // Reads first, so a burst of shell input is not delayed behind the poll
     // interval.
     loop {
-        match socket.read() {
+        match client.socket.read() {
             Ok(tungstenite::Message::Text(text)) => {
                 match serde_json::from_str::<ToEngine>(&text) {
                     Ok(message) => {
-                        if events.send(ShellEvent::Message(session, message)).is_err() {
-                            return Pumped::dead();
+                        if events
+                            .send(ShellEvent::Message(client.id, message))
+                            .is_err()
+                        {
+                            return false;
                         }
                     }
                     Err(err) => {
@@ -921,59 +934,80 @@ fn pump(
                     }
                 }
             }
-            Ok(tungstenite::Message::Close(_)) => return Pumped::dead(),
+            Ok(tungstenite::Message::Close(_)) => return false,
             Ok(_) => {}
             Err(tungstenite::Error::Io(err)) if err.kind() == ErrorKind::WouldBlock => break,
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
-                return Pumped::dead();
+                return false;
             }
             Err(err) => {
                 tracing::warn!("shell socket read failed: {err}");
-                return Pumped::dead();
+                return false;
             }
         }
     }
 
     loop {
-        match outgoing.try_recv() {
+        match client.outgoing.try_recv() {
             Ok(outbound) => {
+                // Frames stay counted in their in-flight tallies until the
+                // flush below succeeds; handing bytes to the WebSocket is not
+                // delivery. See `Live::unacked_video`.
                 let frame = match outbound {
                     Outgoing::Control(json) => tungstenite::Message::Text(json),
                     Outgoing::Frame(bytes) => {
-                        in_flight.fetch_sub(1, Ordering::Relaxed);
+                        client.unacked_video += 1;
+                        tungstenite::Message::Binary(bytes)
+                    }
+                    Outgoing::Audio(bytes) => {
+                        client.unacked_audio += 1;
                         tungstenite::Message::Binary(bytes)
                     }
                 };
-                if let Err(err) = socket.send(frame) {
+                if let Err(err) = client.socket.send(frame) {
                     match err {
                         // Queued inside tungstenite; the flush below reports
                         // the blockage.
                         tungstenite::Error::Io(ref io) if io.kind() == ErrorKind::WouldBlock => {}
                         _ => {
                             tracing::warn!("shell socket write failed: {err}");
-                            return Pumped::dead();
+                            return false;
                         }
                     }
                 }
             }
             Err(TryRecvError::Empty) => break,
             // The compositor is gone.
-            Err(TryRecvError::Disconnected) => return Pumped::dead(),
+            Err(TryRecvError::Disconnected) => return false,
         }
     }
 
-    match socket.flush() {
-        Ok(()) => Pumped {
-            alive: true,
-            write_blocked: false,
-        },
-        Err(tungstenite::Error::Io(ref io)) if io.kind() == ErrorKind::WouldBlock => Pumped {
-            alive: true,
-            write_blocked: true,
-        },
+    match client.socket.flush() {
+        Ok(()) => {
+            // Everything the socket was holding has reached the kernel, so
+            // every frame handed over so far is off this client's account.
+            if client.unacked_video > 0 {
+                client
+                    .in_flight
+                    .fetch_sub(client.unacked_video, Ordering::Relaxed);
+                client.unacked_video = 0;
+            }
+            if client.unacked_audio > 0 {
+                client
+                    .audio_in_flight
+                    .fetch_sub(client.unacked_audio, Ordering::Relaxed);
+                client.unacked_audio = 0;
+            }
+            client.write_blocked = false;
+            true
+        }
+        Err(tungstenite::Error::Io(ref io)) if io.kind() == ErrorKind::WouldBlock => {
+            client.write_blocked = true;
+            true
+        }
         Err(err) => {
             tracing::warn!("shell socket flush failed: {err}");
-            Pumped::dead()
+            false
         }
     }
 }

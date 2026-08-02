@@ -275,7 +275,15 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
     ];
     to_engine.push(("take-control", ToEngine::TakeControl));
     to_engine.push(("end-session", ToEngine::EndSession { session: 3 }));
-    to_engine.push(("set-audio", ToEngine::SetAudio { enabled: true, local: false, opus: true }));
+    to_engine.push((
+        "set-audio",
+        ToEngine::SetAudio {
+            enabled: true,
+            local: false,
+            opus: true,
+            quality: lwfa_proto::AudioQuality::Auto,
+        },
+    ));
     to_engine.push((
         "close-and-spawn",
         ToEngine::CloseAndSpawn {

@@ -388,7 +388,19 @@ export type ToEngine =
        * Machine-wide, not per connection: there is one set of speakers.
        */
       local: boolean
+      /**
+       * How many bits the sound deserves.
+       *
+       * One capture is fanned out to everyone, so the lowest request among
+       * the listeners wins. "auto" follows the same budget the video adapts
+       * on: sound degrades last, because broken audio is more jarring than a
+       * softer picture.
+       */
+      quality: AudioQuality
     }
+
+/** How many bits the session's sound deserves. See `setAudio`. */
+export type AudioQuality = "auto" | "high" | "medium" | "low"
 
 /** Motion's defaults, matching `SpringSpec::default` on the Rust side. */
 export const DEFAULT_SPRING: SpringSpec = { stiffness: 100, damping: 10, mass: 1 }
@@ -935,12 +947,22 @@ export function decodeToEngine(text: string): ToEngine {
     }
     case "setAudio": {
       const where = `${at}.setAudio`
-      noExtraKeys(o, ["type", "enabled", "local", "opus"], where)
+      noExtraKeys(o, ["type", "enabled", "local", "opus", "quality"], where)
+      const quality = o["quality"] ?? "auto"
+      if (
+        quality !== "auto" &&
+        quality !== "high" &&
+        quality !== "medium" &&
+        quality !== "low"
+      ) {
+        throw new ProtocolError(`${where}.quality: not an audio quality: ${String(quality)}`)
+      }
       return {
         type: "setAudio",
         enabled: bool(o, "enabled", where),
         local: bool(o, "local", where),
         opus: bool(o, "opus", where),
+        quality,
       }
     }
     case "endSession": {

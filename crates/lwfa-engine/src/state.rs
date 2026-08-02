@@ -72,6 +72,9 @@ pub struct Session {
     pub audio: bool,
     /// Whether this client can decode Opus. See `AudioFormat::Opus`.
     pub opus: bool,
+    /// How many bits this client wants spent on sound. The most constrained
+    /// listener wins; see `Lwfa::sync_audio_bitrate`.
+    pub audio_quality: lwfa_proto::AudioQuality,
 }
 
 /// How long a window may be streamed without ever producing a frame.
@@ -636,6 +639,41 @@ impl Lwfa {
         }
     }
 
+    /// Point the audio encoder at the bits it currently deserves.
+    ///
+    /// The most constrained listener wins, like the video codec: one capture
+    /// is fanned out to everyone, so a request for less always beats a request
+    /// for more. `Auto` listeners delegate to the video budget, on the theory
+    /// that a link that cannot carry the picture cannot spare much for sound
+    /// either; the rungs sit well below the video floor so audio degrades
+    /// last, which is the right order, because broken audio is more jarring
+    /// than a softer picture.
+    ///
+    /// Called when a listener changes its preference and when the budget
+    /// moves. Applying is one atomic store; the encoder follows on its next
+    /// 20ms chunk with no rebuild and no glitch.
+    pub fn sync_audio_bitrate(&self) {
+        let Some(capture) = self.audio.as_ref() else {
+            return;
+        };
+        let explicit = self
+            .sessions
+            .values()
+            .filter(|s| s.audio)
+            .filter_map(|s| s.audio_quality.bits())
+            .min();
+        let bits = explicit.unwrap_or_else(|| {
+            // Every listener is on Auto: follow the video budget.
+            match self.bitrate.bitrate() {
+                b if b >= 8_000_000 => 128_000,
+                b if b >= 2_000_000 => 96_000,
+                b if b >= 1_000_000 => 64_000,
+                _ => 48_000,
+            }
+        });
+        capture.set_bitrate(bits);
+    }
+
     /// Whether every client that has answered can decode H.264.
     ///
     /// All, not any: one encode is shared by everyone watching a window, so a
@@ -1098,13 +1136,17 @@ impl Lwfa {
             return;
         };
 
-        // Backpressure is the congestion signal.
+        // Backpressure is the congestion signal, but only the *network's*.
         //
-        // A full queue means the far end is not keeping up. This used to be
-        // read only as "skip this frame", which keeps the picture moving but
-        // never asks why. Feeding it to the controller turns the same
-        // observation into a bitrate that fits the connection. See `bitrate`.
-        let congested = !shell.can_accept_frame() || !worker.has_capacity();
+        // A socket that is not accepting frames means the far end or the path
+        // to it cannot keep up, and that is what the bitrate controller
+        // adapts to. The encoder's own queue filling is a different fact: it
+        // happens during session rebuilds, which the controller's own changes
+        // cause, and reading it as congestion made every climb refute itself.
+        // A busy encoder still skips capture below; it just is not evidence
+        // about the link.
+        let congested = !shell.can_accept_frame();
+        let skip = congested || !worker.has_capacity();
         let now = std::time::Instant::now();
         let budget_changed = self.bitrate.observe(congested, now).is_some();
 
@@ -1123,6 +1165,17 @@ impl Lwfa {
             ids
         };
         let attended = self.attention.observe(self.focused, now);
+        if budget_changed {
+            // The one place the budget moves, so the one log line that tells
+            // the whole adaptation story for a session.
+            tracing::info!(
+                "stream budget is now {} kbit/s ({})",
+                self.bitrate.bitrate() / 1000,
+                if congested { "link congested" } else { "link clear" },
+            );
+            // Auto-quality audio follows the same budget.
+            self.sync_audio_bitrate();
+        }
         if budget_changed || streamed != self.streamed_last || attended != self.attended_last {
             let budget = self.bitrate.bitrate();
             let rates = crate::bitrate::allocate(budget, &streamed, attended);
@@ -1131,7 +1184,7 @@ impl Lwfa {
             self.attended_last = attended;
         }
 
-        if congested {
+        if skip {
             return;
         }
 
