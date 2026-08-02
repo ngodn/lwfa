@@ -178,10 +178,27 @@
     overscroll-behavior: none;
   }
 
+  /* The canvas behind everything, painted the shell's own backdrop colour.
+   *
+   * iOS 26 Safari (fixed in 26.1) does not paint an opaque viewport-sized
+   * `position: fixed` element all the way to the physical bottom of the
+   * screen: the body below stops short and a bare strip shows through in the
+   * home-indicator zone. The root element's background is the one thing
+   * guaranteed to cover the whole screen, so whatever does show through is
+   * ink rather than a wrong-coloured band. */
+  html {
+    background-color: var(--backdrop);
+  }
+
   body {
-    @apply bg-background text-foreground font-sans antialiased;
+    @apply text-foreground font-sans antialiased;
     position: fixed;
     inset: 0;
+    /* Not the opaque `bg-background` it wants to be: the same iOS 26 bug
+     * skips fully opaque fixed layers, and any hint of transparency routes
+     * the layer through the compositor, which paints the full screen. At
+     * 99% the difference over ink is unmeasurable. */
+    background-color: color-mix(in oklab, var(--background) 99%, transparent);
     -webkit-tap-highlight-color: transparent;
   }
 
