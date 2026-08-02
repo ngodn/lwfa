@@ -103,7 +103,7 @@ impl Portal {
                 dir.join("lwfa.portal"),
                 "[portal]\n\
                  DBusName=org.freedesktop.impl.portal.desktop.lwfa\n\
-                 Interfaces=org.freedesktop.impl.portal.FileChooser\n\
+                 Interfaces=org.freedesktop.impl.portal.FileChooser;org.freedesktop.impl.portal.Settings\n\
                  UseIn=lwfa\n",
             )
         }) {
@@ -175,6 +175,7 @@ fn backend(
         .and_then(|builder| {
             builder.serve_at("/org/freedesktop/portal/desktop", FileChooser { events })
         })
+        .and_then(|builder| builder.serve_at("/org/freedesktop/portal/desktop", Settings))
         .and_then(|builder| builder.build())
         .map_err(|err| format!("could not serve the portal backend: {err}"))
 }
@@ -234,6 +235,54 @@ impl FileChooser {
                 }
             }
             _ => (1, HashMap::new()),
+        }
+    }
+}
+
+/// The appearance answers applications ask the portal for.
+///
+/// Exists because the private bus otherwise has no Settings backend at all,
+/// and GTK and Chromium warn on every launch and fall back to light mode.
+/// lwfa's shell is ink; the applications inside it should agree.
+struct Settings;
+
+/// `color-scheme`: 0 no preference, 1 prefer dark, 2 prefer light.
+const PREFER_DARK: u32 = 1;
+
+fn appearance() -> HashMap<String, zvariant::OwnedValue> {
+    let mut ns = HashMap::new();
+    if let Ok(scheme) = zvariant::OwnedValue::try_from(zvariant::Value::from(PREFER_DARK)) {
+        ns.insert("color-scheme".to_string(), scheme);
+    }
+    ns
+}
+
+#[zbus::interface(name = "org.freedesktop.impl.portal.Settings")]
+impl Settings {
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        1
+    }
+
+    /// The whole tree; the namespace filter is allowed to over-answer.
+    fn read_all(
+        &self,
+        _namespaces: Vec<String>,
+    ) -> HashMap<String, HashMap<String, zvariant::OwnedValue>> {
+        let mut all = HashMap::new();
+        all.insert("org.freedesktop.appearance".to_string(), appearance());
+        all
+    }
+
+    /// One key, or the D-Bus error the spec asks for when it is not ours.
+    fn read(&self, namespace: String, key: String) -> zbus::fdo::Result<zvariant::OwnedValue> {
+        if namespace == "org.freedesktop.appearance" && key == "color-scheme" {
+            zvariant::OwnedValue::try_from(zvariant::Value::from(PREFER_DARK))
+                .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
+        } else {
+            Err(zbus::fdo::Error::Failed(format!(
+                "no setting {namespace}.{key}"
+            )))
         }
     }
 }
