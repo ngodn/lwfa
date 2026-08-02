@@ -119,15 +119,11 @@ export const NavRail = memo(function NavRail({ active, fired, onSelect }: NavRai
         "z-30 flex shrink-0 items-center bg-sidebar/80 backdrop-blur-xl",
         // The rail is a slab against the viewport edge, so only the inner side
         // gets a border. Anything else draws a line against the screen bezel.
-        // No safe-area padding here: the shell root pads the whole chrome
-        // inside the insets (see ShellChrome). The `p*-safe` classes that
-        // used to sit here were dead anyway, silently overridden by the
-        // `padding` shorthand in the style attribute below.
         vertical
-          ? "h-full flex-col border-r border-sidebar-border"
-          : "w-full flex-row border-b border-sidebar-border",
-        edge === "right" && "border-r-0 border-l",
-        edge === "bottom" && "border-b-0 border-t",
+          ? "h-full flex-col border-r border-sidebar-border pl-safe"
+          : "w-full flex-row border-b border-sidebar-border pt-safe",
+        edge === "right" && "border-r-0 border-l pr-safe pl-0",
+        edge === "bottom" && "border-b-0 border-t pb-safe pt-0",
       )}
       style={{ padding: metrics.pad, gap: metrics.gap }}
     >

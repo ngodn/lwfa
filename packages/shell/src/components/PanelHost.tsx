@@ -83,27 +83,9 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
   // without wrapping to one per line, narrow enough to leave the desktop behind
   // it usable, and capped by the viewport so a phone gets a full-width sheet
   // rather than one hanging off the edge.
-  //
-  // The sheet is fixed-positioned, so it does not inherit the safe-area
-  // padding the shell root applies (see ShellChrome) and has to place itself:
-  // the rail now starts after its edge's inset, so the offset is rail plus
-  // inset, and a vertical sheet starts below the status bar rather than under
-  // it. `height: auto` matters there: the variant's `h-full` is 100% of the
-  // viewport, which with a shifted top would overflow past the bottom.
   const geometry: React.CSSProperties = vertical
-    ? {
-        [side]: `calc(var(--rail-size) + env(safe-area-inset-${side}, 0px))`,
-        width: `min(30rem, calc(100vw - var(--rail-size) - env(safe-area-inset-${side}, 0px)))`,
-        maxWidth: "none",
-        top: "env(safe-area-inset-top, 0px)",
-        height: "auto",
-      }
-    : {
-        [side]: `calc(var(--rail-size) + env(safe-area-inset-${side}, 0px))`,
-        height:
-          "min(32rem, calc(100dvh - var(--rail-size) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)))",
-        maxHeight: "none",
-      }
+    ? { [side]: "var(--rail-size)", width: "min(30rem, calc(100vw - var(--rail-size)))", maxWidth: "none" }
+    : { [side]: "var(--rail-size)", height: "min(32rem, calc(100dvh - var(--rail-size)))", maxHeight: "none" }
 
   return (
     // `modal={false}`: this is a side panel over a live desktop, not a dialog.
@@ -177,9 +159,7 @@ const PanelBody = memo(function PanelBody({ id }: { id: NavItemId }) {
   if (!Panel) return null
   return (
     <ScrollArea className="min-h-0 flex-1">
-      {/* The sheet itself reaches the physical bottom edge, so the last row
-          of content needs to clear the home indicator. */}
-      <div className="px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]" data-selectable>
+      <div className="px-4 pb-6" data-selectable>
         <Suspense fallback={<PanelPending />}>
           <Panel />
         </Suspense>
