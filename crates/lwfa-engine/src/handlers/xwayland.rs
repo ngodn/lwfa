@@ -208,8 +208,11 @@ impl XwmHandler for Lwfa {
         let _ = surface.set_maximized(false);
     }
 
+    /// Forwarded to the shell, which owns the arrangement, exactly as the
+    /// Wayland path does. This used to refuse outright, so the fullscreen
+    /// button in an X11 video player did nothing at all.
     fn fullscreen_request(&mut self, _xwm: XwmId, surface: X11Surface) {
-        let _ = surface.set_fullscreen(false);
+        self.request_fullscreen_x11(&surface, true);
     }
 
     fn unmaximize_request(&mut self, _xwm: XwmId, surface: X11Surface) {
@@ -217,7 +220,7 @@ impl XwmHandler for Lwfa {
     }
 
     fn unfullscreen_request(&mut self, _xwm: XwmId, surface: X11Surface) {
-        let _ = surface.set_fullscreen(false);
+        self.request_fullscreen_x11(&surface, false);
     }
 
     /// Xwayland went away. Everything it owned goes with it, and the compositor

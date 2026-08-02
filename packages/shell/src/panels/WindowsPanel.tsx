@@ -1,19 +1,27 @@
 /**
- * Workspaces and window arrangement.
+ * Workspaces, windows, and how they are laid out.
  *
- * # Two ways to do the same thing
+ * # One list, not two views
  *
- * The list is precise and boring: every window, with buttons for the operations
- * the strip supports. It works with a mouse, with a keyboard, and with a screen
- * reader, and it is unambiguous about what each button does.
+ * This panel used to offer "arrange" and "list" as a pair of toggled views,
+ * because dragging a window directly is hard when half the strip is off the
+ * edge of the screen. That problem is now solved where it actually occurs:
+ * arrange mode zooms the desktop out and lets you drag the windows themselves.
  *
- * The **arrange** view is the one for a tablet. Under scrollable tiling the
- * windows on screen run off the viewport edges, so dragging one directly means
- * grabbing a target that is half off-screen and dropping it somewhere
- * ambiguous. Arrange lays the same columns out as separated cards that never
- * overlap, so a finger has a whole card to grab and an obvious gap to drop
- * into. It is not a second layout model, just a different way of touching the
- * one that already exists.
+ * So the panel keeps one list, and the list shows *structure* rather than
+ * hiding it: which windows share a column, which is focused, how wide each
+ * column is. It is the precise, boring, keyboard-and-screen-reader path to the
+ * same operations. Both exist on purpose, and neither is a worse copy of the
+ * other.
+ *
+ * # Why a row expands instead of opening a menu
+ *
+ * The panel is a narrow sheet, usually on a tablet. A popover anchored to a
+ * button inside it is cramped, can overflow the sheet's edge, and needs a
+ * portal with its own stacking to escape the sheet's clipping. Expanding
+ * inside the row gets the full width, gives every action a label and a target
+ * a finger can hit, scrolls with the list, and cannot be positioned wrongly.
+ * One row is open at a time, so the list never becomes a wall of controls.
  */
 
 import { memo, useCallback, useMemo, useState } from "react"
@@ -21,155 +29,502 @@ import {
   ArrowLeftToLine,
   ArrowRightToLine,
   ChevronDown,
-  ChevronUp,
-  Columns3,
+  CornerDownRight,
   LayoutGrid,
-  List,
   Maximize2,
+  Minimize2,
+  Pause,
+  Play,
   Plus,
   X,
 } from "lucide-react"
-import type { WindowId, WindowInfo } from "@lwfa/proto"
+import type { WindowId } from "@lwfa/proto"
 import { useSessionActions, useSessionState } from "@/session"
-import { currentWorkspace, focusedWindow } from "@/strip"
+import { currentWorkspace, focusedWindow, isFullscreen } from "@/strip"
 import { patchPrefs, usePrefs } from "@/lib/prefs"
 import { WIDTH_PRESETS } from "@/strip"
+import { setArrange } from "@/lib/arrange"
+import { togglePaused, usePaused } from "@/lib/paused"
+import { pendingKeys, usePendingPrefix } from "@/lib/pending"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { Badge } from "@/components/ui/badge"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
 /** Column width labels, derived so a new preset needs no edit here. */
-const widthLabel = (preset: number) =>
-  `${Math.round((WIDTH_PRESETS[preset] ?? 0) * 100)}%`
+const widthLabel = (preset: number) => `${Math.round((WIDTH_PRESETS[preset] ?? 0) * 100)}%`
+
+/**
+ * A window, flattened out of the strip with the shape it came from attached.
+ *
+ * Built once for the whole list rather than looked up per row, so the list is
+ * one pass over the columns however many windows there are.
+ */
+interface Row {
+  id: WindowId
+  column: number
+  row: number
+  /** How many windows share the column. */
+  height: number
+  width: number
+  /** First of a column, so the list can show where each column begins. */
+  heads: boolean
+}
 
 function WindowsPanel() {
-  const { strip } = useSessionState()
-  const actions = useSessionActions()
-  const [view, setView] = useState<"list" | "arrange">("arrange")
+  const { strip, primary } = useSessionState()
 
   const workspace = currentWorkspace(strip)
   const focused = focusedWindow(strip)
 
+  const rows = useMemo<Row[]>(
+    () =>
+      workspace.columns.flatMap((column, index) =>
+        column.windows.map((id, row) => ({
+          id,
+          column: index,
+          row,
+          height: column.windows.length,
+          width: column.width,
+          heads: row === 0,
+        })),
+      ),
+    [workspace.columns],
+  )
+
+  // One row open at a time. Held here rather than in each row so opening one
+  // closes the last without them having to know about each other.
+  const [open, setOpen] = useState<WindowId | null>(null)
+  const toggle = useCallback(
+    (id: WindowId) => setOpen((current) => (current === id ? null : id)),
+    [],
+  )
+
   return (
-    <div className="space-y-6 pt-2">
-      <PanelSection title="Workspace">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {strip.workspaces.map((ws, index) => (
-            <Button
-              key={index}
-              size="sm"
-              variant={index === strip.focus ? "default" : "outline"}
-              onClick={() => actions.focusWorkspace(index)}
-              className="h-9 min-w-9 px-2"
-            >
-              {index + 1}
-              {ws.columns.length > 0 ? (
-                <span className="ml-1 text-[10px] opacity-70">{ws.columns.length}</span>
-              ) : null}
-            </Button>
-          ))}
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button
-            size="sm"
-            variant="outline"
-            className="flex-1 gap-1.5"
-            disabled={focused === null || strip.focus === 0}
-            onClick={() => actions.moveToWorkspace(-1)}
-          >
-            <ChevronUp className="size-3.5" aria-hidden />
-            Move up
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="flex-1 gap-1.5"
-            disabled={focused === null || strip.focus >= strip.workspaces.length - 1}
-            onClick={() => actions.moveToWorkspace(1)}
-          >
-            <ChevronDown className="size-3.5" aria-hidden />
-            Move down
-          </Button>
-        </div>
-      </PanelSection>
+    /*
+     * Flex with `gap`, not `space-y`.
+     *
+     * The fieldset below is `display: contents`, which exists so that
+     * disabling it does not add a box to the layout. Tailwind's `space-y`
+     * works by putting a margin on children, and a `contents` element
+     * generates no box at all, so its margin is discarded: the sections inside
+     * it ended up touching each other and touching the section after it.
+     *
+     * `gap` has no such problem. `display: contents` hoists the fieldset's
+     * children into this flex container, so every block below is spaced by the
+     * same rule whether or not it sits inside the fieldset.
+     */
+    <div className="flex flex-col gap-6 pt-2">
+      {!primary ? <Following /> : null}
 
-      <PanelSection title="Focused window">
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" className="gap-1.5" onClick={actions.cycleWidth}>
-            <Columns3 className="size-3.5" aria-hidden />
-            Width
-          </Button>
-          <Button size="sm" variant="outline" className="gap-1.5" onClick={actions.consume}>
-            <ArrowLeftToLine className="size-3.5" aria-hidden />
-            Stack left
-          </Button>
-          <Button size="sm" variant="outline" className="gap-1.5" onClick={actions.expel}>
-            <ArrowRightToLine className="size-3.5" aria-hidden />
-            Own column
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="gap-1.5"
-            disabled={focused === null}
-            onClick={() => focused !== null && actions.closeWindow(focused)}
-          >
-            <X className="size-3.5" aria-hidden />
-            Close
-          </Button>
-        </div>
-      </PanelSection>
-
-      <PanelSection
-        title="Strip"
-        description="How the strip behaves on this device. Stored per device, because a phone and a monitor do not want the same thing."
-      >
-        <StripSettings />
-      </PanelSection>
-
-      <PanelSection title="Layout">
-        <ToggleGroup
-          type="single"
-          value={view}
-          onValueChange={(v) => v && setView(v as "list" | "arrange")}
-          variant="outline"
-          className="w-full"
+      <fieldset disabled={!primary} className="contents">
+        {/* The thing most people opened this panel to do, so it comes first
+          * and takes the full width. */}
+        <Button
+          size="lg"
+          className="h-12 w-full justify-start gap-2.5 text-[0.95rem]"
+          onClick={() => setArrange(true)}
         >
-          <ToggleGroupItem value="arrange" className="flex-1 gap-1.5">
-            <LayoutGrid className="size-3.5" aria-hidden />
-            Arrange
-          </ToggleGroupItem>
-          <ToggleGroupItem value="list" className="flex-1 gap-1.5">
-            <List className="size-3.5" aria-hidden />
-            List
-          </ToggleGroupItem>
-        </ToggleGroup>
+          <LayoutGrid className="size-5" aria-hidden />
+          Arrange windows
+        </Button>
 
-        {workspace.columns.length === 0 ? (
-          <div className="rounded-lg border border-dashed p-8 text-center">
-            <p className="text-sm text-muted-foreground">This workspace is empty.</p>
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-3 gap-1.5"
-              onClick={() => actions.spawn("alacritty")}
-            >
-              <Plus className="size-3.5" aria-hidden />
-              Open a terminal
-            </Button>
-          </div>
-        ) : view === "arrange" ? (
-          <ArrangeView focused={focused} />
-        ) : (
-          <ListView focused={focused} />
-        )}
+        <PanelSection title="Workspaces">
+          <Workspaces />
+        </PanelSection>
+
+        <PanelSection title="Windows">
+          {rows.length === 0 ? <NoWindows /> : null}
+          {rows.length > 0 ? (
+            <ul className="overflow-hidden rounded-lg border">
+              {rows.map((row) => (
+                <WindowItem
+                  key={row.id}
+                  row={row}
+                  focused={row.id === focused}
+                  fullscreen={isFullscreen(strip) && row.id === focused}
+                  open={open === row.id}
+                  onToggle={toggle}
+                />
+              ))}
+            </ul>
+          ) : null}
+          <Spawning />
+        </PanelSection>
+      </fieldset>
+
+      {/* Preferences, not commands. Stored on this device and applied the
+        * moment it starts driving, so there is no reason to lock somebody out
+        * of setting them up while another device holds control. */}
+      <PanelSection title="Layout" description="Saved on this device.">
+        <StripSettings />
       </PanelSection>
     </div>
   )
 }
+
+/* --------------------------------------------------------------- workspaces */
+
+const Workspaces = memo(function Workspaces() {
+  const { strip } = useSessionState()
+  const actions = useSessionActions()
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {strip.workspaces.map((ws, index) => {
+          const count = ws.columns.reduce((n, column) => n + column.windows.length, 0)
+          const here = index === strip.focus
+          return (
+            <button
+              key={index}
+              type="button"
+              aria-current={here}
+              aria-label={
+                count === 0
+                  ? `Workspace ${index + 1}, empty`
+                  : `Workspace ${index + 1}, ${count} window${count === 1 ? "" : "s"}`
+              }
+              onClick={() => actions.focusWorkspace(index)}
+              className={cn(
+                "flex h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-lg border px-3",
+                "text-sm transition-colors",
+                here
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "bg-card hover:bg-accent",
+              )}
+            >
+              <span className="leading-none font-medium">{index + 1}</span>
+              {/* Dots rather than a number: the useful question is "is there
+                * anything over there", and a shape answers it without reading. */}
+              <span className="flex h-1.5 items-center gap-0.5">
+                {Array.from({ length: Math.min(count, 4) }, (_, dot) => (
+                  <span
+                    key={dot}
+                    className={cn(
+                      "size-1 rounded-full",
+                      here ? "bg-primary-foreground/70" : "bg-muted-foreground/60",
+                    )}
+                  />
+                ))}
+                {count > 4 ? (
+                  <span
+                    className={cn(
+                      "text-[9px] leading-none",
+                      here ? "text-primary-foreground/70" : "text-muted-foreground",
+                    )}
+                  >
+                    +
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+})
+
+/* ------------------------------------------------------------------- window */
+
+const WindowItem = memo(function WindowItem({
+  row,
+  focused,
+  fullscreen,
+  open,
+  onToggle,
+}: {
+  row: Row
+  focused: boolean
+  fullscreen: boolean
+  open: boolean
+  onToggle: (id: WindowId) => void
+}) {
+  const { windows } = useSessionState()
+  const actions = useSessionActions()
+  const info = windows.get(row.id)
+  const paused = usePaused().has(row.id)
+
+  // A window the engine has announced but not yet described. Shown as a shape
+  // of the right size rather than as the word "Window 7", which looks like a
+  // name and is not one.
+  const unnamed = !info?.title && !info?.appId
+  const title = info?.title || info?.appId || `Window ${row.id}`
+
+  const act = useCallback(
+    (run: () => void) => {
+      actions.focusWindow(row.id)
+      run()
+    },
+    [actions, row.id],
+  )
+
+  return (
+    <li className={cn("border-b last:border-b-0", focused && "bg-accent/60")}>
+      <div className="flex items-stretch">
+        <button
+          type="button"
+          className="flex min-h-11 min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 text-left"
+          onClick={() => actions.focusWindow(row.id)}
+        >
+          {/* Stacked windows are indented under the first of their column, so
+            * the shape of the strip is readable without a second view. */}
+          {row.heads ? (
+            <span
+              aria-hidden
+              className={cn("w-1 self-stretch rounded-full", focused ? "bg-primary" : "bg-border")}
+            />
+          ) : (
+            <CornerDownRight
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+          )}
+
+          {unnamed ? (
+            <span className="flex-1 py-0.5" aria-label="Waiting for this window to say what it is">
+              <span className="block h-3 w-2/3 animate-pulse rounded bg-muted" />
+            </span>
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-sm">{title}</span>
+          )}
+
+          {paused ? (
+            <span
+              className="shrink-0 rounded-md bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning"
+              title="Not being streamed to this device"
+            >
+              Paused
+            </span>
+          ) : null}
+          {row.heads ? (
+            <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground tabular-nums">
+              {widthLabel(row.width)}
+            </span>
+          ) : null}
+        </button>
+
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={`Actions for ${title}`}
+          onClick={() => onToggle(row.id)}
+          className="grid min-h-11 w-11 shrink-0 place-items-center text-muted-foreground hover:text-foreground"
+        >
+          <ChevronDown
+            className={cn("size-4 transition-transform", open && "rotate-180")}
+            aria-hidden
+          />
+        </button>
+      </div>
+
+      {/* Mounted only while open, so a list of twenty windows is not also
+        * twenty hidden action panels. */}
+      {open ? (
+        <div className="space-y-2 border-t bg-muted/30 px-2.5 py-2.5">
+          <div className="grid grid-cols-2 gap-1.5">
+            <Action
+              icon={fullscreen ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
+              onClick={() => act(actions.toggleFullscreen)}
+            >
+              {fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            </Action>
+            <Action
+              icon={<ArrowLeftToLine aria-hidden />}
+              disabled={row.column === 0}
+              onClick={() => act(actions.consume)}
+            >
+              Stack left
+            </Action>
+            <Action
+              icon={<ArrowRightToLine aria-hidden />}
+              disabled={row.height < 2}
+              onClick={() => act(actions.expel)}
+            >
+              Own column
+            </Action>
+            <Action
+              icon={paused ? <Play aria-hidden /> : <Pause aria-hidden />}
+              onClick={() => togglePaused(row.id)}
+            >
+              {paused ? "Resume" : "Pause"}
+            </Action>
+            <Action
+              icon={<X aria-hidden />}
+              danger
+              onClick={() => actions.closeWindow(row.id)}
+            >
+              Close
+            </Action>
+          </div>
+
+          <div className="space-y-1.5">
+            <Field label="Column width" />
+            <ToggleGroup
+              type="single"
+              value={String(row.width)}
+              onValueChange={(value) => {
+                if (value) actions.setColumnWidth(row.id, Number(value))
+              }}
+              variant="outline"
+              className="w-full"
+            >
+              {WIDTH_PRESETS.map((fraction, index) => (
+                <ToggleGroupItem key={index} value={String(index)} className="h-11 flex-1">
+                  {Math.round(fraction * 100)}%
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </div>
+
+          <SendTo id={row.id} />
+        </div>
+      ) : null}
+    </li>
+  )
+})
+
+/** Move a window to another workspace, by name rather than by direction. */
+const SendTo = memo(function SendTo({ id }: { id: WindowId }) {
+  const { strip } = useSessionState()
+  const actions = useSessionActions()
+
+  return (
+    <div className="space-y-1.5">
+      <Field label="Send to workspace" />
+      <div className="flex flex-wrap gap-1.5">
+        {strip.workspaces.map((_, index) => (
+          <Button
+            key={index}
+            size="sm"
+            variant="outline"
+            className="h-11 min-w-11"
+            disabled={index === strip.focus}
+            onClick={() => actions.sendToWorkspace(id, index)}
+          >
+            {index + 1}
+          </Button>
+        ))}
+      </div>
+    </div>
+  )
+})
+
+function Action({
+  icon,
+  danger,
+  disabled,
+  onClick,
+  children,
+}: {
+  icon: React.ReactNode
+  danger?: boolean
+  disabled?: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "h-11 justify-start gap-2 [&>svg]:size-4",
+        danger && "text-destructive hover:bg-destructive hover:text-destructive-foreground",
+      )}
+    >
+      {icon}
+      {children}
+    </Button>
+  )
+}
+
+/* -------------------------------------------------------------------- empty */
+
+const NoWindows = memo(function NoWindows() {
+  const actions = useSessionActions()
+  return (
+    <div className="rounded-lg border border-dashed p-8 text-center">
+      <p className="text-sm text-muted-foreground">Nothing open on this workspace.</p>
+      <Button
+        variant="outline"
+        className="mt-3 h-11 gap-1.5"
+        onClick={() => actions.spawn("alacritty")}
+      >
+        <Plus className="size-3.5" aria-hidden />
+        Open a terminal
+      </Button>
+    </div>
+  )
+})
+
+/**
+ * Applications asked for but not yet on screen.
+ *
+ * Without this, launching something means pressing a button and watching an
+ * unchanged list until the window appears, which reads as the launch having
+ * failed and gets it pressed again.
+ */
+const Spawning = memo(function Spawning() {
+  const any = usePendingPrefix("launch:")
+  if (!any) return null
+
+  const waiting = pendingKeys("launch:").map((key) => {
+    const command = key.slice("launch:".length)
+    return (command.split(/\s+/)[0] ?? "").split("/").pop() || command
+  })
+
+  return (
+    <ul className="space-y-1">
+      {waiting.map((name) => (
+        <li
+          key={name}
+          className="flex items-center gap-2 rounded-lg border border-dashed px-2.5 py-2.5"
+        >
+          <span
+            className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground"
+            aria-hidden
+          />
+          <span className="truncate text-sm text-muted-foreground">Opening {name}…</span>
+        </li>
+      ))}
+    </ul>
+  )
+})
+
+/* ----------------------------------------------------------------- following */
+
+/**
+ * Shown when another device is deciding the arrangement.
+ *
+ * Names the device rather than saying "another session", because on a desk with
+ * a laptop and a tablet on it, "the iPad is driving" is an answer and "another
+ * session is driving" is a riddle.
+ */
+const Following = memo(function Following() {
+  const { peers } = useSessionState()
+  const actions = useSessionActions()
+  const driver = peers.find((peer) => peer.primary)
+
+  return (
+    <div className="space-y-3 rounded-lg border border-warning/40 bg-warning/10 p-3">
+      <p className="text-sm">
+        <span className="font-medium">
+          {driver ? driver.device : "Another device"} is arranging the windows.
+        </span>{" "}
+        <span className="text-muted-foreground">You can still type, click and scroll.</span>
+      </p>
+      <Button className="h-11 w-full" onClick={actions.takeControl}>
+        Arrange from this device
+      </Button>
+    </div>
+  )
+})
+
+/* --------------------------------------------------------------- preferences */
 
 const ORIENTATIONS = [
   { value: "auto", label: "Auto" },
@@ -177,15 +532,16 @@ const ORIENTATIONS = [
   { value: "vertical", label: "Columns" },
 ] as const
 
+/**
+ * Its own component so that changing a preference re-renders these three
+ * controls and not the window list above them.
+ */
 const StripSettings = memo(function StripSettings() {
   const { layout: prefs } = usePrefs()
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
-        <Field
-          label="Direction"
-          hint="Auto follows the viewport's long axis: side by side in landscape, stacked in portrait."
-        />
+        <Field label="Direction" hint="Auto follows the shape of the screen." />
         <ToggleGroup
           type="single"
           value={prefs.orientation}
@@ -196,7 +552,7 @@ const StripSettings = memo(function StripSettings() {
           className="w-full"
         >
           {ORIENTATIONS.map(({ value, label }) => (
-            <ToggleGroupItem key={value} value={value} className="flex-1">
+            <ToggleGroupItem key={value} value={value} className="h-11 flex-1">
               {label}
             </ToggleGroupItem>
           ))}
@@ -204,7 +560,7 @@ const StripSettings = memo(function StripSettings() {
       </div>
 
       <div className="space-y-1.5">
-        <Field label="New window size" hint="How much of the viewport an application gets when it opens." />
+        <Field label="New window size" />
         <ToggleGroup
           type="single"
           value={String(prefs.defaultWidth)}
@@ -213,7 +569,7 @@ const StripSettings = memo(function StripSettings() {
           className="w-full"
         >
           {WIDTH_PRESETS.map((fraction, index) => (
-            <ToggleGroupItem key={index} value={String(index)} className="flex-1">
+            <ToggleGroupItem key={index} value={String(index)} className="h-11 flex-1">
               {Math.round(fraction * 100)}%
             </ToggleGroupItem>
           ))}
@@ -221,10 +577,7 @@ const StripSettings = memo(function StripSettings() {
       </div>
 
       <FieldRow>
-        <Field
-          label="Keep focus centred"
-          hint="Focus always lands in the same place, so moving along the strip is predictable."
-        />
+        <Field label="Keep focus centred" />
         <Switch
           checked={prefs.centreFocused}
           onCheckedChange={(centreFocused) => patchPrefs("layout", { centreFocused })}
@@ -233,172 +586,5 @@ const StripSettings = memo(function StripSettings() {
     </div>
   )
 })
-
-/**
- * Columns as separated cards, reorderable by dragging.
- *
- * Pointer events, not HTML drag and drop: the latter does not fire on touch at
- * all, which would make this useless on exactly the devices it exists for.
- * `setPointerCapture` means a drag that strays outside the card still delivers
- * its move and its release.
- */
-const ArrangeView = memo(function ArrangeView({ focused }: { focused: WindowId | null }) {
-  const { strip, windows } = useSessionState()
-  const actions = useSessionActions()
-  const workspace = currentWorkspace(strip)
-
-  const [dragging, setDragging] = useState<number | null>(null)
-  const [over, setOver] = useState<number | null>(null)
-
-  // Where a drop would land, resolved from the pointer's position over the
-  // list. Cheap, and it needs no measurement cache to invalidate.
-  const onMove = useCallback((event: React.PointerEvent<HTMLElement>) => {
-    const list = event.currentTarget.closest("[data-arrange]")
-    if (!list) return
-    const cards = [...list.querySelectorAll<HTMLElement>("[data-column]")]
-    const index = cards.findIndex((card) => {
-      const box = card.getBoundingClientRect()
-      return event.clientY < box.top + box.height / 2
-    })
-    setOver(index === -1 ? cards.length : index)
-  }, [])
-
-  const commit = useCallback(() => {
-    // Expressed with the operations the strip already has rather than a new
-    // "move column to index". Adding one would put layout policy in the shell
-    // *and* in `strip.ts`, which is the duplication this project keeps avoiding.
-    if (dragging !== null && over !== null && over !== dragging) {
-      const first = workspace.columns[dragging]?.windows[0]
-      if (first !== undefined) {
-        actions.focusWindow(first)
-        const steps = over > dragging ? over - dragging - 1 : over - dragging
-        for (let i = 0; i < Math.abs(steps); i++) {
-          if (steps > 0) actions.expel()
-          else actions.consume()
-        }
-      }
-    }
-    setDragging(null)
-    setOver(null)
-  }, [dragging, over, workspace.columns, actions])
-
-  return (
-    <ol data-arrange className="space-y-2">
-      {workspace.columns.map((column, index) => (
-        <li
-          key={index}
-          data-column
-          className={cn(
-            "rounded-lg border bg-card p-2 transition-opacity",
-            index === workspace.focus && "ring-1 ring-primary",
-            dragging === index && "opacity-50",
-            over === index && dragging !== null && dragging !== index && "border-t-2 border-t-primary",
-          )}
-          // Without this the browser scrolls the panel instead of dragging.
-          style={{ touchAction: "none" }}
-          onPointerDown={(event) => {
-            event.currentTarget.setPointerCapture(event.pointerId)
-            setDragging(index)
-            setOver(index)
-          }}
-          onPointerMove={(event) => {
-            if (dragging !== null) onMove(event)
-          }}
-          onPointerUp={commit}
-          onPointerCancel={commit}
-        >
-          <div className="mb-1.5 flex items-center gap-2 px-1">
-            <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-              {widthLabel(column.width)}
-            </Badge>
-            <span className="text-xs text-muted-foreground">
-              Column {index + 1} · {column.windows.length} window
-              {column.windows.length === 1 ? "" : "s"}
-            </span>
-          </div>
-          <div className="space-y-1">
-            {column.windows.map((id, row) => (
-              <WindowRow
-                key={id}
-                id={id}
-                title={titleOf(windows.get(id), id)}
-                focused={id === focused}
-                stacked={row === column.focus && column.windows.length > 1}
-              />
-            ))}
-          </div>
-        </li>
-      ))}
-    </ol>
-  )
-})
-
-const ListView = memo(function ListView({ focused }: { focused: WindowId | null }) {
-  const { strip, windows } = useSessionState()
-  const workspace = currentWorkspace(strip)
-  const rows = useMemo(
-    () => workspace.columns.flatMap((column) => column.windows),
-    [workspace.columns],
-  )
-  return (
-    <ul className="divide-y rounded-lg border">
-      {rows.map((id) => (
-        <li key={id} className="p-1">
-          <WindowRow id={id} title={titleOf(windows.get(id), id)} focused={id === focused} />
-        </li>
-      ))}
-    </ul>
-  )
-})
-
-const WindowRow = memo(function WindowRow({
-  id,
-  title,
-  focused,
-  stacked,
-}: {
-  id: WindowId
-  title: string
-  focused: boolean
-  stacked?: boolean
-}) {
-  const actions = useSessionActions()
-  return (
-    <div className={cn("flex items-center gap-1 rounded-md px-1", focused && "bg-accent")}>
-      <button
-        className="min-w-0 flex-1 truncate py-2 text-left text-sm"
-        onClick={() => actions.focusWindow(id)}
-      >
-        {title}
-        {stacked ? <span className="ml-1.5 text-[10px] text-muted-foreground">top</span> : null}
-      </button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-8 shrink-0"
-        aria-label={`Cycle the width of ${title}`}
-        onClick={() => {
-          actions.focusWindow(id)
-          actions.cycleWidth()
-        }}
-      >
-        <Maximize2 className="size-3.5" aria-hidden />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
-        aria-label={`Close ${title}`}
-        onClick={() => actions.closeWindow(id)}
-      >
-        <X className="size-3.5" aria-hidden />
-      </Button>
-    </div>
-  )
-})
-
-function titleOf(info: WindowInfo | undefined, id: WindowId): string {
-  return info?.title || info?.appId || `Window ${id}`
-}
 
 export default memo(WindowsPanel)

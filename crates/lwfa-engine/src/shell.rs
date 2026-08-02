@@ -3,6 +3,19 @@
 //! A WebSocket server the shell connects to. The shell sends layout; the engine
 //! sends window lifecycle. See `crates/lwfa-proto` for the wire format.
 //!
+//! # Several connections at once
+//!
+//! A session is one desktop that any number of devices can be looking at: the
+//! machine itself, a tablet on the sofa, a phone. Each connection gets its own
+//! outbound queue and its own backpressure, so a phone on bad wifi slows down
+//! only itself, and each asks for the windows it can actually see rather than
+//! sharing one global set.
+//!
+//! What they cannot each have is their own arrangement, because a window has
+//! exactly one size. So one connection is *primary* and decides layout, and the
+//! rest are told what it decided. Which one that is can be handed over at any
+//! time; see `ToShell::Role`.
+//!
 //! # Threading
 //!
 //! Smithay's event loop is calloop, which is single-threaded and callback
@@ -25,16 +38,17 @@
 //! untrusted one. Tunnel it until TLS exists.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use lwfa_proto::{ToEngine, ToShell};
+use lwfa_proto::{SessionId, ToEngine, ToShell, WindowId};
 use smithay::reexports::calloop::channel::Sender as LoopSender;
 
 use crate::auth;
@@ -54,17 +68,32 @@ const POLL_INTERVAL: Duration = Duration::from_millis(4);
 /// Bound on how long a connecting client may stall the accept loop.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Close reason sent to a shell that a newer one has replaced.
+/// Close reason sent to a shell the engine deliberately dropped.
 ///
-/// The client checks for this and stops reconnecting. It has to be explicit:
-/// a plain socket drop is indistinguishable from a network blip, and retrying
-/// is the right response to a blip.
+/// Only used when `MAX_SESSIONS` is reached and the oldest connection is
+/// evicted. The client checks for this and stops reconnecting, which it has to
+/// be told explicitly: a plain socket drop is indistinguishable from a network
+/// blip, and retrying is the right response to a blip.
 pub const REPLACED_REASON: &str = "replaced-by-newer-shell";
+
+/// Close reason for a socket the *same* client superseded by reconnecting.
+///
+/// Deliberately different from [`REPLACED_REASON`], because the client's right
+/// response is the opposite: being replaced by another device means stop
+/// reconnecting, being superseded by your own newer socket means carry on. A
+/// reconnect that raced its predecessor was being told "you were replaced",
+/// and the shell stopped trying and sat on "connecting" forever.
+pub const SUPERSEDED_REASON: &str = "superseded-by-reconnect";
 
 /// Bound on how long saying goodbye to a replaced shell may take.
 const GOODBYE_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// What the compositor sees. Delivered on the event loop thread.
+///
+/// Every variant names the session it came from. With more than one connection
+/// there is no such thing as "the shell said": permissions, streams and the
+/// right to drive layout are all per connection, so a message with no sender
+/// could not be checked against anything.
 #[derive(Debug)]
 pub enum ShellEvent {
     /// A shell connected. The engine replies with `Hello`.
@@ -73,11 +102,23 @@ pub enum ShellEvent {
     /// accept thread during the handshake and the compositor needs the answer
     /// to decide what the session may do.
     Connected {
+        session: SessionId,
         permissions: lwfa_proto::Permissions,
         account: String,
+        /// Best-effort, from the `User-Agent` header. Only ever shown to the
+        /// user so they can tell their own devices apart.
+        device: String,
+        /// The browser's own stable id, or empty if it did not send one.
+        ///
+        /// Not a security boundary and not trusted for anything: the token is
+        /// what authenticates. This exists so a *reconnection* can be told
+        /// apart from a second device, because a page refresh otherwise leaves
+        /// the previous session lingering until its socket times out, and both
+        /// are then counted as live viewers.
+        client: String,
     },
-    Message(ToEngine),
-    Disconnected,
+    Message(SessionId, ToEngine),
+    Disconnected(SessionId),
 }
 
 /// Something queued for the shell: a control message or a frame of pixels.
@@ -87,38 +128,226 @@ enum Outgoing {
     Frame(Vec<u8>),
 }
 
+/// One connected client's outbound queue.
+///
+/// Owned by the registry and shared with the connection thread. Everything on
+/// it is atomic or behind a small lock, because three threads touch it: the
+/// accept thread writes to the socket, the compositor queues control messages,
+/// and the encoder queues frames.
+struct Slot {
+    id: SessionId,
+    outgoing: Sender<Outgoing>,
+    /// Frames queued but not yet written. Per client, so a slow device applies
+    /// backpressure to itself and not to everyone else.
+    in_flight: Arc<AtomicUsize>,
+    connected: Arc<AtomicBool>,
+    /// Windows this client wants pixels for.
+    ///
+    /// Read on the encoder thread, to decide who a finished frame goes to.
+    /// Written on the compositor thread when a client sends `SetStreams`.
+    streams: Mutex<HashSet<WindowId>>,
+    /// Whether this client has asked to hear the machine.
+    ///
+    /// Read on the capture thread, written on the compositor thread, same as
+    /// `streams`.
+    audio: AtomicBool,
+    /// Whether the eviction is this client reconnecting rather than a kick.
+    superseded: Arc<AtomicBool>,
+    /// Set when the owner has asked for this connection to go away.
+    ///
+    /// A flag rather than a direct close, because the socket belongs to the
+    /// accept thread and nothing else may touch it. That thread notices on its
+    /// next pass, which is within a poll interval.
+    evict: Arc<AtomicBool>,
+}
+
+impl Slot {
+    fn alive(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    fn has_room(&self, max_in_flight: usize) -> bool {
+        self.alive() && self.in_flight.load(Ordering::Relaxed) < max_in_flight
+    }
+}
+
+/// Every connection, shared by all three threads.
+pub struct Clients {
+    slots: Mutex<Vec<Arc<Slot>>>,
+    /// `[stream].max_frames_in_flight`, per client.
+    max_in_flight: usize,
+    next_id: AtomicU64,
+}
+
+impl Clients {
+    fn new(max_in_flight: usize) -> Self {
+        Self {
+            slots: Mutex::new(Vec::new()),
+            max_in_flight: max_in_flight.max(1),
+            // Ids start at 1 so 0 can mean "nobody" in logs and tests.
+            next_id: AtomicU64::new(1),
+        }
+    }
+
+    fn allocate(&self) -> SessionId {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn add(&self, slot: Arc<Slot>) {
+        if let Ok(mut slots) = self.slots.lock() {
+            slots.push(slot);
+        }
+    }
+
+    fn remove(&self, id: SessionId) {
+        if let Ok(mut slots) = self.slots.lock() {
+            slots.retain(|slot| slot.id != id);
+        }
+    }
+
+    fn with<T>(&self, id: SessionId, f: impl FnOnce(&Slot) -> T) -> Option<T> {
+        let slots = self.slots.lock().ok()?;
+        slots.iter().find(|slot| slot.id == id).map(|s| f(s))
+    }
+
+    /// Which windows anyone is asking for. The union bounds what is captured.
+    pub fn streamed_windows(&self) -> HashSet<WindowId> {
+        let Ok(slots) = self.slots.lock() else {
+            return HashSet::new();
+        };
+        let mut all = HashSet::new();
+        for slot in slots.iter().filter(|s| s.alive()) {
+            if let Ok(streams) = slot.streams.lock() {
+                all.extend(streams.iter().copied());
+            }
+        }
+        all
+    }
+
+    /// Record whether one client wants to hear the machine.
+    pub fn set_audio(&self, id: SessionId, enabled: bool) {
+        self.with(id, |slot| slot.audio.store(enabled, Ordering::Relaxed));
+    }
+
+    /// Record what one client wants. Total, matching `SetStreams`.
+    pub fn set_streams(&self, id: SessionId, windows: HashSet<WindowId>) {
+        self.with(id, |slot| {
+            if let Ok(mut streams) = slot.streams.lock() {
+                *streams = windows;
+            }
+        });
+    }
+
+    /// Queue a control message for everyone.
+    pub fn broadcast(&self, message: ToShell) {
+        let Ok(slots) = self.slots.lock() else { return };
+        for slot in slots.iter().filter(|s| s.alive()) {
+            let _ = slot
+                .outgoing
+                .send(Outgoing::Control(Box::new(message.clone())));
+        }
+    }
+
+    /// Ask the accept thread to disconnect one client.
+    ///
+    /// `superseded` distinguishes "this device reconnected" from "the owner
+    /// kicked you", which the client must react to differently.
+    pub fn evict(&self, id: SessionId, superseded: bool) {
+        self.with(id, |slot| {
+            slot.superseded.store(superseded, Ordering::Relaxed);
+            slot.evict.store(true, Ordering::Relaxed);
+            // Stop feeding it immediately rather than waiting for the accept
+            // thread to notice: the point of kicking someone is that they stop
+            // seeing your screen now.
+            slot.connected.store(false, Ordering::Relaxed);
+        });
+    }
+
+    /// Queue a control message for one connection.
+    pub fn send_to(&self, id: SessionId, message: ToShell) {
+        self.with(id, |slot| {
+            if slot.alive() {
+                let _ = slot.outgoing.send(Outgoing::Control(Box::new(message)));
+            }
+        });
+    }
+}
+
 /// A cloneable handle for queueing encoded frames.
 ///
 /// Separate from [`ShellLink`] so the encoder thread can send frames without
-/// borrowing compositor state. Everything in it is shared, so a clone talks to
-/// the same connection.
+/// borrowing compositor state.
 #[derive(Clone)]
 pub struct FrameSink {
-    outgoing: Sender<Outgoing>,
-    in_flight: Arc<AtomicUsize>,
-    connected: Arc<AtomicBool>,
-    /// `[stream].max_frames_in_flight`. Copied in rather than shared, because
-    /// this is read on the hot path and never changes after startup.
-    max_in_flight: usize,
+    clients: Arc<Clients>,
 }
 
 impl FrameSink {
-    /// True when the write queue has room for another frame.
+    /// True when at least one client has room for another frame.
     ///
-    /// Checked *before* capturing rather than after encoding, so a shell that
-    /// cannot keep up costs no GPU work at all.
+    /// Checked *before* capturing rather than after encoding, so a client that
+    /// cannot keep up costs no GPU work at all. It is deliberately "any" and
+    /// not "all": one device on bad wifi must not stop the others being fed,
+    /// and the fan-out below skips whoever is behind.
     pub fn can_accept_frame(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
-            && self.in_flight.load(Ordering::Relaxed) < self.max_in_flight
+        let Ok(slots) = self.clients.slots.lock() else {
+            return false;
+        };
+        slots
+            .iter()
+            .any(|slot| slot.has_room(self.clients.max_in_flight))
     }
 
-    pub fn send_frame(&self, bytes: Vec<u8>) {
-        if !self.connected.load(Ordering::Relaxed) {
+    /// Hand a chunk of audio to everyone listening.
+    ///
+    /// Shares the video queue and its bound deliberately. Audio and pixels
+    /// compete for the same socket, and a client so far behind that frames are
+    /// being dropped is one where continuing to push audio would only widen the
+    /// gap between what it hears and what it sees. Silence that recovers beats
+    /// audio that drifts further out of sync every second.
+    pub fn send_audio(&self, chunk: Vec<u8>) {
+        let Ok(slots) = self.clients.slots.lock() else {
             return;
+        };
+        let max = self.clients.max_in_flight;
+        for slot in slots.iter() {
+            if !slot.audio.load(Ordering::Relaxed) || !slot.has_room(max) {
+                continue;
+            }
+            slot.in_flight.fetch_add(1, Ordering::Relaxed);
+            if slot.outgoing.send(Outgoing::Frame(chunk.clone())).is_err() {
+                slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+            }
         }
-        self.in_flight.fetch_add(1, Ordering::Relaxed);
-        if self.outgoing.send(Outgoing::Frame(bytes)).is_err() {
-            self.in_flight.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Hand a finished frame to everyone who asked for that window.
+    ///
+    /// The bytes are cloned per recipient. That is a real cost with several
+    /// devices watching, and it is still the right trade: the alternative is
+    /// encoding the same window once per client, which costs an NVENC session
+    /// each and there are only eight.
+    pub fn send_frame(&self, window: WindowId, bytes: Vec<u8>) {
+        let Ok(slots) = self.clients.slots.lock() else {
+            return;
+        };
+        let max = self.clients.max_in_flight;
+        for slot in slots.iter() {
+            if !slot.has_room(max) {
+                continue;
+            }
+            let wanted = slot
+                .streams
+                .lock()
+                .map(|streams| streams.contains(&window))
+                .unwrap_or(false);
+            if !wanted {
+                continue;
+            }
+            slot.in_flight.fetch_add(1, Ordering::Relaxed);
+            if slot.outgoing.send(Outgoing::Frame(bytes.clone())).is_err() {
+                slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -127,15 +356,15 @@ impl FrameSink {
 /// compositor when `.env` changes. See `Lwfa::watch_dotenv`.
 pub type SharedToken = Arc<Mutex<String>>;
 
-/// Handle the compositor uses to talk to whatever shell is connected.
+/// Handle the compositor uses to talk to every connected shell.
 pub struct ShellLink {
-    sink: FrameSink,
+    clients: Arc<Clients>,
 }
 
-// `[stream].max_frames_in_flight` bounds the write queue. Without a bound, a
-// shell on a slow link makes it grow forever and the compositor spends all its
-// time encoding frames nobody will see. Dropping frames is the correct response
-// to a slow consumer; buffering them is not.
+// `[stream].max_frames_in_flight` bounds each client's write queue. Without a
+// bound, a shell on a slow link makes it grow forever and the compositor spends
+// all its time encoding frames nobody will see. Dropping frames is the correct
+// response to a slow consumer; buffering them is not.
 
 impl ShellLink {
     /// Start listening. Returns the link plus a calloop event source to insert.
@@ -153,130 +382,157 @@ impl ShellLink {
         // handshake, which is far too rare for the lock to matter.
         let token = Arc::new(Mutex::new(token));
         let thread_token = Arc::clone(&token);
-        let (outgoing_tx, outgoing_rx) = channel::<Outgoing>();
-        let in_flight = Arc::new(AtomicUsize::new(0));
-        let connected = Arc::new(AtomicBool::new(false));
-        let thread_in_flight = Arc::clone(&in_flight);
-        let thread_connected = Arc::clone(&connected);
+        let clients = Arc::new(Clients::new(max_in_flight));
+        let thread_clients = Arc::clone(&clients);
 
         thread::Builder::new()
             .name("lwfa-shell".into())
-            .spawn(move || {
-                accept_loop(
-                    listener,
-                    thread_token,
-                    accounts,
-                    events,
-                    outgoing_rx,
-                    thread_in_flight,
-                    thread_connected,
-                )
-            })?;
+            .spawn(move || accept_loop(listener, thread_token, accounts, events, thread_clients))?;
 
-        Ok((
-            Self {
-                sink: FrameSink {
-                    outgoing: outgoing_tx,
-                    in_flight,
-                    connected,
-                    max_in_flight: max_in_flight.max(1),
-                },
-            },
-            local,
-            token,
-        ))
-    }
-
-    pub fn set_connected(&mut self, connected: bool) {
-        self.sink.connected.store(connected, Ordering::Relaxed);
+        Ok((Self { clients }, local, token))
     }
 
     /// A handle the encoder thread can keep.
     pub fn sink(&self) -> FrameSink {
-        self.sink.clone()
-    }
-
-    /// Queue a message for the shell. Cheap, never blocks the compositor, and
-    /// silently drops when nothing is connected, which is the normal state.
-    pub fn send(&self, message: ToShell) {
-        if self.sink.connected.load(Ordering::Relaxed) {
-            let _ = self
-                .sink
-                .outgoing
-                .send(Outgoing::Control(Box::new(message)));
+        FrameSink {
+            clients: Arc::clone(&self.clients),
         }
     }
 
+    /// The registry, for the compositor's own bookkeeping.
+    pub fn clients(&self) -> &Clients {
+        &self.clients
+    }
+
+    /// Queue a message for every connected shell.
+    pub fn broadcast(&self, message: ToShell) {
+        self.clients.broadcast(message);
+    }
+
+    /// Queue a message for one connection.
+    pub fn send_to(&self, session: SessionId, message: ToShell) {
+        self.clients.send_to(session, message);
+    }
+
+    /// Disconnect one connection. See [`Clients::evict`].
+    pub fn evict(&self, session: SessionId, superseded: bool) {
+        self.clients.evict(session, superseded);
+    }
+
     pub fn can_accept_frame(&self) -> bool {
-        self.sink.can_accept_frame()
+        self.sink().can_accept_frame()
     }
 }
 
-/// Accept connections and serve whichever is newest.
+/// How many shells may be connected at once.
 ///
-/// One thread, which owns the outgoing queue, so no lock is needed around the
-/// WebSocket and no frame can be half-written.
+/// Not a resource limit so much as a sanity limit. Every connection costs a
+/// thread-visible queue and a copy of every frame it asks for, and a session
+/// with more than a handful of devices watching is a misconfiguration or a
+/// client stuck in a reconnect loop, not a use case. When it is reached the
+/// *oldest* connection is dropped rather than the newest refused: refusing the
+/// newest would mean a stale tab locking you out of your own desktop, which is
+/// exactly the failure this used to have when only one connection was allowed.
+const MAX_SESSIONS: usize = 8;
+
+/// Accept connections and serve all of them.
 ///
-/// **Newest connection wins.** The obvious loop
-/// (`for stream in listener.incoming() { serve(stream) }`) serves one client to
-/// completion, which means a stale or hung shell holds the slot forever and
-/// every later connection sits unread in the accept backlog. That is not a
-/// theoretical problem: a browser tab that never cleanly closed will lock you
-/// out of your own desktop until the engine restarts. Replacing the current
-/// connection instead means the client the user is actually looking at is
-/// always the one being served.
+/// One thread owning every socket, so no lock is needed around a WebSocket and
+/// no frame can be half-written. The sockets are non-blocking and polled in
+/// turn, which is fine for a handful of connections carrying control messages
+/// and pre-encoded frames; it would not be fine for hundreds, and there will
+/// never be hundreds.
 fn accept_loop(
     listener: TcpListener,
     token: SharedToken,
     accounts: Option<Arc<Mutex<crate::accounts::Accounts>>>,
     events: LoopSender<ShellEvent>,
-    outgoing: Receiver<Outgoing>,
-    in_flight: Arc<AtomicUsize>,
-    connected: Arc<AtomicBool>,
+    clients: Arc<Clients>,
 ) {
     if listener.set_nonblocking(true).is_err() {
         tracing::error!("could not set the shell listener non-blocking; no shell can connect");
         return;
     }
 
-    let mut current: Option<tungstenite::WebSocket<TcpStream>> = None;
+    /// A connection this thread is serving.
+    struct Live {
+        id: SessionId,
+        socket: tungstenite::WebSocket<TcpStream>,
+        outgoing: Receiver<Outgoing>,
+        in_flight: Arc<AtomicUsize>,
+        connected: Arc<AtomicBool>,
+        evict: Arc<AtomicBool>,
+        superseded: Arc<AtomicBool>,
+    }
+
+    let mut live: Vec<Live> = Vec::new();
 
     loop {
-        // Drain every pending connection, keeping only the last. Dropping the
-        // previous socket closes it, which is how the old client learns it has
-        // been replaced.
         loop {
             match listener.accept() {
                 Ok((stream, peer)) => {
-                    match handshake(stream, &token.lock().unwrap().clone(), accounts.as_deref()) {
-                        Some((socket, permissions, account)) => {
-                            if let Some(old) = current.take() {
-                                tracing::info!(
-                                    "a new shell connected from {peer}, replacing the old one"
-                                );
-                                // Deliberately no `Disconnected` here. A
-                                // replacement is not a gap in shell coverage, and
-                                // dropping to safe mode and straight back would
-                                // resize every window twice and rebuild every
-                                // encoder session for nothing.
-                                say_goodbye(old);
-                            } else {
-                                tracing::info!("shell connected from {peer}");
-                            }
-                            current = Some(socket);
-                            drain_stale(&outgoing, &in_flight);
-                            tracing::info!("authenticated as {account} ({:?})", permissions.mode);
-                            if events
-                                .send(ShellEvent::Connected {
-                                    permissions,
-                                    account,
-                                })
-                                .is_err()
-                            {
-                                return;
-                            }
-                        }
-                        None => continue,
+                    let Some((socket, permissions, account, device, client)) =
+                        handshake(stream, &token.lock().unwrap().clone(), accounts.as_deref())
+                    else {
+                        continue;
+                    };
+
+                    // Make room before adding, so the cap is a real bound.
+                    while live.len() >= MAX_SESSIONS {
+                        let evicted = live.remove(0);
+                        tracing::info!(
+                            "session limit reached; dropping the oldest shell ({})",
+                            evicted.id
+                        );
+                        evicted.connected.store(false, Ordering::Relaxed);
+                        clients.remove(evicted.id);
+                        say_goodbye(evicted.socket, false);
+                        let _ = events.send(ShellEvent::Disconnected(evicted.id));
+                    }
+
+                    let id = clients.allocate();
+                    let (outgoing_tx, outgoing_rx) = channel::<Outgoing>();
+                    let in_flight = Arc::new(AtomicUsize::new(0));
+                    let connected = Arc::new(AtomicBool::new(true));
+                    let evict = Arc::new(AtomicBool::new(false));
+                    let superseded = Arc::new(AtomicBool::new(false));
+                    clients.add(Arc::new(Slot {
+                        id,
+                        outgoing: outgoing_tx,
+                        in_flight: Arc::clone(&in_flight),
+                        connected: Arc::clone(&connected),
+                        streams: Mutex::new(HashSet::new()),
+                        audio: AtomicBool::new(false),
+                        superseded: Arc::clone(&superseded),
+                        evict: Arc::clone(&evict),
+                    }));
+                    live.push(Live {
+                        id,
+                        socket,
+                        outgoing: outgoing_rx,
+                        in_flight,
+                        connected,
+                        evict,
+                        superseded: Arc::clone(&superseded),
+                    });
+
+                    tracing::info!(
+                        "shell {id} connected from {peer} as {account} ({:?}, {device}); \
+                         {} connected",
+                        permissions.mode,
+                        live.len()
+                    );
+                    if events
+                        .send(ShellEvent::Connected {
+                            session: id,
+                            permissions,
+                            account,
+                            device,
+                            client,
+                        })
+                        .is_err()
+                    {
+                        return;
                     }
                 }
                 Err(err) if err.kind() == ErrorKind::WouldBlock => break,
@@ -287,16 +543,46 @@ fn accept_loop(
             }
         }
 
-        if let Some(socket) = current.as_mut() {
-            if !pump(socket, &events, &outgoing, &in_flight) {
-                tracing::info!("shell disconnected");
-                current = None;
-                // Stop the encoder thread queueing into a dead socket
-                // immediately, rather than waiting for the compositor to
-                // process the event.
-                connected.store(false, Ordering::Relaxed);
-                let _ = events.send(ShellEvent::Disconnected);
+        // Indices first, then removal back to front, so a finished connection
+        // can be moved out whole. `retain_mut` only lends `&mut`, and closing
+        // an evicted socket politely needs to own it.
+        let mut finished: Vec<usize> = Vec::new();
+        for (index, client) in live.iter_mut().enumerate() {
+            let kicked = client.evict.load(Ordering::Relaxed);
+            let alive = !kicked
+                && pump(
+                    &mut client.socket,
+                    client.id,
+                    &events,
+                    &client.outgoing,
+                    &client.in_flight,
+                );
+            if !alive {
+                finished.push(index);
             }
+        }
+
+        for index in finished.into_iter().rev() {
+            let client = live.remove(index);
+            client.connected.store(false, Ordering::Relaxed);
+            clients.remove(client.id);
+            if client.evict.load(Ordering::Relaxed) {
+                let superseded = client.superseded.load(Ordering::Relaxed);
+                if superseded {
+                    tracing::debug!("shell {} superseded by its own reconnect", client.id);
+                } else {
+                    tracing::info!("shell {} was disconnected by the owner", client.id);
+                }
+                // Told *why*, because the two demand opposite responses: a
+                // client that was replaced must stop reconnecting, and one
+                // that superseded itself must carry on with its newer socket.
+                // A bare drop is indistinguishable from a network blip and
+                // would come straight back.
+                say_goodbye(client.socket, superseded);
+            } else {
+                tracing::info!("shell {} disconnected", client.id);
+            }
+            let _ = events.send(ShellEvent::Disconnected(client.id));
         }
 
         thread::sleep(POLL_INTERVAL);
@@ -308,10 +594,15 @@ fn accept_loop(
 /// The handshake itself needs a blocking socket, but a client that connects and
 /// then says nothing would stall the whole loop, so it is bounded by a read
 /// timeout rather than trusted.
-/// The result of a successful handshake: the socket, and who is on the far end.
+/// The result of a successful handshake.
+///
+/// The socket, what the far end may do, the account it authenticated as, a
+/// description of the device, and the browser's own stable id.
 type Accepted = (
     tungstenite::WebSocket<TcpStream>,
     lwfa_proto::Permissions,
+    String,
+    String,
     String,
 );
 
@@ -337,11 +628,39 @@ fn handshake(
     // different things.
     let identity: Rc<RefCell<Option<crate::accounts::Identity>>> = Rc::new(RefCell::new(None));
     let found = Rc::clone(&identity);
+    // Captured in the same callback, because the request headers are not
+    // available anywhere else and the user needs some way to tell "the iPad"
+    // from "the laptop" in a list of connected sessions.
+    let agent: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let seen_agent = Rc::clone(&agent);
+    // The browser's own id, so a reconnection can be recognised as one.
+    let client_id: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let seen_client = Rc::clone(&client_id);
 
     let accepted = tungstenite::accept_hdr(
         stream,
         |request: &tungstenite::handshake::server::Request, response| {
             let uri = request.uri().to_string();
+            // The client's own answer first, because the user agent cannot be
+            // trusted to know. An iPad running Safari reports itself as a
+            // Macintosh and says nothing about being an iPad anywhere in the
+            // string; the only reliable signal is client-side, so the shell
+            // works it out and sends it. Falling back to the header keeps a
+            // plain `websocat` session from showing up as nothing at all.
+            *seen_client.borrow_mut() = auth::param_from_query(&uri, "client")
+                .map(|claimed| sanitise_device(&claimed))
+                .unwrap_or_default();
+            *seen_agent.borrow_mut() = auth::param_from_query(&uri, "device")
+                .map(|claimed| sanitise_device(&claimed))
+                .filter(|d| !d.is_empty())
+                .or_else(|| {
+                    request
+                        .headers()
+                        .get("user-agent")
+                        .and_then(|value| value.to_str().ok())
+                        .map(describe_device)
+                })
+                .unwrap_or_else(|| "Unknown device".to_string());
             let presented = auth::token_from_query(&uri);
             let who = presented.and_then(|presented| {
                 // The owner's password first, so the bootstrap credential keeps
@@ -391,7 +710,57 @@ fn handshake(
     // The callback ran and said yes, so this is populated. If it somehow is
     // not, refusing beats guessing at permissions.
     let who = identity.borrow_mut().take()?;
-    Some((socket, who.permissions(), who.name().to_string()))
+    let device = agent.borrow().clone();
+    let client = client_id.borrow().clone();
+    Some((
+        socket,
+        who.permissions(),
+        who.name().to_string(),
+        device,
+        client,
+    ))
+}
+
+/// A short, human name for a device, from its user agent.
+///
+/// Deliberately crude. This is not analytics and nothing depends on it being
+/// right; it exists so a person looking at a list of their own connected
+/// devices can tell which line is the tablet. Anything unrecognised says so
+/// rather than guessing.
+/// Trim a client-supplied device name to something safe to show.
+///
+/// It is displayed in a list next to accounts and permissions, so it is
+/// attacker-controlled text in a security-relevant place. Bounded in length and
+/// stripped of control characters so it cannot forge a second row, blow up the
+/// layout, or hide itself.
+fn sanitise_device(claimed: &str) -> String {
+    claimed
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(32)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn describe_device(agent: &str) -> String {
+    // Order matters: an iPad's user agent also says "Macintosh" in desktop
+    // mode, and every Android one also says "Linux".
+    const KNOWN: &[(&str, &str)] = &[
+        ("iPad", "iPad"),
+        ("iPhone", "iPhone"),
+        ("Android", "Android"),
+        ("CrOS", "Chromebook"),
+        ("Macintosh", "Mac"),
+        ("Windows", "Windows PC"),
+        ("Linux", "Linux"),
+    ];
+    for (needle, name) in KNOWN {
+        if agent.contains(needle) {
+            return (*name).to_string();
+        }
+    }
+    "Unknown device".to_string()
 }
 
 /// Close a replaced connection, making sure the reason actually gets sent.
@@ -404,14 +773,18 @@ fn handshake(
 ///
 /// So the socket goes briefly back to blocking, with a write timeout so a dead
 /// peer cannot stall the accept loop.
-fn say_goodbye(mut socket: tungstenite::WebSocket<TcpStream>) {
+fn say_goodbye(mut socket: tungstenite::WebSocket<TcpStream>, superseded: bool) {
     let stream = socket.get_ref();
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_write_timeout(Some(GOODBYE_TIMEOUT));
 
     let _ = socket.close(Some(tungstenite::protocol::CloseFrame {
         code: tungstenite::protocol::frame::coding::CloseCode::Normal,
-        reason: REPLACED_REASON.into(),
+        reason: if superseded {
+            SUPERSEDED_REASON.into()
+        } else {
+            REPLACED_REASON.into()
+        },
     }));
     // close() queues; the write only happens on flush, and tungstenite may
     // need more than one to drain.
@@ -424,24 +797,12 @@ fn say_goodbye(mut socket: tungstenite::WebSocket<TcpStream>) {
     }
 }
 
-/// Discard anything queued for a previous shell.
-///
-/// The `Hello` sent next carries the full current state, so a backlog addressed
-/// to the old client is worse than useless: it would be decoded against the new
-/// client's empty world.
-fn drain_stale(outgoing: &Receiver<Outgoing>, in_flight: &AtomicUsize) {
-    while let Ok(stale) = outgoing.try_recv() {
-        if matches!(stale, Outgoing::Frame(_)) {
-            in_flight.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-}
-
 /// Move one round of messages in both directions.
 ///
 /// Returns false when the connection is finished and should be dropped.
 fn pump(
     socket: &mut tungstenite::WebSocket<TcpStream>,
+    session: SessionId,
     events: &LoopSender<ShellEvent>,
     outgoing: &Receiver<Outgoing>,
     in_flight: &AtomicUsize,
@@ -453,7 +814,7 @@ fn pump(
             Ok(tungstenite::Message::Text(text)) => {
                 match serde_json::from_str::<ToEngine>(&text) {
                     Ok(message) => {
-                        if events.send(ShellEvent::Message(message)).is_err() {
+                        if events.send(ShellEvent::Message(session, message)).is_err() {
                             return false;
                         }
                     }

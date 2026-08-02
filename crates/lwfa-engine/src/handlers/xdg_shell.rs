@@ -26,6 +26,7 @@ use smithay::wayland::shell::xdg::{
 use crate::layout::Mode;
 use crate::state::Lwfa;
 use lwfa_proto::ToShell;
+use smithay::reexports::wayland_server::protocol::wl_output;
 
 impl XdgShellHandler for Lwfa {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
@@ -108,6 +109,30 @@ impl XdgShellHandler for Lwfa {
         _serial: Serial,
         _edges: xdg_toplevel::ResizeEdge,
     ) {
+    }
+
+    /// A client asking to be fullscreen. This is the video player's button.
+    ///
+    /// Forwarded rather than granted here. The shell owns the arrangement, so a
+    /// window put fullscreen by the engine alone would be moved straight back
+    /// to its column width by the next layout. The shell decides, and the size
+    /// it sends is what the client is eventually configured with; the
+    /// fullscreen *state* is set alongside that size in `send_configures`.
+    ///
+    /// Nothing is sent to the client here on purpose. It has already been told
+    /// a size, and answering twice, once now and once when the shell replies,
+    /// makes a player flicker between layouts.
+    fn fullscreen_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _output: Option<wl_output::WlOutput>,
+    ) {
+        self.request_fullscreen(&surface, true);
+    }
+
+    /// The same in reverse: leaving fullscreen from inside the application.
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.request_fullscreen(&surface, false);
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
