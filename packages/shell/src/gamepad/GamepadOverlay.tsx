@@ -359,10 +359,14 @@ const Stick = memo(function Stick({
       if (analog && axes) {
         // The whole point of a controller: how far, not merely which way.
         //
-        // Normalised against the radius and given the same quarter-travel dead
-        // zone the key mapping uses, so a resting thumb reads as centred. Sent
-        // every move, because that is what analog means.
-        const dead = 0.25
+        // Nearly no dead zone, on purpose. A physical stick needs one to hide
+        // sensor noise and spring slack; a finger on glass has neither, and
+        // touch muscle memory expects feedback from the first millimetre of
+        // movement. This used to match the key mapping's quarter-travel zone
+        // and the stick felt like it ignored the first part of every push,
+        // doubly so because games apply their own dead zone on top. 5% is
+        // just enough that a resting thumb's tremor reads as centred.
+        const dead = 0.05
         const nx = dx / radius
         const ny = dy / radius
         const magnitude = Math.hypot(nx, ny)
