@@ -60,6 +60,28 @@ pub struct Config {
     /// so `deny_unknown_fields` does not reject a perfectly good file.
     #[allow(dead_code)]
     pub layout: toml::Table,
+    pub audio: Audio,
+    /// Also the shell's, for the same reason.
+    ///
+    /// The engine does integrate springs, but with the parameters the shell
+    /// hands it in `SetLayout`, so that one description of a move drives both
+    /// the local and the remote path. Reading this section here as well would
+    /// be a second source of truth for the same thing.
+    #[allow(dead_code)]
+    pub animation: toml::Table,
+}
+
+/// Capturing what the machine is playing. See `audio.rs`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Audio {
+    /// Which PulseAudio/PipeWire source to record.
+    ///
+    /// Empty means the default sink's monitor, which is "whatever you would
+    /// hear sitting at this machine" and is what nearly everyone wants. Name a
+    /// source explicitly to capture something else, such as a null sink that
+    /// only the applications you care about are routed to.
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -47,6 +47,10 @@ toml = { version = "0.9", default-features = false, features = ["parse", "serde"
 serde = { version = "1.0.229", features = ["derive"] }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 argon2 = { version = "0.5.3", features = ["std", "password-hash"] }
+input-linux = "0.7.1"
+libc = "0.2.189"
+rustix = { version = "1.1", features = ["process"] }
+opus = "0.3.1"
 
 [lints]
 workspace = true

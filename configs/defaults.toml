@@ -71,7 +71,7 @@ height = 800
 
 # Behind the strip. Slightly lighter than black so the gaps between columns are
 # visible and the strip reads as a strip. Linear RGBA, 0..1.
-backdrop = [0.06, 0.06, 0.08, 1.0]
+backdrop = [0.047, 0.051, 0.063, 1.0]
 
 # ---------------------------------------------------------------------------
 # Session
@@ -188,3 +188,60 @@ centre_focused = true
 # Floor in logical pixels, so a preset cannot make a column unusably narrow on
 # a small viewport. This is what stops ⅓ of a phone screen being 120px.
 min_width = 240
+
+# ---------------------------------------------------------------------------
+# Motion
+# ---------------------------------------------------------------------------
+#
+# One spring, used by both halves of the project: the engine integrates it for
+# the physical display (`crates/lwfa-engine/src/layout.rs`) and the browser
+# integrates it for a remote shell (`packages/shell/src/lib/motion.ts`). Both
+# use `lwfa-spring`, which exists in Rust and TypeScript precisely so the same
+# move looks the same wherever you are watching it from.
+#
+# Motion's parameterisation: a mass on a spring with a damper.
+[animation]
+# How hard the spring pulls. Higher is faster and more urgent.
+#
+# High, because the damping below is above critical and an overdamped spring
+# crawls to a stop. Stiffness is what buys that back: at 240 the same
+# non-bouncing move took over a second to settle, which reads as sluggish
+# rather than smooth. `test/motion.test.ts` holds both ends of this.
+stiffness = 1000
+
+# How much the motion is resisted.
+#
+# The critical value is 2 * sqrt(stiffness * mass), about 63.2 here, and this is
+# deliberately just above it. Below critical a window overshoots its position
+# and springs back. At exactly critical it stops dead from rest, but a spring
+# redirected mid-flight carries its velocity into the new one and can still
+# pass the target once. Slightly overdamped removes both, at no visible cost.
+#
+# Drop this below 63 if you actually want overshoot.
+damping = 66
+
+mass = 1.0
+
+# Anyone who has asked their operating system for reduced motion gets none of
+# this regardless: windows move instantly. That preference is not overridden.
+
+# ---------------------------------------------------------------------------
+# Audio
+# ---------------------------------------------------------------------------
+#
+# Nothing is captured until a connected client asks for it, and asking is a
+# per-device switch in the shell rather than a setting here. This section only
+# says *what* to capture when someone does.
+[audio]
+# Which PulseAudio/PipeWire source to record. Unset means the default sink's
+# monitor: whatever you would hear sitting at this machine.
+#
+# That includes sound from programs which are not running in lwfa, because
+# there is no reliable link from a Wayland window to the audio node its client
+# writes to. If that matters, make a null sink, route only what you want into
+# it, and name its monitor here:
+#
+#   pactl load-module module-null-sink sink_name=lwfa
+#   device = "lwfa.monitor"
+#
+# device = "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"

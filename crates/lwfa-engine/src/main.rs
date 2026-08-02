@@ -16,21 +16,26 @@
 
 mod accounts;
 mod apps;
+mod audio;
 mod auth;
 mod capture;
 mod config;
 mod encode;
 mod focus;
+mod bitrate;
+mod gamepad;
+mod outside;
 mod handlers;
 mod icons;
 mod input;
 mod layout;
 mod remote_input;
 mod shell;
+mod sink;
 mod state;
 mod winit;
 
-use lwfa_proto::ToEngine;
+use lwfa_proto::{ToEngine, ToShell};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::calloop::channel;
 use smithay::reexports::wayland_server::Display;
@@ -303,17 +308,97 @@ fn announce(bound: std::net::SocketAddr, token: &str) {
 }
 
 fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
+    // Every shell event, at debug. Cheap, off by default, and the one thing
+    // that turns "a client connected but nothing happened" from a guess into a
+    // one-line answer: it says whether the compositor saw the event at all,
+    // which is the fork in the road between a socket problem and a handler bug.
+    tracing::debug!("shell event: {event:?}");
     match event {
         ShellEvent::Connected {
+            session,
             permissions,
             account,
+            device,
+            client,
         } => {
-            state.permissions = permissions;
-            state.account = account;
-            if let Some(shell) = state.shell.as_mut() {
-                shell.set_connected(true);
+            let interactive = permissions.may_interact();
+
+            // A refresh, not a second device.
+            //
+            // A browser that reloads opens its new socket before the old one
+            // has finished dying, and in development React opens two on every
+            // mount anyway. Without this the engine sees each of those as
+            // another viewer: it resyncs them all, invalidates every capture
+            // per connection, and counts them as live listeners. Worse, until
+            // a new session says what it can decode it used to drag the whole
+            // session down to JPEG, and every such flip tears down all the
+            // NVENC sessions at 90-160ms each.
+            //
+            // So a connection carrying the same browser id as a live one
+            // *replaces* it. The old socket is closed rather than left to time
+            // out, which is what stops two of them being counted at once.
+            if !client.is_empty() {
+                let stale: Vec<lwfa_proto::SessionId> = state
+                    .sessions
+                    .iter()
+                    .filter(|(id, s)| **id != session && s.client == client)
+                    .map(|(id, _)| *id)
+                    .collect();
+                for old in stale {
+                    // A reconnection that arrives within a moment of the last
+                    // one is not a page reload, it is a fight.
+                    //
+                    // Two connections of the same browser can each supersede
+                    // the other, take that as a reason to reconnect, and trade
+                    // the session forever. That happened: a new session every
+                    // 290ms, two hundred deep, restarting audio capture on
+                    // every pass. The client no longer retries when it is
+                    // superseded, so this should not recur, and it is worth
+                    // naming out loud if it ever does rather than leaving
+                    // somebody to read two hundred log lines to notice.
+                    let churning = state
+                        .sessions
+                        .get(&old)
+                        .is_some_and(|s| s.since.elapsed() < RECONNECT_STORM_WINDOW);
+                    if churning {
+                        tracing::warn!(
+                            "session {session} replaced session {old} after only {:?}: this \
+                             browser is reconnecting in a loop, which usually means two tabs \
+                             or windows of it are both trying to hold the session",
+                            state.sessions.get(&old).map(|s| s.since.elapsed()).unwrap_or_default(),
+                        );
+                    } else {
+                        tracing::info!(
+                            "session {session} is session {old} reconnecting; dropping the old one"
+                        );
+                    }
+                    state.sessions.remove(&old);
+                    if state.primary == Some(old) {
+                        // Hand the wheel straight to the reconnection rather
+                        // than letting it fall to some other device for the
+                        // moment in between.
+                        state.primary = None;
+                    }
+                    if let Some(shell) = state.shell.as_ref() {
+                        // Superseded, not kicked: the client must keep its
+                        // newer socket rather than stop reconnecting.
+                        shell.evict(old, true);
+                    }
+                }
             }
+            state.sessions.insert(
+                session,
+                new_session(permissions, account, device, client),
+            );
             state.layout.set_mode(Mode::Shell);
+
+            // The first connection that can actually drive takes the wheel. A
+            // view-only session never does: it has no right to move anything,
+            // so making it primary would freeze the layout for everyone.
+            if state.primary.is_none() && interactive {
+                state.primary = Some(session);
+            }
+
             // A browser attaching mid-stream cannot decode until it sees an
             // IDR, so ask every live encoder for one now rather than making it
             // wait up to a whole GOP.
@@ -323,81 +408,195 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // And force a capture of every window, because an idle one would
             // otherwise never produce a frame for the new client to decode.
             state.capture.invalidate_all();
-            let hello = state.hello();
-            state.send_to_shell(hello);
-            tracing::info!("shell took over layout");
-        }
 
-        ShellEvent::Disconnected => {
-            if let Some(shell) = state.shell.as_mut() {
-                shell.set_connected(false);
+            let hello = state.hello(session);
+            if let Some(shell) = state.shell.as_ref() {
+                shell.send_to(session, hello);
             }
-            state.layout.set_mode(Mode::Safe);
-            // Forget what the departed shell wanted streamed. Otherwise the
-            // next one receives frames for windows it never asked about,
-            // before it has had a chance to say what its viewport shows.
-            state.streaming.clear();
-            // Fall back immediately rather than leaving the last shell-declared
-            // layout frozen on screen, which would look like a hang.
-            state.apply_safe_mode();
-            tracing::info!("shell gone, back to safe mode");
+            // A device that joined into an existing session is following, and
+            // has nothing to draw until it is told the arrangement. Waiting for
+            // the primary to move something would mean an empty desktop for as
+            // long as nobody touches anything.
+            if state.primary != Some(session) {
+                state.send_layout_to(session);
+            }
+            // The new arrival also has to reach everyone else's connections
+            // list, and it may have just changed who is primary.
+            state.announce_peers();
+            tracing::info!(
+                "session {session} joined; {} connected, primary is {:?}",
+                state.sessions.len(),
+                state.primary
+            );
         }
 
-        ShellEvent::Message(message) => {
+        ShellEvent::Disconnected(session) => {
+            state.sessions.remove(&session);
+            // Unplug their controller. Dropping it releases every button, so a
+            // tab closed mid-press does not leave a character running into a
+            // wall forever.
+            state.gamepads.remove(&session);
+            // The last listener leaving stops the capture, so an unattended
+            // session is not holding a recording process open.
+            state.sync_audio_capture();
+            // Streams are per connection and the registry already forgot this
+            // one, so the union simply shrinks. Recomputing rather than
+            // clearing is what keeps the *other* clients streaming.
+            state.recompute_streams();
+
+            if state.primary == Some(session) {
+                // Hand the wheel to whoever is left, preferring a session that
+                // can actually use it. Without this the desktop would keep
+                // running with nobody able to move a window.
+                state.primary = state
+                    .sessions
+                    .iter()
+                    .find(|(_, s)| s.permissions.may_interact())
+                    .map(|(id, _)| *id);
+                if let Some(next) = state.primary {
+                    state.send_to_session(next, ToShell::Role { primary: true });
+                    // It has been following someone else's arrangement, so it
+                    // needs the window list to build its own from.
+                    let hello = state.hello(next);
+                    state.send_to_session(next, hello);
+                }
+            }
+
+            if state.sessions.is_empty() {
+                state.layout.set_mode(Mode::Safe);
+                // Fall back immediately rather than leaving the last
+                // shell-declared layout frozen on screen, which looks like a
+                // hang.
+                state.apply_safe_mode();
+                tracing::info!("last shell gone, back to safe mode");
+            } else {
+                state.announce_peers();
+                tracing::info!("session {session} left; {} left", state.sessions.len());
+            }
+        }
+
+        ShellEvent::Message(session, message) => {
             // Enforced here, at the one point every shell message passes
             // through, rather than at each handler. A permission checked in
             // nine places is a permission that will be missing from the tenth.
-            if !permitted(state, &message) {
+            if !permitted(state, session, &message) {
                 tracing::debug!(
-                    "dropped {} from {}, which may not interact",
+                    "dropped {} from session {session}, which may not do that",
                     kind_of(&message),
-                    state.account
                 );
                 return;
             }
-            handle_shell_message(state, message)
+            handle_shell_message(state, session, message)
         }
     }
 }
 
-/// Whether the connected session is allowed to send this.
+/// A reconnection sooner than this after the last is a loop, not a reload.
+const RECONNECT_STORM_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
+
+fn new_session(
+    permissions: lwfa_proto::Permissions,
+    account: String,
+    device: String,
+    client: String,
+) -> state::Session {
+    state::Session {
+        permissions,
+        account,
+        device,
+        since: std::time::Instant::now(),
+        client,
+        // Unknown until the client says so in `SetStreams`. Not `false`:
+        // see `codec_for_all`.
+        codecs: None,
+        // Silent until asked. Capturing costs a process and 1.5 Mbit/s per
+        // listener, and a device that connects should not start broadcasting
+        // the room because it happened to open a page.
+        audio: false,
+        opus: false,
+    }
+}
+
+/// Whether this session is allowed to send this.
 ///
-/// Read-only traffic is always fine: laying windows out and asking for pixels
-/// is what a viewer *is*. Anything that reaches the machine underneath, whether
-/// by typing into it, clicking on it, closing something or starting something,
-/// requires interact.
+/// A thin lookup around [`allowed`], which holds the actual rule and is pure so
+/// it can be tested. This is a security boundary, and a security boundary that
+/// can only be exercised by standing up a compositor is a security boundary
+/// nobody exercises.
 #[cfg_attr(test, allow(dead_code))]
-fn permitted(state: &Lwfa, message: &ToEngine) -> bool {
+fn permitted(state: &Lwfa, session: lwfa_proto::SessionId, message: &ToEngine) -> bool {
+    // No session, no authority. This is the state between a socket closing and
+    // the compositor hearing about it, and it must fail closed.
+    let Some(who) = state.sessions.get(&session) else {
+        return false;
+    };
+    allowed(who, state.primary == Some(session), message)
+}
+
+/// The rule itself.
+///
+/// Read-only traffic is always fine: asking for pixels is what a viewer *is*.
+/// Anything that reaches the machine underneath, whether by typing into it,
+/// clicking on it, closing something or starting something, requires interact.
+///
+/// Layout is separate again, and gated on being *primary* rather than on
+/// permissions. Not because a follower is untrusted, but because a window has
+/// exactly one size: two devices pushing their own arrangements would each undo
+/// the other's, forever.
+fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
     match message {
-        // Layout and streaming are the viewer's own business: they decide what
-        // their screen shows, not what the machine does.
-        ToEngine::SetLayout { .. }
+        // Streaming is the viewer's own business: they decide what their own
+        // screen shows, not what the machine does.
+        //
+        // Audio is listed here rather than behind interact for the same reason
+        // pixels are: a view-only session exists to watch the machine, and a
+        // desktop you can see but not hear is a strange half-thing. Anyone with
+        // a session can already see every window; hearing them is not a
+        // separate escalation. Whether to hand out a session at all is the
+        // decision, and that is what accounts are for.
+        ToEngine::SetAudio { .. }
         | ToEngine::SetStreams { .. }
         | ToEngine::FocusWindow { .. }
         | ToEngine::ListApps
-        | ToEngine::SetViewport { .. }
         | ToEngine::RequestIcons { .. } => true,
 
+        ToEngine::SetLayout { .. } | ToEngine::SetViewport { .. } => is_primary,
+
+        // Taking the wheel needs the right to use it.
+        ToEngine::TakeControl => who.permissions.may_interact(),
+
+        // Deciding who else is on your desktop is the owner's alone. Not
+        // gated on interact: a named account with full interact rights still
+        // must not be able to kick the owner off their own machine.
+        ToEngine::EndSession { .. } | ToEngine::SetSessionMode { .. } => who.account == "owner",
+
         // Administering accounts is the owner's alone, and is refused out loud
-        // rather than dropped: the UI is waiting on a reply.
+        // rather than dropped: the UI is waiting on a reply. See
+        // `accounts_for_owner`.
         ToEngine::ListAccounts
         | ToEngine::CreateAccount { .. }
         | ToEngine::UpdateAccount { .. }
         | ToEngine::DeleteAccount { .. } => true,
 
         // Launching is gated twice: on interact, and on the app list.
-        ToEngine::Spawn { command, .. } => {
-            state.permissions.may_interact() && state.may_spawn(command)
+        ToEngine::Spawn { command, .. } | ToEngine::CloseAndSpawn { command, .. } => {
+            who.permissions.may_interact() && Lwfa::may_spawn(&who.permissions, command)
         }
 
+        // A controller is input, so it needs the same right as a keypress.
+        ToEngine::SetGamepad { .. }
+        | ToEngine::GamepadButton { .. }
+        | ToEngine::GamepadAxis { .. } => who.permissions.may_interact(),
+
         // Everything else drives the machine.
-        _ => state.permissions.may_interact(),
+        _ => who.permissions.may_interact(),
     }
 }
 
 fn kind_of(message: &ToEngine) -> &'static str {
     match message {
         ToEngine::Spawn { .. } => "spawn",
+        ToEngine::CloseAndSpawn { .. } => "closeAndSpawn",
         ToEngine::CloseWindow { .. } => "closeWindow",
         ToEngine::Key { .. } => "key",
         ToEngine::PointerButton { .. } | ToEngine::PointerMotion { .. } => "pointer",
@@ -408,7 +607,7 @@ fn kind_of(message: &ToEngine) -> &'static str {
     }
 }
 
-fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
+fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, message: ToEngine) {
     match message {
         ToEngine::SetLayout { windows, animate } => {
             let configures = state.layout.apply(
@@ -418,6 +617,11 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             );
             state.send_configures(configures);
             state.apply_layout();
+            // Everyone else is following this arrangement rather than deciding
+            // their own, so they have to be told what it is. Only the primary
+            // reaches this arm; `permitted` dropped the rest.
+            state.broadcast_layout(session, &windows);
+            state.last_layout = windows;
         }
         ToEngine::FocusWindow { id } => {
             // notify_shell false: the shell asked for this, so echoing it
@@ -449,8 +653,14 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
                 return;
             }
             state.viewport_override = Some((width, height, scale));
-            if let Some(resize) = state.resize_output.clone() {
-                resize(state, width, height, scale);
+            match state.resize_output.clone() {
+                Some(resize) => {
+                    tracing::debug!("session {session} set the viewport to {width}x{height}@{scale}");
+                    resize(state, width, height, scale);
+                }
+                // Only the TTY backend, which owns a real display and cannot be
+                // asked to be another shape.
+                None => tracing::debug!("backend cannot resize; ignoring the viewport"),
             }
         }
 
@@ -486,8 +696,149 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             );
             state.send_to_shell(lwfa_proto::ToShell::AppIcons { icons });
         }
-        ToEngine::SetStreams { windows, h264 } => {
-            // Total, like SetLayout: anything not listed stops streaming.
+        ToEngine::TakeControl => {
+            if state.primary == Some(session) {
+                return; // already driving
+            }
+            let previous = state.primary.replace(session);
+            tracing::info!("session {session} took control from {previous:?}");
+            // The new driver has been following someone else's arrangement, so
+            // it has no strip of its own to push. `Hello` carries the window
+            // list it needs to build one.
+            let hello = state.hello(session);
+            state.send_to_session(session, hello);
+            // Whoever just lost the wheel has to start following, and needs the
+            // arrangement to follow.
+            if let Some(old) = previous {
+                state.send_layout_to(old);
+            }
+            state.announce_peers();
+        }
+
+        ToEngine::EndSession { session: target } => {
+            if target == session {
+                // Kicking yourself is never what you meant, and on a machine
+                // you are holding it is a way to lock yourself out.
+                return;
+            }
+            tracing::info!("session {session} disconnected session {target}");
+            if let Some(shell) = state.shell.as_ref() {
+                shell.evict(target, false);
+            }
+            // The rest follows from the socket closing: the accept thread
+            // reports it and `Disconnected` reassigns primary if it has to.
+        }
+
+        ToEngine::SetSessionMode {
+            session: target,
+            mode,
+        } => {
+            if target == session {
+                return; // same reason as above
+            }
+            let Some(who) = state.sessions.get_mut(&target) else {
+                return;
+            };
+            who.permissions.mode = mode;
+            let downgraded = !who.permissions.may_interact();
+
+            // A session that can no longer interact cannot go on deciding
+            // layout: it has just lost the right to move anything, so leaving
+            // it primary would freeze the arrangement for everyone.
+            if downgraded && state.primary == Some(target) {
+                state.primary = state
+                    .sessions
+                    .iter()
+                    .find(|(id, s)| **id != target && s.permissions.may_interact())
+                    .map(|(id, _)| *id);
+                if let Some(next) = state.primary {
+                    let hello = state.hello(next);
+                    state.send_to_session(next, hello);
+                }
+            }
+
+            // Its own `Hello` again, because permissions are what the shell
+            // greys its controls from and it has to see the change.
+            let hello = state.hello(target);
+            state.send_to_session(target, hello);
+            if state.primary != Some(target) {
+                state.send_layout_to(target);
+            }
+            state.announce_peers();
+            tracing::info!("session {session} set session {target} to {mode:?}");
+        }
+
+        ToEngine::SetGamepad { enabled } => {
+            // Each client gets its own device, so this only ever touches the
+            // asking session's. Nobody can unplug anybody else's controller.
+            if enabled == state.gamepads.contains_key(&session) {
+                return;
+            }
+            if !enabled {
+                // Dropping it releases every button first; see `VirtualPad`.
+                state.gamepads.remove(&session);
+                tracing::info!("session {session} put its controller down");
+                return;
+            }
+            match crate::gamepad::VirtualPad::open() {
+                Ok(pad) => {
+                    state.gamepads.insert(session, pad);
+                    tracing::info!(
+                        "session {session} picked up a controller; {} in play",
+                        state.gamepads.len()
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!("no virtual controller: {err}");
+                    state.send_to_session(
+                        session,
+                        ToShell::Error {
+                            request: "setGamepad".into(),
+                            message: err.to_string(),
+                        },
+                    );
+                }
+            }
+        }
+
+        ToEngine::GamepadButton { button, pressed } => {
+            let (Some(pad), Some(button)) = (
+                state.gamepads.get(&session),
+                lwfa_proto::GamepadButton::from_index(button),
+            ) else {
+                return;
+            };
+            pad.button(button, pressed);
+        }
+
+        ToEngine::GamepadAxis { axis, value } => {
+            let (Some(pad), Some(axis)) = (
+                state.gamepads.get(&session),
+                lwfa_proto::GamepadAxis::from_index(axis),
+            ) else {
+                return;
+            };
+            pad.axis(axis, value);
+        }
+
+        ToEngine::SetAudio { enabled, local, opus } => {
+            if let Some(who) = state.sessions.get_mut(&session) {
+                who.audio = enabled;
+                who.opus = opus;
+            }
+            // Machine-wide rather than per session: there is one set of
+            // speakers, so the last session to express a preference wins.
+            state.audio_sink.set_local_playback(local);
+            if let Some(shell) = state.shell.as_ref() {
+                shell.clients().set_audio(session, enabled);
+            }
+            state.sync_audio_capture();
+        }
+
+        ToEngine::SetStreams { windows, codecs } => {
+            // Per connection, not global: a phone and a tablet are looking at
+            // different parts of the same strip, so what each can see is its
+            // own answer. The engine captures the union.
             let next: std::collections::HashSet<_> = windows.into_iter().collect();
             // Force a fresh, self-contained frame for every window named
             // here, not just newly-added ones.
@@ -504,14 +855,25 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             for id in &next {
                 state.capture.invalidate(*id);
             }
-            if let Some(worker) = state.encoders.as_ref() {
-                worker.set_client_supports_h264(h264);
+            if let Some(who) = state.sessions.get_mut(&session) {
+                who.codecs = Some(codecs);
             }
+            // One encode is shared by everyone watching a window, so the format
+            // is decided by the least capable client rather than by whoever
+            // spoke last. See `codec_for_all`.
+            let codec_for_all = state.codec_for_all();
             if let Some(worker) = state.encoders.as_ref() {
+                worker.set_codec(codec_for_all);
                 worker.request_keyframes();
             }
-            state.streaming = next;
-            tracing::debug!("streaming {} window(s)", state.streaming.len());
+            if let Some(shell) = state.shell.as_ref() {
+                shell.clients().set_streams(session, next);
+            }
+            state.recompute_streams();
+            tracing::debug!(
+                "session {session} streaming; {} window(s) captured in total",
+                state.streaming.len()
+            );
         }
         ToEngine::PointerMotion { window, x, y } => state.remote_pointer_motion(window, x, y),
         ToEngine::PointerButton { button, pressed } => state.remote_pointer_button(button, pressed),
@@ -527,10 +889,70 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
         ToEngine::Spawn { command, terminal } => {
             // Reaching here means `permitted` already checked both interact and
             // the account's application list.
+            //
+            // An application already running on the host would not start a
+            // second copy: it would hand the request to the copy that is
+            // running and raise a window on the other screen, which from here
+            // looks like the launch doing nothing. Say so instead. See
+            // `outside`.
+            if let Some(other) = state.running_outside(&command) {
+                tracing::info!(
+                    "{} is already running outside this session as pid {}",
+                    other.program,
+                    other.pid
+                );
+                state.send_to_session(
+                    session,
+                    ToShell::AlreadyRunning {
+                        command,
+                        terminal,
+                        program: other.program,
+                        pid: other.pid,
+                    },
+                );
+                return;
+            }
             state.spawn(&command, terminal);
         }
 
-        ToEngine::ListAccounts => match state.accounts_for_owner("listAccounts") {
+        ToEngine::CloseAndSpawn {
+            command,
+            terminal,
+            pid,
+            force,
+        } => {
+            // Only ever reached after somebody was asked; see `AlreadyRunning`.
+            //
+            // Checked again rather than trusting the pid the shell sent back:
+            // the process may have exited in between, and pids are reused, so
+            // signalling a stale one could hit something else entirely.
+            let Some(other) = state.running_outside(&command) else {
+                // Already gone. Do what was actually wanted.
+                state.spawn(&command, terminal);
+                return;
+            };
+            if other.pid != pid {
+                tracing::warn!(
+                    "asked to close pid {pid} but {} is now pid {}; not signalling",
+                    other.program,
+                    other.pid
+                );
+                state.send_to_session(
+                    session,
+                    ToShell::AlreadyRunning {
+                        command,
+                        terminal,
+                        program: other.program,
+                        pid: other.pid,
+                    },
+                );
+                return;
+            }
+
+            state.close_outside_then_spawn(session, command, terminal, other, force);
+        }
+
+        ToEngine::ListAccounts => match state.accounts_for_owner(session, "listAccounts") {
             Ok(db) => {
                 let accounts = db
                     .lock()
@@ -553,7 +975,7 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             name,
             password,
             permissions,
-        } => match state.accounts_for_owner("createAccount") {
+        } => match state.accounts_for_owner(session, "createAccount") {
             Ok(db) => {
                 let result = db
                     .lock()
@@ -580,7 +1002,7 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             id,
             permissions,
             password,
-        } => match state.accounts_for_owner("updateAccount") {
+        } => match state.accounts_for_owner(session, "updateAccount") {
             Ok(db) => {
                 let result = db
                     .lock()
@@ -604,7 +1026,7 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             Err(refusal) => state.send_to_shell(refusal),
         },
 
-        ToEngine::DeleteAccount { id } => match state.accounts_for_owner("deleteAccount") {
+        ToEngine::DeleteAccount { id } => match state.accounts_for_owner(session, "deleteAccount") {
             Ok(db) => {
                 if let Ok(db) = db.lock() {
                     let _ = db.delete(id);
@@ -613,5 +1035,182 @@ fn handle_shell_message(state: &mut Lwfa, message: ToEngine) {
             }
             Err(refusal) => state.send_to_shell(refusal),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lwfa_proto::{Permissions, SessionMode, WindowId};
+
+    fn session(mode: SessionMode) -> state::Session {
+        state::Session {
+            permissions: Permissions {
+                mode,
+                allowed_apps: None,
+            },
+            account: "someone".into(),
+            device: "iPad".into(),
+            since: std::time::Instant::now(),
+            client: "test-client".into(),
+            codecs: Some(vec![lwfa_proto::Codec::H264]),
+            audio: false,
+            opus: false,
+        }
+    }
+
+    fn key() -> ToEngine {
+        ToEngine::Key {
+            key: 30,
+            pressed: true,
+        }
+    }
+
+    fn set_layout() -> ToEngine {
+        ToEngine::SetLayout {
+            windows: Vec::new(),
+            animate: None,
+        }
+    }
+
+    #[test]
+    fn a_viewer_may_watch_but_not_touch() {
+        let viewer = session(SessionMode::View);
+        assert!(allowed(
+            &viewer,
+            false,
+            &ToEngine::SetStreams {
+                windows: vec![WindowId(1)],
+                codecs: vec![lwfa_proto::Codec::H264],
+            }
+        ));
+        assert!(!allowed(&viewer, false, &key()));
+        assert!(!allowed(
+            &viewer,
+            false,
+            &ToEngine::CloseWindow { id: WindowId(1) }
+        ));
+    }
+
+    #[test]
+    fn a_viewer_may_not_take_control() {
+        // Otherwise view-only would be one button press from interact, which
+        // would make the whole permission decorative.
+        assert!(!allowed(
+            &session(SessionMode::View),
+            false,
+            &ToEngine::TakeControl
+        ));
+        assert!(allowed(
+            &session(SessionMode::Interact),
+            false,
+            &ToEngine::TakeControl
+        ));
+    }
+
+    #[test]
+    fn only_the_primary_declares_layout() {
+        let full = session(SessionMode::Interact);
+        assert!(allowed(&full, true, &set_layout()));
+        assert!(!allowed(&full, false, &set_layout()));
+    }
+
+    #[test]
+    fn only_the_primary_resizes_the_output() {
+        // Two devices reporting their own viewports would resize the
+        // compositor back and forth forever, taking every window with it.
+        let message = ToEngine::SetViewport {
+            width: 1194,
+            height: 834,
+            scale: 2.0,
+        };
+        let full = session(SessionMode::Interact);
+        assert!(allowed(&full, true, &message));
+        assert!(!allowed(&full, false, &message));
+    }
+
+    #[test]
+    fn a_follower_still_streams_and_still_types() {
+        // A follower is not a spectator. Only *layout* is denied to it.
+        let full = session(SessionMode::Interact);
+        assert!(allowed(&full, false, &key()));
+        assert!(allowed(
+            &full,
+            false,
+            &ToEngine::SetStreams {
+                windows: vec![WindowId(2)],
+                codecs: vec![],
+            }
+        ));
+    }
+
+    #[test]
+    fn only_the_owner_manages_other_sessions() {
+        // A named account with full interact rights can use the machine. It
+        // must not be able to kick the owner off it.
+        let mut guest = session(SessionMode::Interact);
+        guest.account = "guest".into();
+        let mut owner = session(SessionMode::Interact);
+        owner.account = "owner".into();
+
+        let kick = ToEngine::EndSession { session: 2 };
+        assert!(!allowed(&guest, true, &kick));
+        assert!(allowed(&owner, false, &kick));
+
+        let demote = ToEngine::SetSessionMode {
+            session: 2,
+            mode: SessionMode::View,
+        };
+        assert!(!allowed(&guest, true, &demote));
+        assert!(allowed(&owner, false, &demote));
+    }
+
+    /// A `Lwfa` is far too heavy to build in a unit test, so the format rule
+    /// is exercised through the same shape it uses: a set of sessions and
+    /// their declared capability.
+    fn decides_h264(answers: &[Option<bool>]) -> bool {
+        let mut answered = answers.iter().copied().flatten().peekable();
+        answered.peek().is_some() && answered.all(|yes| yes)
+    }
+
+    #[test]
+    fn a_client_that_has_not_answered_does_not_force_jpeg() {
+        // The bug this pins: a session starts with its capability unknown, and
+        // counting unknown as "cannot" flipped the whole session to JPEG for
+        // the moment between a client connecting and its first SetStreams.
+        // Every flip clears all NVENC sessions, which cost 90-160ms each to
+        // rebuild, so a page refresh stalled the encoder for seconds.
+        assert!(decides_h264(&[Some(true), None]));
+        assert!(decides_h264(&[None, Some(true), None]));
+    }
+
+    #[test]
+    fn one_client_that_cannot_decode_still_decides_for_everyone() {
+        // One encode is shared, so the least capable client that has actually
+        // answered sets the format.
+        assert!(!decides_h264(&[Some(true), Some(false)]));
+        assert!(!decides_h264(&[Some(false)]));
+    }
+
+    #[test]
+    fn nobody_answering_means_no_hardware_encode() {
+        // Guessing H.264 for a client that has not said would leave a browser
+        // with no VideoDecoder showing blank windows.
+        assert!(!decides_h264(&[]));
+        assert!(!decides_h264(&[None, None]));
+    }
+
+    #[test]
+    fn an_empty_app_list_permits_nothing() {
+        let mut restricted = session(SessionMode::Interact);
+        restricted.permissions.allowed_apps = Some(Vec::new());
+        assert!(!allowed(
+            &restricted,
+            true,
+            &ToEngine::Spawn {
+                command: "xterm".into(),
+                terminal: false,
+            }
+        ));
     }
 }
