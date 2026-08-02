@@ -233,12 +233,30 @@ function UploadPane({
       {request.uploads.length > 0 ? (
         <ul className="space-y-1 text-sm">
           {request.uploads.map((row, index) => (
-            <li key={index} className="flex items-center gap-2 rounded-md border px-2.5 py-2">
-              <FileIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-              <span className="min-w-0 flex-1 truncate">{row.name}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">
-                {row.ok === undefined ? "Sending…" : row.ok ? "On the desktop" : "Failed"}
-              </span>
+            <li key={index} className="space-y-1.5 rounded-md border px-2.5 py-2">
+              <div className="flex items-center gap-2">
+                <FileIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                <span className="min-w-0 flex-1 truncate">{row.name}</span>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                  {row.ok === undefined
+                    ? row.size > 0
+                      ? `${Math.floor((row.sent / row.size) * 100)}%`
+                      : "Sending…"
+                    : row.ok
+                      ? "On the desktop"
+                      : "Failed"}
+                </span>
+              </div>
+              {/* A visible bar, because a large file over wifi takes real
+                * minutes and a spinner-shaped word reads as a hang. */}
+              {row.ok === undefined && row.size > 0 ? (
+                <div className="h-1 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-[width] duration-200"
+                    style={{ width: `${Math.min(100, (row.sent / row.size) * 100)}%` }}
+                  />
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>

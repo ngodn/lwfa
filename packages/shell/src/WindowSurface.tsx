@@ -160,7 +160,15 @@ export const WindowSurface = memo(function WindowSurface({
 
     const ctx = el.getContext("2d", { alpha: false })
     if (!ctx) return
-    ctx.drawImage(frame, 0, 0)
+    try {
+      ctx.drawImage(frame, 0, 0)
+    } catch {
+      // The stored bitmap can be detached by the time a *remount* repaints
+      // it (the decoder closes old frames; error recovery and dev reloads
+      // remount surfaces). A missed repaint costs one stale frame until the
+      // next arrives; the throw was taking down the entire shell.
+      return
+    }
 
     // Measure what the engine actually sent, when asked to. Off by default and
     // free when off; see `captureProbe`. Rate limited because a window being

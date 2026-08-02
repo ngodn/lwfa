@@ -30,6 +30,10 @@ import { FILE_TAG, type DirEntry, type ToShell } from "@lwfa/proto"
 /** One upload row in the dialog: pending until the engine confirms. */
 export interface UploadRow {
   name: string
+  /** Total bytes, for the progress readout. */
+  size: number
+  /** Bytes accepted by the socket so far. */
+  sent: number
   /** Undefined while in flight; the engine's verdict when done. */
   ok?: boolean
 }
@@ -94,10 +98,17 @@ export function fileMessage(message: ToShell): boolean {
       return true
     case "uploaded":
       if (active?.request === message.request) {
+        // Positional, not by name: uploads within a request are strictly
+        // sequential, and the engine's name is the *final* one, which
+        // differs from ours whenever a collision was renamed. Matching on
+        // names left a renamed upload "Sending…" forever.
+        const index = active.uploads.findIndex((row) => row.ok === undefined)
         active = {
           ...active,
-          uploads: active.uploads.map((row) =>
-            row.ok === undefined && row.name === message.name ? { ...row, ok: message.ok } : row,
+          uploads: active.uploads.map((row, i) =>
+            i === index
+              ? { ...row, name: message.name || row.name, ok: message.ok, sent: row.size }
+              : row,
           ),
         }
         emit()
@@ -127,11 +138,21 @@ const CHUNK = 64 * 1024
 /** Pause the upload while more than this much is queued unsent. */
 const HIGH_WATER = 512 * 1024
 
+/** Publish progress at most this often: smooth enough, cheap enough. */
+const PROGRESS_EVERY_MS = 200
+
 /**
  * Stream one file up the socket under the active request.
  *
  * Announce, chunks, done: see the protocol docs. Paced by `bufferedAmount`
  * so the socket's queue stays shallow enough for keystrokes to interleave.
+ *
+ * Streamed off the file, never loaded whole: a screen recording from a
+ * phone is hundreds of megabytes, and `arrayBuffer()` on that either
+ * stalls the tab or gets the page killed on exactly the devices this
+ * feature exists for. Progress is published as bytes go, because a
+ * megabyte-a-second upload with no counter is indistinguishable from a
+ * hang, and was reported as one.
  */
 export async function uploadFile(
   sink: UploadSink,
@@ -140,7 +161,12 @@ export async function uploadFile(
   file: File,
 ): Promise<void> {
   if (active?.request !== request) return
-  active = { ...active, uploads: [...active.uploads, { name: file.name }], uploading: true }
+  active = {
+    ...active,
+    uploads: [...active.uploads, { name: file.name, size: file.size, sent: 0 }],
+    uploading: true,
+  }
+  const row = active.uploads.length - 1
   emit()
 
   send({ type: "fileUpload", request, name: file.name, size: file.size })
@@ -149,19 +175,62 @@ export async function uploadFile(
   header[0] = FILE_TAG
   new DataView(header.buffer).setBigUint64(1, BigInt(request), true)
 
-  const buffer = await file.arrayBuffer()
-  for (let offset = 0; offset < buffer.byteLength; offset += CHUNK) {
+  let sent = 0
+  let published = 0
+  const progress = (force: boolean) => {
+    const now = Date.now()
+    if (!force && now - published < PROGRESS_EVERY_MS) return
+    published = now
+    if (active?.request !== request) return
+    active = {
+      ...active,
+      uploads: active.uploads.map((r, i) => (i === row ? { ...r, sent } : r)),
+    }
+    emit()
+  }
+
+  const ship = async (bytes: Uint8Array): Promise<boolean> => {
     // Backpressure: the socket also carries the user's keystrokes.
     while (sink.bufferedAmount() > HIGH_WATER) {
       await new Promise((resolve) => setTimeout(resolve, 50))
-      if (active?.request !== request) return // dialog closed mid-upload
+      if (active?.request !== request) return false // dialog closed mid-upload
     }
-    const slice = new Uint8Array(buffer, offset, Math.min(CHUNK, buffer.byteLength - offset))
-    const framed = new Uint8Array(header.length + slice.length)
+    const framed = new Uint8Array(header.length + bytes.length)
     framed.set(header)
-    framed.set(slice, header.length)
+    framed.set(bytes, header.length)
     sink.sendBinary(framed)
+    sent += bytes.length
+    progress(false)
+    return true
   }
+
+  if (typeof file.stream === "function") {
+    const reader = file.stream().getReader()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        // Re-chunked: the reader hands whatever it likes, the wire wants
+        // pieces small enough to interleave with input.
+        for (let offset = 0; offset < value.byteLength; offset += CHUNK) {
+          const slice = value.subarray(offset, Math.min(offset + CHUNK, value.byteLength))
+          if (!(await ship(slice))) return
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  } else {
+    // The one environment without Blob.stream gets the memory-hungry path
+    // rather than no path.
+    const buffer = await file.arrayBuffer()
+    for (let offset = 0; offset < buffer.byteLength; offset += CHUNK) {
+      const slice = new Uint8Array(buffer, offset, Math.min(CHUNK, buffer.byteLength - offset))
+      if (!(await ship(slice))) return
+    }
+  }
+
+  progress(true)
   send({ type: "fileUploadDone", request })
 
   if (active?.request === request) {
