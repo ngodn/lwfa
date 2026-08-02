@@ -45,6 +45,7 @@ import { setArrange } from "@/lib/arrange"
 import { pendingKeys, usePendingPrefix } from "@/lib/pending"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
@@ -316,45 +317,49 @@ const WindowItem = memo(function WindowItem({
       </div>
 
       {/* Mounted only while open, so a list of twenty windows is not also
-        * twenty hidden action panels. */}
+        * twenty hidden action panels.
+        *
+        * Two dense lines rather than the old stack of labelled sections: the
+        * grid of labelled buttons, a width section and a workspace section
+        * made every expansion five rows tall, which on a phone pushed the
+        * rest of the list off the sheet. Icons carry the actions (with
+        * tooltips and labels for the screen reader), the width presets sit on
+        * the same line, and everything wraps, so a narrow sheet gets more
+        * lines rather than clipped controls. Targets stay 44px throughout.
+        *
+        * No per-window pause here any more: whether inactive windows stream
+        * is one global choice, in Settings under Stream. A per-row toggle
+        * fought with it and made "why is this window frozen" a two-place
+        * question. */}
       {open ? (
-        <div className="space-y-2 border-t bg-muted/30 px-2.5 py-2.5">
-          <div className="grid grid-cols-2 gap-1.5">
-            <Action
-              icon={fullscreen ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
+        <div className="space-y-1.5 border-t bg-muted/30 px-2.5 py-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <IconAction
+              label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
               onClick={() => act(actions.toggleFullscreen)}
             >
-              {fullscreen ? "Exit fullscreen" : "Fullscreen"}
-            </Action>
-            <Action
-              icon={<ArrowLeftToLine aria-hidden />}
+              {fullscreen ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
+            </IconAction>
+            <IconAction
+              label="Stack onto the column to the left"
               disabled={row.column === 0}
               onClick={() => act(actions.consume)}
             >
-              Stack left
-            </Action>
-            <Action
-              icon={<ArrowRightToLine aria-hidden />}
+              <ArrowLeftToLine aria-hidden />
+            </IconAction>
+            <IconAction
+              label="Move into its own column"
               disabled={row.height < 2}
               onClick={() => act(actions.expel)}
             >
-              Own column
-            </Action>
-            {/* No per-window pause here any more: whether inactive windows
-              * stream is one global choice, in Settings under Stream. A
-              * per-row toggle fought with it and made "why is this window
-              * frozen" a two-place question. */}
-            <Action
-              icon={<X aria-hidden />}
-              danger
-              onClick={() => actions.closeWindow(row.id)}
-            >
-              Close
-            </Action>
-          </div>
+              <ArrowRightToLine aria-hidden />
+            </IconAction>
+            <IconAction label="Close" danger onClick={() => actions.closeWindow(row.id)}>
+              <X aria-hidden />
+            </IconAction>
 
-          <div className="space-y-1.5">
-            <Field label="Column width" />
+            <span aria-hidden className="mx-0.5 h-6 w-px shrink-0 bg-border" />
+
             <ToggleGroup
               type="single"
               value={String(row.width)}
@@ -362,11 +367,17 @@ const WindowItem = memo(function WindowItem({
                 if (value) actions.setColumnWidth(row.id, Number(value))
               }}
               variant="outline"
-              className="w-full"
+              aria-label="Column width"
+              className="flex-1"
             >
               {WIDTH_PRESETS.map((fraction, index) => (
-                <ToggleGroupItem key={index} value={String(index)} className="h-11 flex-1">
-                  {Math.round(fraction * 100)}%
+                <ToggleGroupItem
+                  key={index}
+                  value={String(index)}
+                  className="h-11 min-w-10 flex-1 px-1 text-xs tabular-nums"
+                  aria-label={`${Math.round(fraction * 100)}% wide`}
+                >
+                  {Math.round(fraction * 100)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
@@ -385,53 +396,63 @@ const SendTo = memo(function SendTo({ id }: { id: WindowId }) {
   const actions = useSessionActions()
 
   return (
-    <div className="space-y-1.5">
-      <Field label="Send to workspace" />
-      <div className="flex flex-wrap gap-1.5">
-        {strip.workspaces.map((_, index) => (
-          <Button
-            key={index}
-            size="sm"
-            variant="outline"
-            className="h-11 min-w-11"
-            disabled={index === strip.focus}
-            onClick={() => actions.sendToWorkspace(id, index)}
-          >
-            {index + 1}
-          </Button>
-        ))}
-      </div>
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="pr-1 text-xs text-muted-foreground">Send to</span>
+      {strip.workspaces.map((_, index) => (
+        <Button
+          key={index}
+          size="sm"
+          variant="outline"
+          className="h-11 min-w-11"
+          disabled={index === strip.focus}
+          aria-label={`Send to workspace ${index + 1}`}
+          onClick={() => actions.sendToWorkspace(id, index)}
+        >
+          {index + 1}
+        </Button>
+      ))}
     </div>
   )
 })
 
-function Action({
-  icon,
+/**
+ * An icon-sized action with its label in a tooltip and on the accessibility
+ * tree. Icon-only is what buys the compact row; the label is one hover (or
+ * one screen-reader stop) away, and the icons are the same ones the old
+ * labelled buttons wore, so nothing has to be relearned.
+ */
+function IconAction({
+  label,
   danger,
   disabled,
   onClick,
   children,
 }: {
-  icon: React.ReactNode
+  label: string
   danger?: boolean
   disabled?: boolean
   onClick: () => void
   children: React.ReactNode
 }) {
   return (
-    <Button
-      size="sm"
-      variant="outline"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "h-11 justify-start gap-2 [&>svg]:size-4",
-        danger && "text-destructive hover:bg-destructive hover:text-destructive-foreground",
-      )}
-    >
-      {icon}
-      {children}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon"
+          variant="outline"
+          disabled={disabled}
+          onClick={onClick}
+          aria-label={label}
+          className={cn(
+            "size-11 shrink-0 [&>svg]:size-4",
+            danger && "text-destructive hover:bg-destructive hover:text-destructive-foreground",
+          )}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }
 
