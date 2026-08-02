@@ -51,7 +51,7 @@ export const ArrangeBar = memo(function ArrangeBar() {
   return (
     <div
       className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-0 z-40 flex items-center gap-2 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]",
+        "pointer-events-none absolute inset-x-0 bottom-0 z-40 flex items-center gap-2 p-4",
         "bg-gradient-to-t from-black/60 to-transparent",
       )}
     >
