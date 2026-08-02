@@ -126,6 +126,7 @@ pub struct Window {
     pub width: f64,
     pub height: f64,
     pub backdrop: [f32; 4],
+    pub preview: bool,
 }
 
 impl Default for Window {
@@ -136,6 +137,7 @@ impl Default for Window {
             width: 1280.0,
             height: 800.0,
             backdrop: [0.06, 0.06, 0.08, 1.0],
+            preview: true,
         }
     }
 }
@@ -166,6 +168,7 @@ pub struct Stream {
     pub jpeg_quality: u8,
     pub encoder_queue_depth: usize,
     pub max_frames_in_flight: usize,
+    pub gpu_direct: bool,
 }
 
 impl Default for Stream {
@@ -176,6 +179,7 @@ impl Default for Stream {
             jpeg_quality: 70,
             encoder_queue_depth: 2,
             max_frames_in_flight: 4,
+            gpu_direct: true,
         }
     }
 }

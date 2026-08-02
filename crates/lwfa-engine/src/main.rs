@@ -20,6 +20,7 @@ mod audio;
 mod auth;
 mod capture;
 mod config;
+mod cuda;
 mod encode;
 mod focus;
 mod bitrate;

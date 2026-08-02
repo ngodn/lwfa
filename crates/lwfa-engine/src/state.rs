@@ -937,7 +937,11 @@ impl Lwfa {
         for (id, window, _) in self.layout.placements_with_ids() {
             let size = window.geometry().size.to_physical(1);
             let overlays = self.overlays_for(&window, (0, 0).into());
-            let Some(frame) = self.capture.capture(renderer, id, &window, size, &overlays) else {
+            let gpu_direct = self.config.stream.gpu_direct;
+            let Some(frame) =
+                self.capture
+                    .capture(renderer, id, &window, size, &overlays, gpu_direct)
+            else {
                 continue; // unchanged since last capture
             };
             let Some(png) = frame.to_png() else { continue };
@@ -1160,7 +1164,11 @@ impl Lwfa {
             let t0 = PROFILE.then(std::time::Instant::now);
 
             let overlays = self.overlays_for(&window, loc);
-            let Some(frame) = self.capture.capture(renderer, id, &window, size, &overlays) else {
+            let gpu_direct = self.config.stream.gpu_direct;
+            let Some(frame) =
+                self.capture
+                    .capture(renderer, id, &window, size, &overlays, gpu_direct)
+            else {
                 continue;
             };
 

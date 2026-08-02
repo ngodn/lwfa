@@ -244,7 +244,7 @@ impl Encoders {
         let Some(codec) = self.codec else {
             return false;
         };
-        match Session::new(codec, frame.width, frame.height, self.config.gop, self.rate_for(frame.id)) {
+        match Session::new(codec, frame, self.config.gop, self.rate_for(frame.id)) {
             Ok(session) => {
                 self.fallback.remove(&frame.id);
                 self.sessions.insert(frame.id, session);
@@ -288,11 +288,11 @@ fn encoder_name(codec: lwfa_proto::Codec) -> &'static str {
 impl Session {
     fn new(
         codec: lwfa_proto::Codec,
-        width: u32,
-        height: u32,
+        frame: &CapturedFrame,
         gop: u32,
         bitrate: u32,
     ) -> Result<Self, ff::Error> {
+        let (width, height) = (frame.width, frame.height);
         let wanted = codec;
         let codec = ff::encoder::find_by_name(encoder_name(codec)).ok_or(ff::Error::EncoderNotFound)?;
         let ctx = ff::codec::context::Context::new_with_codec(codec);
@@ -300,12 +300,22 @@ impl Session {
 
         enc.set_width(width);
         enc.set_height(height);
-        // RGB0: the capture's RGBA bytes, with NVENC told to ignore the alpha.
-        // The driver does the RGB-to-YUV conversion on the GPU, which is what
-        // deleted the CPU swscale stage this pipeline used to carry. The
-        // conversion NVENC applies matches the BT.601 matrix swscale used, so
-        // colours did not shift when the stage moved.
-        enc.set_format(Pixel::RGBZ);
+        if crate::cuda::is_gpu(&frame.frame) {
+            // The frame is already on the GPU: name its pool and NVENC reads
+            // it in place. Nothing crosses the bus but the bitstream.
+            enc.set_format(Pixel::CUDA);
+            if !crate::cuda::adopt_frames(&mut enc, &frame.frame) {
+                return Err(ff::Error::InvalidData);
+            }
+        } else {
+            // RGB0: the capture's RGBA bytes, with NVENC told to ignore the
+            // alpha. The driver does the RGB-to-YUV conversion on the GPU,
+            // which is what deleted the CPU swscale stage this pipeline used
+            // to carry. The conversion NVENC applies matches the BT.601
+            // matrix swscale used, so colours did not shift when the stage
+            // moved.
+            enc.set_format(Pixel::RGBZ);
+        }
         enc.set_time_base(ff::Rational(1, 60));
         // Keyframe interval, and so also the worst case wait before a newly
         // attached browser can decode anything: startup latency against

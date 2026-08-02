@@ -73,6 +73,16 @@ height = 800
 # visible and the strip reads as a strip. Linear RGBA, 0..1.
 backdrop = [0.047, 0.051, 0.063, 1.0]
 
+# Whether the nested host window shows the session.
+#
+# Turn this off when the window is parked on a hidden workspace and the
+# session is only ever watched remotely. It is more than a saving: presenting
+# to a window the host has hidden eventually blocks inside the driver waiting
+# for a buffer the host will never return, and that freeze takes the whole
+# engine with it, remote clients included. The window then just shows its
+# backdrop if anyone ever looks. `LWFA_NO_PREVIEW=1` forces it off too.
+preview = true
+
 # ---------------------------------------------------------------------------
 # Session
 # ---------------------------------------------------------------------------
@@ -92,6 +102,12 @@ xwayland = true
 # Streaming to a remote shell
 # ---------------------------------------------------------------------------
 [stream]
+# Captured windows go to the encoder without touching system RAM: the rendered
+# texture is handed to CUDA and NVENC reads it in place. Needs the NVIDIA
+# driver; on any failure the engine falls back to read-back capture on its
+# own, so turning this off only forces the fallback for debugging.
+gpu_direct = true
+
 # Concurrent NVENC sessions. Eight is the limit on consumer NVIDIA parts; the
 # ninth window degrades to JPEG rather than failing. Raise it on a card that
 # allows more, and see `crates/lwfa-engine/src/encode.rs`.

@@ -92,6 +92,10 @@ pub fn init_winit(
     let redraws = Rc::new(Cell::new(0u32));
     let ticks = Rc::new(Cell::new(0u32));
 
+    // Whether the one-time swap interval fix has run. See
+    // `never_block_on_present`.
+    let swap_never_blocks = Rc::new(Cell::new(false));
+
     let mode = Mode {
         size: backend.borrow().window_size(),
         refresh: 60_000,
@@ -177,6 +181,16 @@ pub fn init_winit(
         std::env::set_var("WAYLAND_DISPLAY", &data.socket_name);
     }
 
+    // Whether to actually show the session in the host window. See
+    // `[window] preview` in configs/defaults.toml: a window parked on a
+    // hidden workspace must not be presented to, or the driver eventually
+    // blocks the whole engine waiting for a buffer the host never returns.
+    let preview =
+        data.config.window.preview && std::env::var_os("LWFA_NO_PREVIEW").is_none();
+    if !preview {
+        tracing::info!("host window preview is off; the session is remote-only");
+    }
+
     event_loop.handle().insert_source(winit_source, {
         let apply_resize = apply_output_size.clone();
         let backend = Rc::clone(&backend);
@@ -242,9 +256,10 @@ pub fn init_winit(
                     // the rest of the frame anyway. Everything remote lives
                     // below this and does not touch the host's swapchain.
                     let now = Instant::now();
-                    let present = last_present
-                        .get()
-                        .is_none_or(|last| now.duration_since(last) >= min_present);
+                    let present = preview
+                        && last_present
+                            .get()
+                            .is_none_or(|last| now.duration_since(last) >= min_present);
 
                     if present {
                         let size = backend.window_size();
@@ -269,6 +284,12 @@ pub fn init_winit(
                                     return;
                                 }
                             };
+                            // Once, now that the surface is current: presents
+                            // must never wait for the host. See the function.
+                            if !swap_never_blocks.get() {
+                                never_block_on_present(renderer);
+                                swap_never_blocks.set(true);
+                            }
                             if let Err(err) = smithay::desktop::space::render_output::<
                                 _,
                                 WaylandSurfaceRenderElement<GlesRenderer>,
@@ -487,4 +508,29 @@ pub fn init_winit(
         })?;
 
     Ok(())
+}
+
+/// Stop `eglSwapBuffers` from ever waiting on the host compositor.
+///
+/// EGL's default swap interval is 1, and Smithay asks for a vsync-less config
+/// but never actually lowers the interval. On Wayland an interval of 1 means
+/// the swap waits for the host's frame callback, and a host that has hidden
+/// this window sends none: the whole engine froze in `ppoll` inside
+/// `eglSwapBuffersWithDamageKHR`, remote session and all, the first time it
+/// presented from a hidden workspace. Traced with `eu-stack`; the block sat
+/// in `wl_display_dispatch_queue` under the swap.
+///
+/// Interval 0 makes the swap return immediately. The host still decides what
+/// it shows; nothing tears, because the host composites, and the nested
+/// window is a preview besides. Called once, with the surface current.
+///
+/// SAFETY: the display handle is valid for the renderer's lifetime, the
+/// context and surface are current when this is called, and interval 0 is
+/// always within the range the chosen config advertises.
+#[allow(unsafe_code)]
+fn never_block_on_present(renderer: &GlesRenderer) {
+    let display = renderer.egl_context().display().get_display_handle().handle;
+    unsafe {
+        smithay::backend::egl::ffi::egl::SwapInterval(display, 0);
+    }
 }

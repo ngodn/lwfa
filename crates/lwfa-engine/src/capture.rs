@@ -104,7 +104,7 @@ impl FramePool {
             .unwrap_or_else(|| ff::frame::Video::new(ff::format::Pixel::RGBZ, width, height));
         PooledFrame {
             frame: Some(frame),
-            pool: Arc::clone(self),
+            pool: Some(Arc::clone(self)),
         }
     }
 
@@ -119,10 +119,24 @@ impl FramePool {
     }
 }
 
-/// A frame borrowed from the [`FramePool`]. Returns itself on drop.
+/// A frame borrowed from the [`FramePool`], or a GPU frame that pools itself.
+///
+/// A CUDA frame carries no `pool`: its buffer belongs to ffmpeg's hardware
+/// frame pool and dropping it is what returns it there. Only the CPU frames
+/// need this type's help.
 pub struct PooledFrame {
     frame: Option<ff::frame::Video>,
-    pool: Arc<FramePool>,
+    pool: Option<Arc<FramePool>>,
+}
+
+impl PooledFrame {
+    /// Wrap a GPU frame. See [`crate::cuda`].
+    fn gpu(frame: ff::frame::Video) -> Self {
+        Self {
+            frame: Some(frame),
+            pool: None,
+        }
+    }
 }
 
 impl Deref for PooledFrame {
@@ -140,8 +154,8 @@ impl DerefMut for PooledFrame {
 
 impl Drop for PooledFrame {
     fn drop(&mut self) {
-        if let Some(frame) = self.frame.take() {
-            self.pool.put(frame);
+        if let (Some(frame), Some(pool)) = (self.frame.take(), self.pool.as_ref()) {
+            pool.put(frame);
         }
     }
 }
@@ -170,7 +184,12 @@ struct Target {
     last_commits: Vec<CommitCounter>,
     /// At most one readback in flight per window. Issuing a second before the
     /// first is mapped would just queue GPU work nobody can consume yet.
+    /// Only the read-back path uses this; the zero-copy path returns its
+    /// frame in the same pass.
     pending: Option<Pending>,
+    /// The GL-to-CUDA bridge, when the zero-copy path is on. Rebuilt whenever
+    /// the texture is, since registration is per texture object.
+    gpu: Option<crate::cuda::GpuTarget>,
 }
 
 pub struct SurfaceCapture {
@@ -214,12 +233,16 @@ impl SurfaceCapture {
 
     /// Capture one window.
     ///
-    /// Two things happen, pipelined across calls. A readback issued on the
-    /// previous pass is mapped and returned, and if the window has committed
-    /// since it was last captured, the next readback is issued. So the frame
-    /// returned is the one whose copy the GPU has had a whole tick to finish,
-    /// and `None` means "nothing in flight and nothing changed", which for an
-    /// idle window is every call.
+    /// On the zero-copy path a changed window comes back in the same pass: the
+    /// rendered texture is copied GPU-to-GPU into a frame NVENC reads in
+    /// place, and nothing waits. On the read-back path the copy is pipelined
+    /// across calls: issued on one pass, mapped on the next, so the frame
+    /// returned is the one whose copy the GPU has had a whole tick to finish.
+    /// Either way `None` means "nothing changed", which for an idle window is
+    /// every call.
+    ///
+    /// `gpu_direct` is `[stream] gpu_direct`; the path also needs a CUDA
+    /// driver and falls back on its own the moment anything goes wrong.
     ///
     /// `size` is the window's current size in physical pixels.
     ///
@@ -234,9 +257,14 @@ impl SurfaceCapture {
         window: &Window,
         size: Size<i32, Physical>,
         overlays: &[(WlSurface, Point<i32, Logical>)],
+        gpu_direct: bool,
     ) -> Option<CapturedFrame> {
         let harvested = self.harvest(renderer, id);
-        self.issue(renderer, id, window, size, overlays);
+        if let Some(direct) = self.issue(renderer, id, window, size, overlays, gpu_direct) {
+            // The zero-copy path produced this pass's frame. Anything still
+            // parked from before the path switched is older than it.
+            return Some(direct);
+        }
         harvested
     }
 
@@ -274,7 +302,9 @@ impl SurfaceCapture {
         })
     }
 
-    /// Render the window and start reading it back, if it changed.
+    /// Render the window if it changed, then either hand it straight to CUDA
+    /// (returning the frame) or start reading it back (returning `None`, the
+    /// frame arriving via [`Self::harvest`] next pass).
     fn issue(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -282,9 +312,10 @@ impl SurfaceCapture {
         window: &Window,
         size: Size<i32, Physical>,
         overlays: &[(WlSurface, Point<i32, Logical>)],
-    ) {
+        gpu_direct: bool,
+    ) -> Option<CapturedFrame> {
         if size.w <= 0 || size.h <= 0 {
-            return;
+            return None;
         }
 
         // One readback in flight per window, checked before any of the
@@ -292,16 +323,13 @@ impl SurfaceCapture {
         // meantime keeps its commit counters, so nothing is lost: the next
         // pass sees them still unequal and issues then.
         if self.targets.get(&id).is_some_and(|t| t.pending.is_some()) {
-            return;
+            return None;
         }
 
         // Not `toplevel()`, which is `None` for an X11 window and would make
         // every X11 client stream nothing at all while still appearing in the
         // strip with the right title and geometry.
-        let Some(surface) = window.wl_surface() else {
-            return;
-        };
-        let surface = surface.into_owned();
+        let surface = window.wl_surface()?.into_owned();
 
         // Where the *window* starts inside its own surface.
         //
@@ -364,7 +392,7 @@ impl SurfaceCapture {
         {
             // Unchanged. Skipping everything below here is what makes
             // capturing many windows affordable.
-            return;
+            return None;
         }
 
         let mut elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -400,7 +428,7 @@ impl SurfaceCapture {
                     tracing::warn!("could not create a capture buffer for {id}: {err}")
                 })
             else {
-                return;
+                return None;
             };
             self.targets.insert(
                 id,
@@ -409,13 +437,12 @@ impl SurfaceCapture {
                     size,
                     last_commits: Vec::new(),
                     pending: None,
+                    gpu: None,
                 },
             );
         }
 
-        let Some(target) = self.targets.get_mut(&id) else {
-            return;
-        };
+        let target = self.targets.get_mut(&id)?;
         target.last_commits = commits;
 
         let whole = Rectangle::from_size(size);
@@ -423,7 +450,7 @@ impl SurfaceCapture {
             .bind(&mut target.texture)
             .inspect_err(|err| tracing::warn!("could not bind capture buffer for {id}: {err}"))
         else {
-            return;
+            return None;
         };
 
         {
@@ -431,15 +458,13 @@ impl SurfaceCapture {
                 .render(&mut framebuffer, size, Transform::Normal)
                 .inspect_err(|err| tracing::warn!("could not start capture render for {id}: {err}"))
             else {
-                return;
+                return None;
             };
 
             // Transparent, not black: a window with rounded corners or an
             // alpha channel has to arrive with that alpha intact, or the
             // browser cannot composite it over anything.
-            if frame.clear(Color32F::TRANSPARENT, &[whole]).is_err() {
-                return;
-            }
+            frame.clear(Color32F::TRANSPARENT, &[whole]).ok()?;
 
             // Back to front, matching how Smithay's own space renderer walks
             // elements.
@@ -452,20 +477,46 @@ impl SurfaceCapture {
                 }
             }
 
-            // The fence from `finish` is deliberately not waited on. The
-            // `ReadPixels` issued by `copy_framebuffer` below is queued on the
-            // same GL context as the draws above, and GL executes a context's
-            // commands in order, so the readback always sees the finished
-            // render; the fence answers "has the GPU caught up", which only
-            // the *map* needs, and that happens a pass later, by which point
-            // it has. The explicit wait here was a full render-length stall of
-            // the calloop thread, per window, per frame.
+            // The fence from `finish` is deliberately not waited on. On the
+            // read-back path the `ReadPixels` below is queued on the same GL
+            // context as the draws, and GL executes a context's commands in
+            // order, so the copy always sees the finished render; only the
+            // *map* needs the GPU caught up, and that happens a pass later.
+            // On the CUDA path the interop map does the synchronising.
             if let Err(err) = frame.finish() {
                 tracing::warn!("capture finish failed for {id}: {err}");
-                return;
+                return None;
             }
         }
+        drop(framebuffer);
 
+        // The zero-copy path: hand the rendered texture to CUDA and return
+        // the frame now. If the bridge cannot be built or fails, fall through
+        // to the read-back below, which owes nothing to any driver.
+        if gpu_direct && crate::cuda::available() {
+            let width = size.w as u32;
+            let height = size.h as u32;
+            let tex = target.texture.tex_id();
+            if !target.gpu.as_ref().is_some_and(|g| g.matches(tex, width, height)) {
+                target.gpu = crate::cuda::GpuTarget::new(tex, width, height);
+            }
+            if let Some(frame) = target.gpu.as_mut().and_then(crate::cuda::GpuTarget::frame) {
+                return Some(CapturedFrame {
+                    id,
+                    width,
+                    height,
+                    frame: PooledFrame::gpu(frame),
+                });
+            }
+            target.gpu = None;
+        }
+
+        let Ok(mut framebuffer) = renderer
+            .bind(&mut target.texture)
+            .inspect_err(|err| tracing::warn!("could not rebind capture buffer for {id}: {err}"))
+        else {
+            return None;
+        };
         let Ok(mapping) = renderer
             .copy_framebuffer(
                 &framebuffer,
@@ -474,7 +525,7 @@ impl SurfaceCapture {
             )
             .inspect_err(|err| tracing::warn!("could not copy capture buffer for {id}: {err}"))
         else {
-            return;
+            return None;
         };
         drop(framebuffer);
 
@@ -497,6 +548,7 @@ impl SurfaceCapture {
         // back in. `unpainted_right` and its tests are kept for whichever of
         // those comes next.
         target.pending = Some(Pending { mapping, size });
+        None
     }
 }
 
@@ -639,22 +691,27 @@ impl CapturedFrame {
         }
     }
 
-    /// The pixel rows, without the stride padding between them.
-    fn rows(&self) -> impl Iterator<Item = &[u8]> {
-        let stride = self.frame.stride(0);
-        let row_bytes = self.width as usize * 4;
-        let data = self.frame.data(0);
-        (0..self.height as usize)
-            .map(move |y| &data[y * stride..y * stride + row_bytes])
+    /// The frame with its pixels reachable from the CPU.
+    ///
+    /// A GPU frame's data pointers are device addresses; touching them from
+    /// here is a crash, not a slow path. The fallback encoders download such
+    /// a frame first, which is expensive and exactly why they are fallbacks.
+    fn cpu_pixels(&self) -> Option<std::borrow::Cow<'_, ff::frame::Video>> {
+        if crate::cuda::is_gpu(&self.frame) {
+            crate::cuda::download(&self.frame).map(std::borrow::Cow::Owned)
+        } else {
+            Some(std::borrow::Cow::Borrowed(&*self.frame))
+        }
     }
 
     /// The pixels, tightly packed RGBA. A copy; for the fallback paths only.
-    pub fn packed_rgba(&self) -> Vec<u8> {
+    pub fn packed_rgba(&self) -> Option<Vec<u8>> {
+        let frame = self.cpu_pixels()?;
         let mut out = Vec::with_capacity(self.width as usize * self.height as usize * 4);
-        for row in self.rows() {
+        for row in rows(&frame, self.width, self.height) {
             out.extend_from_slice(row);
         }
-        out
+        Some(out)
     }
 
     /// Encode as JPEG for the wire.
@@ -665,7 +722,13 @@ impl CapturedFrame {
     pub fn to_jpeg(&self, quality: u8) -> Option<Vec<u8>> {
         use image::codecs::jpeg::JpegEncoder;
 
-        let rgb = self.to_rgb();
+        let frame = self.cpu_pixels()?;
+        let mut rgb = Vec::with_capacity(self.width as usize * self.height as usize * 3);
+        for row in rows(&frame, self.width, self.height) {
+            for px in row.chunks_exact(4) {
+                rgb.extend_from_slice(&px[..3]);
+            }
+        }
         let mut out = Vec::new();
         JpegEncoder::new_with_quality(&mut out, quality)
             .encode(
@@ -689,7 +752,7 @@ impl CapturedFrame {
         let mut out = Vec::new();
         PngEncoder::new(&mut out)
             .write_image(
-                &self.packed_rgba(),
+                &self.packed_rgba()?,
                 self.width,
                 self.height,
                 image::ExtendedColorType::Rgba8,
@@ -698,17 +761,14 @@ impl CapturedFrame {
             .ok()?;
         Some(out)
     }
+}
 
-    /// Drop the alpha channel, compositing onto black.
-    fn to_rgb(&self) -> Vec<u8> {
-        let mut rgb = Vec::with_capacity(self.width as usize * self.height as usize * 3);
-        for row in self.rows() {
-            for px in row.chunks_exact(4) {
-                rgb.extend_from_slice(&px[..3]);
-            }
-        }
-        rgb
-    }
+/// The pixel rows of a CPU frame, without the stride padding between them.
+fn rows(frame: &ff::frame::Video, width: u32, height: u32) -> impl Iterator<Item = &[u8]> {
+    let stride = frame.stride(0);
+    let row_bytes = width as usize * 4;
+    let data = frame.data(0);
+    (0..height as usize).map(move |y| &data[y * stride..y * stride + row_bytes])
 }
 
 #[cfg(test)]
@@ -751,7 +811,7 @@ mod pipeline_tests {
         // the row alignment in between.
         let src = gradient(7, 4);
         let frame = CapturedFrame::for_tests(WindowId(1), 7, 4, &src);
-        assert_eq!(frame.packed_rgba(), src);
+        assert_eq!(frame.packed_rgba().expect("cpu frame"), src);
     }
 
     #[test]
