@@ -1,0 +1,133 @@
+/**
+ * Plays the PCM the engine sends, on the audio thread.
+ *
+ * # Why a worklet and not an AudioBufferSourceNode per chunk
+ *
+ * Chunks arrive every 20ms. Scheduling a node per chunk means creating and
+ * garbage-collecting fifty objects a second on the main thread and relying on
+ * `start(when)` to butt them together exactly; miss by a sample and you get a
+ * click, miss by a frame and you get a gap. A worklet runs on the audio thread,
+ * pulls from a ring buffer, and never has a seam to get wrong.
+ *
+ * # Why a ring buffer
+ *
+ * The two sides run at different rates and neither can wait for the other. The
+ * network delivers 960 frames at a time, whenever the socket happens to wake;
+ * the audio thread asks for 128 frames on a hard schedule and cannot block. A
+ * ring buffer is the only structure that lets a producer and a consumer of
+ * different sizes meet without one of them allocating on the audio thread,
+ * which is forbidden: a garbage collection there is an audible dropout.
+ *
+ * # Latency, and why it is bounded rather than minimised
+ *
+ * Playing the instant a chunk arrives would mean the smallest possible delay
+ * and a dropout on every jitter spike, because there would be nothing in hand
+ * when the next chunk was late. So playback waits until a small cushion has
+ * built up, and if the cushion grows past a ceiling (a burst after a stall, or
+ * a client whose clock runs slow) the oldest audio is discarded rather than
+ * played, because being a second behind is worse than a moment of silence: on a
+ * desktop the sound is a response to something you did, and late is wrong.
+ */
+
+/** Frames of cushion to build before starting. About 60ms at 48kHz. */
+const PREBUFFER_FRAMES = 2880
+
+/**
+ * Frames of cushion to allow before discarding. About 250ms.
+ *
+ * Generous enough to ride out normal wifi jitter, tight enough that nobody
+ * perceives the delay as lag on a key press.
+ */
+const MAX_FRAMES = 12000
+
+/** Capacity. Comfortably above the ceiling so the ring never wraps onto itself. */
+const CAPACITY = 48000
+
+class PcmPlayer extends AudioWorkletProcessor {
+  constructor() {
+    super()
+    this.channels = 2
+    // One Float32Array per channel, planar, because that is what `process`
+    // hands out and converting per callback would be work on the audio thread.
+    this.ring = [new Float32Array(CAPACITY), new Float32Array(CAPACITY)]
+    this.read = 0
+    this.write = 0
+    this.available = 0
+    /** Filling the cushion. No output until it is full. */
+    this.priming = true
+    /** Reported back so the UI can show whether audio is actually flowing. */
+    this.underruns = 0
+
+    this.port.onmessage = (event) => {
+      const data = event.data
+      if (data === "reset") {
+        this.read = 0
+        this.write = 0
+        this.available = 0
+        this.priming = true
+        return
+      }
+      if (data instanceof ArrayBuffer) this.#push(new Int16Array(data))
+    }
+  }
+
+  /** Convert interleaved 16-bit samples into the planar ring. */
+  #push(samples) {
+    const frames = Math.floor(samples.length / this.channels)
+
+    // Too far behind: drop the oldest rather than grow the delay without
+    // bound. See the note on latency above.
+    if (this.available + frames > MAX_FRAMES) {
+      const drop = this.available + frames - MAX_FRAMES
+      this.read = (this.read + drop) % CAPACITY
+      this.available -= drop
+    }
+
+    for (let i = 0; i < frames; i++) {
+      const at = (this.write + i) % CAPACITY
+      for (let c = 0; c < this.channels; c++) {
+        // 32768 rather than 32767: signed 16-bit runs to -32768, so dividing by
+        // 32767 lets a full-scale negative sample come out just past -1.0 and
+        // clip. Inaudible on most material and wrong on all of it.
+        this.ring[c][at] = samples[i * this.channels + c] / 32768
+      }
+    }
+    this.write = (this.write + frames) % CAPACITY
+    this.available += frames
+
+    if (this.priming && this.available >= PREBUFFER_FRAMES) this.priming = false
+  }
+
+  process(_inputs, outputs) {
+    const output = outputs[0]
+    if (!output || output.length === 0) return true
+    const frames = output[0].length
+
+    if (this.priming || this.available < frames) {
+      // Silence, not stale audio. Repeating the last buffer to cover a gap is
+      // a well-known trick and it sounds like a stutter; a short silence is
+      // the honest version of the same thing.
+      for (const channel of output) channel.fill(0)
+      if (!this.priming) {
+        this.underruns++
+        // Re-prime, so one late chunk does not leave playback permanently
+        // running on empty and clicking every callback.
+        this.priming = true
+        this.port.postMessage({ underruns: this.underruns })
+      }
+      return true
+    }
+
+    for (let i = 0; i < frames; i++) {
+      const at = (this.read + i) % CAPACITY
+      for (let c = 0; c < output.length; c++) {
+        output[c][i] = this.ring[Math.min(c, this.channels - 1)][at]
+      }
+    }
+    this.read = (this.read + frames) % CAPACITY
+    this.available -= frames
+    return true
+  }
+}
+
+registerProcessor("lwfa-pcm", PcmPlayer)
