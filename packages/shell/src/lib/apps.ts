@@ -70,6 +70,25 @@ export function iconsRequested(ids: string[]): void {
 const MISSING = ""
 
 /**
+ * How long a "no icon" answer is believed.
+ *
+ * A tombstone stops the shell asking the engine to resolve the same dozen
+ * absent names on every reload. Believing one forever does not: the answer
+ * depends on what the engine can resolve and on what is installed, and both
+ * change. VS Code and Zed were tombstoned when the engine dropped icons for
+ * being too large, and stayed blank afterwards even once it had learned to
+ * scale them, because nothing ever asked again. Twice in one afternoon a fix
+ * looked like it had not worked, and both times it was this.
+ *
+ * Ten minutes. It used to have to be far longer because resolving cost the
+ * engine a full walk of every installed theme, so re-asking was expensive. The
+ * engine keeps its index now, which makes a repeat request a few hash lookups
+ * and a miss cost nothing on the wire, so the only thing this still buys is
+ * not repeating the work within a single sitting.
+ */
+const TOMBSTONE_TTL_MS = 10 * 60 * 1000
+
+/**
  * Fill in from the device cache, and report which ids are still missing.
  *
  * Called as soon as the application list arrives, so the launcher paints with
@@ -77,15 +96,23 @@ const MISSING = ""
  */
 export async function hydrateIcons(ids: string[]): Promise<string[]> {
   const cached = await readCached(ids)
-  const usable = [...cached].filter(([, data]) => data !== MISSING)
+  const usable = [...cached].filter(([, entry]) => entry.data !== MISSING)
   if (usable.length > 0) {
     const merged = new Map(icons)
-    for (const [id, data] of usable) merged.set(id, objectUrlFor(id, data))
+    for (const [id, entry] of usable) merged.set(id, objectUrlFor(id, entry.data))
     icons = merged
     emit()
   }
-  // A tombstone counts as known: do not ask again.
-  return ids.filter((id) => !cached.has(id))
+
+  // A tombstone counts as known, but only while it is still fresh. See
+  // `TOMBSTONE_TTL_MS`.
+  const now = Date.now()
+  return ids.filter((id) => {
+    const entry = cached.get(id)
+    if (!entry) return true
+    if (entry.data !== MISSING) return false
+    return now - entry.at > TOMBSTONE_TTL_MS
+  })
 }
 
 /** Called when the engine answers with its application list. */

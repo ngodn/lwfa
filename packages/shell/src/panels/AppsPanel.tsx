@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { PanelSection } from "@/panels/parts"
+import { markPending, usePending } from "@/lib/pending"
 import { cn } from "@/lib/utils"
 
 function AppsPanel() {
@@ -79,7 +80,13 @@ function AppsPanel() {
                 key={app.id}
                 app={app}
                 icon={icons.get(app.id)}
-                onLaunch={() => actions.spawn(app.exec, app.terminal)}
+                onLaunch={() => {
+                  // Keyed on the command rather than the entry id, because
+                  // that is what `windowOpened` can be matched back to. See
+                  // `lib/pending` and the launch tracking in App.
+                  markPending(launchKey(app.exec), LAUNCH_TIMEOUT_MS)
+                  actions.spawn(app.exec, app.terminal)
+                }}
               />
             ))}
           </ul>
@@ -87,11 +94,29 @@ function AppsPanel() {
       )}
 
       <PanelSection title="Run a command">
-        <RunBox onRun={(command) => actions.spawn(command)} />
+        <RunBox
+          onRun={(command) => {
+            markPending(launchKey(command), LAUNCH_TIMEOUT_MS)
+            actions.spawn(command)
+          }}
+        />
       </PanelSection>
     </div>
   )
 }
+
+/**
+ * How long an application gets to put a window on screen.
+ *
+ * Generous on purpose. A cold Firefox on this machine took eight seconds from
+ * launch to first frame, and a spinner that gives up before the thing it is
+ * waiting for arrives is worse than none: it says the launch failed when it is
+ * still going.
+ */
+const LAUNCH_TIMEOUT_MS = 20_000
+
+/** The pending key for a command line. Shared with `App`, which clears it. */
+export const launchKey = (command: string) => `launch:${command}`
 
 const AppRow = memo(function AppRow({
   app,
@@ -102,6 +127,8 @@ const AppRow = memo(function AppRow({
   icon: string | undefined
   onLaunch: () => void
 }) {
+  const starting = usePending(launchKey(app.exec))
+
   return (
     // `content-visibility: auto` lets the browser skip layout and paint for
     // rows scrolled out of view. A hundred rows with an image each is enough
@@ -110,9 +137,14 @@ const AppRow = memo(function AppRow({
     <li style={{ contentVisibility: "auto", containIntrinsicSize: "auto 56px" }}>
       <button
         onClick={onLaunch}
+        disabled={starting}
+        aria-busy={starting || undefined}
         className={cn(
           "flex w-full items-center gap-3 rounded-lg border border-transparent p-2 text-left",
           "transition-colors active:bg-accent [@media(hover:hover)]:hover:bg-accent",
+          // Not `disabled:opacity-50`: a launching app should look busy, not
+          // unavailable. Dimming it reads as "you cannot have this".
+          starting && "bg-accent/60",
         )}
       >
         {icon ? (
@@ -141,7 +173,9 @@ const AppRow = memo(function AppRow({
             <span className="block truncate text-xs text-muted-foreground">{app.description}</span>
           ) : null}
         </span>
-        {app.terminal ? (
+        {starting ? (
+          <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" aria-hidden />
+        ) : app.terminal ? (
           <Badge variant="outline" className="shrink-0 gap-1 text-[10px]">
             <TerminalSquare className="size-3" aria-hidden />
             term

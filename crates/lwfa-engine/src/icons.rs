@@ -33,12 +33,61 @@ const TARGET: u32 = 64;
 /// first paint into a multi-megabyte download.
 const MAX_BYTES: usize = 96 * 1024;
 
+/// `/usr/share/pixmaps`, which is outside the theme system but is where several
+/// real applications keep their only icon.
+const PIXMAP_SCORE: i64 = 0;
+
+/// An installed theme that the active one does not inherit from. Below
+/// everything else, so it can only fill a gap. See `Index::build`.
+const FOREIGN_THEME_SCORE: i64 = -1_000_000;
+
+/// How long a built index is trusted before it is thrown away.
+///
+/// Rebuilding walks every size and context directory of every installed theme,
+/// which is thousands of `stat` calls. Doing that per request is why the shell
+/// had to remember failures for a day rather than simply asking again. Keeping
+/// the index means a repeat request is a handful of hash lookups, so the shell
+/// is free to re-ask often and an application installed five minutes ago turns
+/// up without anyone clearing anything.
+const INDEX_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+thread_local! {
+    /// The index, and when it was built.
+    ///
+    /// Thread-local rather than a global with a lock: icon resolution happens
+    /// on the event loop thread and nowhere else, so a mutex would be paying
+    /// for contention that cannot occur.
+    static INDEX: std::cell::RefCell<Option<(std::time::Instant, std::rc::Rc<Index>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The current index, rebuilt only when there is not a fresh one.
+fn index() -> std::rc::Rc<Index> {
+    INDEX.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if let Some((built, index)) = slot.as_ref() {
+            if built.elapsed() < INDEX_TTL {
+                return std::rc::Rc::clone(index);
+            }
+        }
+        let started = std::time::Instant::now();
+        let index = std::rc::Rc::new(Index::build());
+        tracing::debug!(
+            "indexed {} icon names in {:.0}ms",
+            index.best.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        *slot = Some((std::time::Instant::now(), std::rc::Rc::clone(&index)));
+        index
+    })
+}
+
 /// Resolve and encode icons for the given `(app id, icon name)` pairs.
 ///
 /// Skips anything that cannot be found or read, so a missing icon costs the
 /// launcher a coloured initial rather than an error.
 pub fn resolve_all(wanted: &[(String, String)]) -> Vec<AppIcon> {
-    let index = Index::build();
+    let index = index();
 
     // Many applications share an icon name, so each file is read once.
     let mut cache: HashMap<&str, Option<String>> = HashMap::new();
@@ -94,7 +143,33 @@ impl Index {
         // Not part of any theme, and the only home of several real
         // applications: Alacritty is a bare file here on this machine.
         for dir in ["/usr/share/pixmaps", "/usr/local/share/pixmaps"] {
-            index_dir(Path::new(dir), 0, &mut best);
+            index_dir(Path::new(dir), PIXMAP_SCORE, &mut best);
+        }
+
+        // Last resort: every other installed theme.
+        //
+        // The specification says to search the current theme, its parents, and
+        // then `hicolor`, and by that rule a name the chain does not provide
+        // simply has no icon. In practice that leaves real applications blank:
+        // with `Yaru-blue` active, `printer` lives only in `AdwaitaLegacy` and
+        // `network-wired` only in `breeze`, so Print Settings and the Avahi
+        // browsers had nothing to draw.
+        //
+        // Scored below everything above, so this can only ever fill a gap: any
+        // theme in the real chain, and even a bare pixmap, still wins. The
+        // worst case is an icon drawn in the wrong style, which is better than
+        // a blank square.
+        for root in &roots {
+            let Ok(entries) = std::fs::read_dir(root) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() || themes.iter().any(|t| dir.ends_with(t)) {
+                    continue;
+                }
+                index_theme(&dir, FOREIGN_THEME_SCORE, &mut best);
+            }
         }
 
         Self { best }
@@ -264,19 +339,83 @@ fn score_of(dir_name: &str) -> i64 {
 }
 
 /// Read a file and encode it as a `data:` URI.
+///
+/// # Why a raster icon is re-encoded rather than sent as it is
+///
+/// Applications ship enormous icons. VS Code's is a 215 KB PNG in
+/// `/usr/share/pixmaps`, Zed's is 512 by 512 and 164 KB, and the launcher draws
+/// both at 64 pixels. Sending ninety-six of those is megabytes over a phone
+/// connection for pictures nobody can see the detail in.
+///
+/// This used to be handled by refusing anything over a size limit, which is
+/// how VS Code and Zed came to have no icon at all: found, read, and silently
+/// dropped for being too big. Scaling is the answer the limit was reaching
+/// for. A 512-pixel icon becomes a couple of kilobytes, and the ones that used
+/// to vanish now arrive.
+///
+/// SVG is passed through untouched: it is already small, it is sharp at any
+/// size, and rasterising it here would throw that away.
 fn encode(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
-    if bytes.is_empty() || bytes.len() > MAX_BYTES {
+    if bytes.is_empty() {
         return None;
     }
-    let mime = match path.extension().and_then(|e| e.to_str()) {
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
+
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("svg") => {
+            // Still bounded: an SVG can contain an embedded bitmap, and one of
+            // those has no business being an icon.
+            if bytes.len() > MAX_BYTES {
+                return None;
+            }
+            Some(format!("data:image/svg+xml;base64,{}", base64(&bytes)))
+        }
+        Some("png") | Some("jpg") | Some("jpeg") => {
+            let png = shrink(&bytes).unwrap_or(bytes);
+            Some(format!("data:image/png;base64,{}", base64(&png)))
+        }
         // The browser cannot render XPM, so sending it would be a broken image
-        // rather than a fallback to the initial.
-        _ => return None,
+        // rather than a fallback to the initial. Only a handful of X11-era
+        // applications still ship one, xterm among them.
+        _ => None,
+    }
+}
+
+/// Decode, scale to the size the launcher draws at, and re-encode as PNG.
+///
+/// Returns `None` when the image cannot be decoded or is already small enough
+/// to be worth leaving alone, in which case the caller sends the original.
+fn shrink(bytes: &[u8]) -> Option<Vec<u8>> {
+    // A cap on what is worth decoding at all. Beyond this it is not an icon,
+    // and decoding it would cost more than the launcher gains.
+    const DECODE_LIMIT: usize = 8 * 1024 * 1024;
+    if bytes.len() > DECODE_LIMIT {
+        return None;
+    }
+
+    let image = image::load_from_memory(bytes).ok()?;
+    let (width, height) = (image::GenericImageView::width(&image), image::GenericImageView::height(&image));
+
+    // Already the right size and already small: re-encoding would only lose a
+    // little quality for nothing.
+    if width <= TARGET && height <= TARGET && bytes.len() <= MAX_BYTES {
+        return None;
+    }
+
+    // `Lanczos3` rather than nearest: an icon halved by a rough filter looks
+    // visibly worse than the same icon at half the size, and this runs once
+    // per application at startup, not per frame.
+    let scaled = if width > TARGET || height > TARGET {
+        image.resize(TARGET, TARGET, image::imageops::FilterType::Lanczos3)
+    } else {
+        image
     };
-    Some(format!("data:{mime};base64,{}", base64(&bytes)))
+
+    let mut out = Vec::new();
+    scaled
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .ok()?;
+    Some(out)
 }
 
 /// Standard base64, no padding shortcuts.
@@ -355,6 +494,51 @@ mod tests {
         // "16x16@2x" must read as 16, not fail to parse and score -1000.
         assert!(score_of("16x16@2x") > -1000);
         assert_eq!(score_of("16x16@2x"), score_of("16x16"));
+    }
+
+    #[test]
+    /// VS Code and Zed had no icon in the launcher. Both were found, read, and
+    /// then dropped for being over a size limit: 215 KB and 164 KB against a
+    /// 96 KB cap, for pictures drawn at 64 pixels.
+    #[test]
+    fn an_oversized_icon_is_scaled_rather_than_dropped() {
+        let big = image::RgbaImage::from_fn(512, 512, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
+        });
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(big)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode the fixture");
+
+        let scaled = super::shrink(&png).expect("should have been scaled");
+        let decoded = image::load_from_memory(&scaled).expect("valid png out");
+        assert!(
+            image::GenericImageView::width(&decoded) <= super::TARGET,
+            "still {} wide",
+            image::GenericImageView::width(&decoded)
+        );
+        assert!(
+            scaled.len() < png.len(),
+            "scaling made it bigger: {} -> {}",
+            png.len(),
+            scaled.len()
+        );
+    }
+
+    #[test]
+    fn a_small_icon_is_left_exactly_as_it_is() {
+        // Re-encoding a 48-pixel icon costs a little quality and saves nothing.
+        let small = image::RgbaImage::from_pixel(48, 48, image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(small)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode the fixture");
+        assert!(super::shrink(&png).is_none());
+    }
+
+    #[test]
+    fn something_that_is_not_an_image_is_refused_quietly() {
+        assert!(super::shrink(b"not a png at all").is_none());
     }
 
     #[test]

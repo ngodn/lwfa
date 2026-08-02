@@ -28,7 +28,14 @@
 
 const DB_NAME = "lwfa"
 const STORE = "icons"
-const VERSION = 1
+/**
+ * Bumped to 2 to drop entries written before icons carried a timestamp.
+ *
+ * The old shape was a bare string, so a stored "no icon" answer had no age and
+ * could never expire. Clearing once is cheaper than carrying a reader for both
+ * shapes forever, and the cost is one slower launcher open.
+ */
+const VERSION = 2
 
 /** Blob URLs handed out this session, so they can be revoked. */
 const urls = new Map<string, string>()
@@ -45,6 +52,12 @@ function open(): Promise<IDBDatabase | null> {
       return
     }
     request.onupgradeneeded = () => {
+      // A version bump means the stored shape changed, so whatever is there is
+      // not readable by this code. See `VERSION`.
+      const existing = request.result
+      if (existing.objectStoreNames.contains(STORE)) {
+        existing.deleteObjectStore(STORE)
+      }
       const db = request.result
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
     }
@@ -55,8 +68,16 @@ function open(): Promise<IDBDatabase | null> {
 }
 
 /** Read every cached icon for these ids. Missing ones are simply absent. */
-export async function readCached(ids: string[]): Promise<Map<string, string>> {
-  const found = new Map<string, string>()
+/** A cached icon, with when it was written so a "missing" answer can expire. */
+export interface CachedIcon {
+  /** The data URI, or the empty string meaning "the engine had none". */
+  data: string
+  /** Epoch milliseconds. */
+  at: number
+}
+
+export async function readCached(ids: string[]): Promise<Map<string, CachedIcon>> {
+  const found = new Map<string, CachedIcon>()
   const db = await open()
   if (!db) return found
 
@@ -72,7 +93,17 @@ export async function readCached(ids: string[]): Promise<Map<string, string>> {
       const request = store.get(id)
       request.onsuccess = () => {
         const value: unknown = request.result
-        if (typeof value === "string") found.set(id, value)
+        // Entries from before the timestamp existed are ignored rather than
+        // adopted with a made-up date, which for a tombstone would mean
+        // inventing an expiry that never arrives.
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          typeof (value as CachedIcon).data === "string" &&
+          typeof (value as CachedIcon).at === "number"
+        ) {
+          found.set(id, value as CachedIcon)
+        }
         if (--pending === 0) resolve()
       }
       request.onerror = () => {
@@ -94,7 +125,8 @@ export async function writeCached(icons: { id: string; data: string }[]): Promis
   await new Promise<void>((resolve) => {
     const tx = db.transaction(STORE, "readwrite")
     const store = tx.objectStore(STORE)
-    for (const icon of icons) store.put(icon.data, icon.id)
+    const at = Date.now()
+    for (const icon of icons) store.put({ data: icon.data, at }, icon.id)
     tx.oncomplete = () => resolve()
     tx.onerror = () => resolve()
     tx.onabort = () => resolve()
