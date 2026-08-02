@@ -29,6 +29,7 @@
  */
 
 import { FrameFormat, type DecodedFrame, type WindowId } from "@lwfa/proto"
+import { noteFormat } from "@/lib/streamFormat"
 
 /**
  * Derive the WebCodecs codec string from the stream's own SPS.
@@ -46,6 +47,14 @@ import { FrameFormat, type DecodedFrame, type WindowId } from "@lwfa/proto"
  * Returns null if no SPS is present, in which case the caller waits for a
  * keyframe that has one rather than configuring from a guess.
  */
+/**
+ * HEVC Main profile, level 5.1.
+ *
+ * Deliberately generous: the level has to be at least the stream's, and one
+ * that covers 4K covers every window this will ever carry.
+ */
+const HEVC_CODEC = "hvc1.1.6.L153.B0"
+
 function codecFromSps(data: Uint8Array): string | null {
   // Scan for a start code followed by a NAL header whose type is 7 (SPS).
   for (let i = 0; i + 4 < data.length; i++) {
@@ -91,11 +100,16 @@ export class FrameDecoder {
   }
 
   async handle(frame: DecodedFrame): Promise<void> {
+    // What is actually arriving, so the session panel can report it rather
+    // than reporting what the browser is merely capable of. Free unless it
+    // changes; see `lib/streamFormat`.
+    noteFormat(frame.header.format)
+
     if (frame.header.format === FrameFormat.Jpeg) {
       await this.#handleJpeg(frame)
       return
     }
-    this.#handleH264(frame)
+    this.#handleVideo(frame)
   }
 
   async #handleJpeg(frame: DecodedFrame): Promise<void> {
@@ -107,19 +121,29 @@ export class FrameDecoder {
     }
   }
 
-  #handleH264(frame: DecodedFrame): void {
+  #handleVideo(frame: DecodedFrame): void {
     const { window: id, width, height, keyframe } = frame.header
+    const hevc = frame.header.format === FrameFormat.Hevc
 
     if (!supportsH264()) {
       // Loud and once-ish: silently dropping every frame would look like a
-      // network problem rather than a missing browser feature.
+      // network problem rather than a missing browser feature. This should not
+      // happen, since the engine only sends video to a client that said it can
+      // decode some, but a stream in flight when a client changes its mind
+      // would land here.
       this.#warnOnce(id, "this browser has no WebCodecs VideoDecoder (Safari 26+ required)")
       return
     }
 
-    // The codec string comes from the SPS, so a decoder can only be built from
-    // a keyframe. Deltas before that are dropped below.
-    const codec = keyframe ? codecFromSps(frame.payload) : null
+    // For H.264 the codec string comes from the SPS, so a decoder can only be
+    // built from a keyframe. Deltas before that are dropped below.
+    //
+    // HEVC is not parsed. Its parameter sets are considerably more involved
+    // than H.264's three bytes, and the string only has to *cover* the stream
+    // rather than describe it exactly: Main profile at level 5.1 spans
+    // everything a desktop window will be, and a browser that accepted it at
+    // probe time will accept it here. See `lib/codecs`.
+    const codec = keyframe ? (hevc ? HEVC_CODEC : codecFromSps(frame.payload)) : null
     const wanted = codec ? `${width}x${height}:${codec}` : null
 
     if (wanted !== null && this.#configured.get(id) !== wanted) {

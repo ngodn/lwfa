@@ -96,6 +96,21 @@ export interface Workspace {
    * switching away and back returns you where you were.
    */
   viewOffset: number
+  /**
+   * The window filling the whole viewport, if any.
+   *
+   * Fullscreen is *not* a wider column. A column is a fraction of the strip and
+   * still sits inside the gaps; fullscreen is the entire output, edge to edge,
+   * with nothing else drawn. Cycling widths can never reach it, which is the
+   * whole reason it is a separate piece of state rather than another preset:
+   * a preset of 1.0 would still leave the gap, still leave neighbours peeking
+   * in, and still scroll.
+   *
+   * Held per workspace, so switching away from a fullscreen video and back
+   * returns to it, and dropped automatically when focus moves elsewhere, since
+   * nothing else on the workspace is drawn while it is set.
+   */
+  fullscreen: WindowId | null
 }
 
 export interface StripState {
@@ -104,7 +119,12 @@ export interface StripState {
   focus: number
 }
 
-const emptyWorkspace = (): Workspace => ({ columns: [], focus: 0, viewOffset: 0 })
+const emptyWorkspace = (): Workspace => ({
+  columns: [],
+  focus: 0,
+  viewOffset: 0,
+  fullscreen: null,
+})
 
 /**
  * Workspaces are dynamic, niri-style: there is always exactly one empty one at
@@ -266,6 +286,21 @@ export function targetOffset(state: StripState, output: Output, config: StripCon
  */
 export function layout(state: StripState, output: Output, config: StripConfig): WindowLayout[] {
   const ws = currentWorkspace(state)
+
+  // Fullscreen short-circuits the whole strip: the output rect, no gap, and
+  // nothing else emitted. Omitting the rest is what makes it fullscreen rather
+  // than a very wide window with the strip still visible behind it, and it also
+  // means the engine stops capturing them, which is the point on a tablet.
+  if (ws.fullscreen !== null) {
+    return [
+      {
+        id: ws.fullscreen,
+        rect: { x: 0, y: 0, width: output.width, height: output.height },
+        z: 0,
+      },
+    ]
+  }
+
   const offset = ws.viewOffset
   const out: WindowLayout[] = []
   let z = 0
@@ -290,6 +325,34 @@ export function layout(state: StripState, output: Output, config: StripConfig): 
   })
 
   return out
+}
+
+/**
+ * The box that has to be on screen to see the whole strip at once.
+ *
+ * Under scrollable tiling the columns run off both ends of the viewport, so
+ * "the desktop" and "what fits" are different rectangles. The viewport is the
+ * right one to render at normal size. Arrange mode wants the other one: the
+ * union of every window, which is the only view in which a strip can be
+ * rearranged without dragging things past an edge you cannot see.
+ *
+ * The output is always included, so an empty workspace still has a shape and a
+ * single narrow window does not blow up to fill a 4K display.
+ */
+export function stripBounds(placed: WindowLayout[], output: Output): Rect {
+  let left = 0
+  let top = 0
+  let right = output.width
+  let bottom = output.height
+
+  for (const { rect } of placed) {
+    left = Math.min(left, rect.x)
+    top = Math.min(top, rect.y)
+    right = Math.max(right, rect.x + rect.width)
+    bottom = Math.max(bottom, rect.y + rect.height)
+  }
+
+  return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
 /** Does this column intersect the viewport, and so deserve pixels? */
@@ -342,7 +405,17 @@ export function scrollFocusIntoView(
   config: StripConfig,
 ): StripState {
   const offset = targetOffset(state, output, config)
-  return withWorkspace(state, (ws) => ({ ...ws, viewOffset: offset }))
+  const focused = focusedWindow(state)
+  return withWorkspace(state, (ws) => ({
+    ...ws,
+    viewOffset: offset,
+    // Fullscreen belongs to whatever has focus. Every transition lands here, so
+    // moving focus, closing the window, or pulling it into a stack all drop out
+    // of fullscreen without each one having to remember to. Leaving it set
+    // would be worse than a stale flag: nothing else on the workspace is drawn,
+    // so focusing another window would look like the shell had frozen.
+    fullscreen: ws.fullscreen !== null && ws.fullscreen === focused ? ws.fullscreen : null,
+  }))
 }
 
 function settle(state: StripState, output: Output, config: StripConfig): StripState {
@@ -505,6 +578,121 @@ export function cycleWidth(
 }
 
 /**
+ * Set a named column's width outright.
+ *
+ * `cycleWidth` is the keyboard's operation: one key, one step, no way to name
+ * a destination. A panel offering the presets as four buttons has a
+ * destination, and reaching it by stepping would push a layout per step,
+ * animating the column through every width in between on the way to the one
+ * that was asked for.
+ *
+ * Named column rather than the focused one, so choosing a width for a window
+ * in the list does not first have to focus it.
+ */
+export function setColumnWidth(
+  state: StripState,
+  id: WindowId,
+  preset: number,
+  output: Output,
+  config: StripConfig,
+): StripState {
+  const where = findWindow(state, id)
+  if (!where || where.workspace !== state.focus) return state
+
+  const width = clampIndex(preset, WIDTH_PRESETS.length) as WidthPreset
+  const ws0 = currentWorkspace(state)
+  if (ws0.columns[where.column]?.width === width) return state
+
+  const next = withWorkspace(state, (ws) => ({
+    ...ws,
+    columns: ws.columns.map((column, i) => (i === where.column ? { ...column, width } : column)),
+  }))
+  return scrollFocusIntoView(next, output, config)
+}
+
+/**
+ * Does this window cover the whole output, leaving nothing around it?
+ *
+ * Asked geometrically rather than by reading the fullscreen flag, because the
+ * question the shell actually needs answered is "is any of the desktop visible
+ * around this window". A window with nothing beside it has no corners to round,
+ * no neighbours to distinguish itself from with a focus ring, and nothing for a
+ * shadow to fall on. Whatever made it that size is beside the point.
+ *
+ * `>=` rather than `===`: a rect is rounded to whole pixels on its way here, so
+ * a window that fills the output can arrive a pixel over.
+ */
+export function fillsOutput(rect: WindowLayout["rect"], output: Output): boolean {
+  return (
+    rect.x <= 0 &&
+    rect.y <= 0 &&
+    rect.width >= output.width &&
+    rect.height >= output.height
+  )
+}
+
+/** Is the focused workspace showing a window fullscreen? */
+export function isFullscreen(state: StripState): boolean {
+  return currentWorkspace(state).fullscreen !== null
+}
+
+/**
+ * Fill the viewport with the focused window, or go back to the strip.
+ *
+ * "Full viewport" means exactly that: the client's whole visible area, not the
+ * widest preset. On a tablet that is the difference between a video with the
+ * strip's gaps and neighbours around it and a video, so it deserves its own
+ * control rather than being the last stop on a width cycle.
+ */
+/**
+ * Put a named window fullscreen, or take it out, because it asked.
+ *
+ * Separate from `toggleFullscreen`, which acts on the focused window and flips
+ * whatever state it is in. A client's request says both which window and which
+ * direction, and honouring it as a toggle would turn a player asking to *enter*
+ * fullscreen while already fullscreen into a request to leave.
+ *
+ * The window is focused as well. A video that has just filled the screen and
+ * does not have the keyboard cannot be paused with the space bar, which is the
+ * first thing anybody tries.
+ */
+export function setFullscreen(
+  state: StripState,
+  id: WindowId,
+  fullscreen: boolean,
+  output: Output,
+  config: StripConfig,
+): StripState {
+  const where = findWindow(state, id)
+  if (!where || where.workspace !== state.focus) return state
+
+  const focused = fullscreen ? focusWindow(state, id, output, config) : state
+  const next = withWorkspace(focused, (ws) => ({
+    ...ws,
+    fullscreen: fullscreen ? id : ws.fullscreen === id ? null : ws.fullscreen,
+  }))
+  return scrollFocusIntoView(next, output, config)
+}
+
+export function toggleFullscreen(
+  state: StripState,
+  output: Output,
+  config: StripConfig,
+): StripState {
+  const focused = focusedWindow(state)
+  if (focused === null) return state
+
+  const next = withWorkspace(state, (ws) => ({
+    ...ws,
+    fullscreen: ws.fullscreen === focused ? null : focused,
+  }))
+  // Still settle the offset. Leaving fullscreen has to land on a strip that is
+  // scrolled to the window you were just looking at, not wherever it was when
+  // you entered.
+  return scrollFocusIntoView(next, output, config)
+}
+
+/**
  * Pull the focused window into the column on its left, stacking it.
  *
  * niri calls this "consume". It is how a stack gets built without a separate
@@ -581,6 +769,95 @@ export function expelFromColumn(
   return settle(next, output, config)
 }
 
+/**
+ * Where a window is being put.
+ *
+ * Two shapes rather than one index, because "join that column" and "become a
+ * column between those two" are genuinely different intents and collapsing
+ * them into a number makes the off-by-one unresolvable: index 2 would have to
+ * mean both "inside the third column" and "before the third column".
+ *
+ * They are the two things a drag can land on. A window dropped on a column
+ * joins it; a window dropped in the gap between columns gets one of its own.
+ */
+export type MoveTarget =
+  | { kind: "column"; index: number; row?: number }
+  | { kind: "newColumn"; index: number }
+
+/**
+ * Move a window to a chosen place in the strip.
+ *
+ * The general form of `consumeIntoColumn` and `expelFromColumn`, which move
+ * the focused window one step in a fixed direction. Those are right for a
+ * keyboard, where there is nowhere to point. A drag knows exactly where it is
+ * going, and expressing that as a run of consume and expel calls would make an
+ * intermediate arrangement visible on every step and could not express "into
+ * the third row of that column" at all.
+ *
+ * The moved window keeps focus, because you are looking at it and it is
+ * inconceivable that moving something should focus something else.
+ */
+export function moveWindow(
+  state: StripState,
+  id: WindowId,
+  target: MoveTarget,
+  output: Output,
+  config: StripConfig,
+): StripState {
+  const where = findWindow(state, id)
+  if (!where || where.workspace !== state.focus) return state
+
+  const next = withWorkspace(state, (ws) => {
+    // Lift it out first, then drop it in. Doing it in this order means the
+    // insertion index is expressed in terms of the strip the user is looking
+    // at *after* the gap the window left has closed up, which is what makes a
+    // drag land where the highlight was.
+    const emptied = ws.columns
+      .map((column) => {
+        if (!column.windows.includes(id)) return column
+        const windows = column.windows.filter((w) => w !== id)
+        return { ...column, windows, focus: clampIndex(column.focus, windows.length) }
+      })
+      .filter((column) => column.windows.length > 0)
+
+    // The width a new column inherits: the one it came from, so a window
+    // dragged out of a half-width column does not jump to a third.
+    const width = ws.columns.find((column) => column.windows.includes(id))?.width ?? 0
+
+    if (target.kind === "newColumn") {
+      const at = Math.max(0, Math.min(target.index, emptied.length))
+      const columns = [...emptied]
+      columns.splice(at, 0, { windows: [id], focus: 0, width })
+      return { ...ws, columns, focus: at }
+    }
+
+    // Dropping onto a column that no longer exists, because lifting the window
+    // out emptied it, means the window was the column. Put it back as its own
+    // rather than losing it.
+    if (emptied.length === 0) {
+      return { ...ws, columns: [{ windows: [id], focus: 0, width }], focus: 0 }
+    }
+
+    const at = clampIndex(target.index, emptied.length)
+    const column = emptied[at]!
+    const row =
+      target.row === undefined
+        ? column.windows.length
+        : Math.max(0, Math.min(target.row, column.windows.length))
+    const windows = [...column.windows]
+    windows.splice(row, 0, id)
+
+    const columns = [...emptied]
+    columns[at] = { ...column, windows, focus: row }
+    return { ...ws, columns, focus: at }
+  })
+
+  // Moving a window while something is fullscreen would rearrange a strip
+  // nobody can see. Clearing it shows the result of what was just done.
+  const shown = withWorkspace(next, (ws) => ({ ...ws, fullscreen: null }))
+  return settle(shown, output, config)
+}
+
 /** Switch workspace. Clamped, and the trailing empty one is always reachable. */
 export function focusWorkspace(
   state: StripState,
@@ -625,6 +902,53 @@ export function moveToWorkspace(
   const landed = findWindow(moved, id)
   return scrollFocusIntoView(
     landed ? { ...moved, focus: landed.workspace } : moved,
+    output,
+    config,
+  )
+}
+
+/**
+ * Send a named window to a named workspace, and stay where you are.
+ *
+ * Two differences from `moveToWorkspace`, both deliberate.
+ *
+ * It names the window rather than acting on the focused one, because a drag
+ * knows what it picked up and focusing something first just to move it would
+ * be a visible flicker on the way to somewhere else.
+ *
+ * It does not follow the window. `moveToWorkspace` is a keyboard command, and
+ * a keyboard has no way to say "and now show me that"; following is the only
+ * way to see what happened. A drag onto a workspace chip is the opposite: you
+ * are tidying, and being thrown onto another workspace on every flick would
+ * make organising three windows into three separate journeys back.
+ */
+export function sendToWorkspace(
+  state: StripState,
+  id: WindowId,
+  index: number,
+  output: Output,
+  config: StripConfig,
+): StripState {
+  const from = findWindow(state, id)
+  if (!from) return state
+
+  const to = clampIndex(index, state.workspaces.length)
+  if (to === from.workspace) return state
+
+  const workspaces = state.workspaces.map((ws, at) => {
+    if (at === from.workspace) return detach(ws, id)
+    if (at === to) return attach(ws, id, config)
+    return ws
+  })
+
+  // Normalising can renumber workspaces, so where we were standing has to be
+  // found again rather than assumed to still be `state.focus`.
+  const staying = state.workspaces[clampIndex(state.focus, state.workspaces.length)]
+  const moved = normaliseWorkspaces({ ...state, workspaces, focus: state.focus })
+  const stillThere = staying ? moved.workspaces.indexOf(staying) : -1
+
+  return scrollFocusIntoView(
+    stillThere === -1 ? moved : { ...moved, focus: stillThere },
     output,
     config,
   )

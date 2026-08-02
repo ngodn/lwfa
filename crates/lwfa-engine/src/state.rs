@@ -27,6 +27,7 @@ use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::xwayland::X11Wm;
@@ -36,6 +37,48 @@ use crate::encode::EncodeWorker;
 
 use crate::layout::{self, Layout};
 use crate::shell::ShellLink;
+
+/// One connected shell.
+///
+/// Everything here is per connection rather than per engine, which is the whole
+/// difference between one client and several. Permissions belong to whoever
+/// authenticated, streams belong to whichever windows *that* device can see,
+/// and the H.264 capability belongs to that browser: a tablet reached over
+/// plain HTTP has no `VideoDecoder` while a laptop on localhost does, and
+/// treating either answer as global would leave one of them with blank windows.
+pub struct Session {
+    /// What this session may do. Enforced here, not in the browser.
+    pub permissions: lwfa_proto::Permissions,
+    /// Which account it authenticated as. "owner" for `AUTH_PASS`.
+    pub account: String,
+    /// Best-effort device description, for the connections list.
+    pub device: String,
+    /// When this session started, for spotting a reconnection storm.
+    pub since: std::time::Instant,
+    /// The browser's own stable id, used to recognise a reconnection.
+    ///
+    /// Empty for clients that do not send one, which are then never treated as
+    /// reconnections of anything.
+    pub client: String,
+    /// Whether this client can decode H.264, once it has said.
+    ///
+    /// `None` until the client declares it in `SetStreams`. That distinction
+    /// matters: treating "has not answered yet" as "cannot" made every new
+    /// connection flip the session-wide answer to JPEG for a moment, and
+    /// switching format tears down every NVENC session. A page refresh
+    /// therefore rebuilt all of them, at 90-160ms each.
+    pub codecs: Option<Vec<lwfa_proto::Codec>>,
+    /// Whether this client has asked to hear the machine.
+    pub audio: bool,
+    /// Whether this client can decode Opus. See `AudioFormat::Opus`.
+    pub opus: bool,
+}
+
+/// How long a window may be streamed without ever producing a frame.
+///
+/// Generous: a client that has just been configured to a new size legitimately
+/// takes a moment. Anything past this is not slow, it is stuck.
+const FIRST_FRAME_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct Lwfa {
     /// Settings from `configs/defaults.toml`, resolved once at startup.
@@ -49,12 +92,50 @@ pub struct Lwfa {
     pub space: Space<Window>,
     /// Reconciles shell-declared layout. Holds no policy.
     pub layout: Layout,
-    /// The shell connection, if any. `None` until the listener binds.
+    /// The shell listener. `None` until it binds.
     pub shell: Option<ShellLink>,
-    /// What the connected session may do. Enforced here, not in the browser.
-    pub permissions: lwfa_proto::Permissions,
-    /// Which account is connected, for logging and for `Hello`.
-    pub account: String,
+    /// Everyone connected, keyed by session. See [`Session`].
+    pub sessions: std::collections::HashMap<lwfa_proto::SessionId, Session>,
+    /// The running audio capture, if anyone is listening. See `audio.rs`.
+    pub audio: Option<crate::audio::Capture>,
+    /// Chooses the total bitrate from how the connection is coping.
+    pub bitrate: crate::bitrate::Controller,
+    /// Holds focus still before the budget follows it. See `bitrate`.
+    pub attention: crate::bitrate::Attention,
+    /// What was last allocated, so the division is only recomputed on a change.
+    streamed_last: Vec<WindowId>,
+    attended_last: Option<WindowId>,
+    /// The session's own audio device, so the machine stays quiet. See `sink.rs`.
+    pub audio_sink: crate::sink::PrivateSink,
+    /// A virtual controller per client that is holding one. See `gamepad.rs`.
+    ///
+    /// Empty by default: each device is visible to the whole machine, so one
+    /// exists only while somebody is holding it. Keyed by session rather than
+    /// kept as a single global for two reasons. A client must not be able to
+    /// switch off another client's controller, and two people on two devices
+    /// should be two players, which is exactly what two controllers are.
+    pub gamepads:
+        std::collections::HashMap<lwfa_proto::SessionId, crate::gamepad::VirtualPad>,
+    /// Windows asked for but never yet captured, and when they were asked for.
+    ///
+    /// Not "nothing captured recently", which on an idle desktop is damage
+    /// tracking working correctly and would cry wolf constantly. This is the
+    /// genuinely broken case: pixels were requested for a window and none have
+    /// ever arrived. See `warn_if_nothing_ever_arrived`.
+    pub awaiting_first_frame: std::collections::HashMap<WindowId, std::time::Instant>,
+    /// The last arrangement the primary declared.
+    ///
+    /// Kept so a device joining mid-session has something to render straight
+    /// away. Without it a follower shows an empty desktop until the primary
+    /// happens to move a window, which on a session nobody is touching is
+    /// never.
+    pub last_layout: Vec<lwfa_proto::WindowLayout>,
+    /// Which session decides layout, if any.
+    ///
+    /// A window has exactly one size, so there is exactly one arrangement, so
+    /// exactly one connection gets to choose it. The rest are told. Any of them
+    /// can take over; see `ToEngine::TakeControl`.
+    pub primary: Option<lwfa_proto::SessionId>,
     /// Named accounts, if the database opened. See `accounts.rs`.
     pub accounts: Option<Arc<std::sync::Mutex<crate::accounts::Accounts>>>,
     /// Per-surface capture. Only does work when something asks it to.
@@ -156,14 +237,20 @@ impl Lwfa {
             // Real size arrives from the backend once the output exists.
             layout: Layout::new((0, 0).into()),
             shell: None,
-            // Until a shell authenticates there is nothing to permit. Starting
-            // at owner would give a window between bind and connect in which a
-            // half-authenticated session could act.
-            permissions: lwfa_proto::Permissions {
-                mode: lwfa_proto::SessionMode::View,
-                allowed_apps: Some(Vec::new()),
-            },
-            account: String::new(),
+            // A session only exists once it has authenticated, so there is no
+            // window between bind and connect in which a half-authenticated
+            // peer could act: with no entry here, nothing is permitted.
+            sessions: std::collections::HashMap::new(),
+            last_layout: Vec::new(),
+            audio: None,
+            bitrate: crate::bitrate::Controller::new(std::time::Instant::now()),
+            attention: crate::bitrate::Attention::new(std::time::Instant::now()),
+            streamed_last: Vec::new(),
+            attended_last: None,
+            audio_sink: crate::sink::PrivateSink::default(),
+            gamepads: std::collections::HashMap::new(),
+            awaiting_first_frame: std::collections::HashMap::new(),
+            primary: None,
             accounts: None,
             capture: SurfaceCapture::default(),
             encoders: None,
@@ -327,14 +414,306 @@ impl Lwfa {
         }
     }
 
+    /// Send to every connected shell.
+    ///
+    /// Window lifecycle, focus and key bindings are facts about the session
+    /// rather than about one viewer, so they go to all of them.
+    /// Pass a client's fullscreen request to the shell.
+    ///
+    /// With no shell connected there is nobody to decide, and safe mode already
+    /// gives the focused window the whole output, so the request is dropped
+    /// rather than half-applied.
+    pub fn request_fullscreen(
+        &mut self,
+        surface: &smithay::wayland::shell::xdg::ToplevelSurface,
+        fullscreen: bool,
+    ) {
+        let Some(window) = self
+            .space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(surface.wl_surface()))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(id) = self.layout.id_of(&window) else {
+            return;
+        };
+        tracing::info!(
+            "window {id} asked to {} fullscreen",
+            if fullscreen { "enter" } else { "leave" }
+        );
+        self.send_to_shell(ToShell::FullscreenRequest { window: id, fullscreen });
+    }
+
+    /// The X11 half of [`Self::request_fullscreen`].
+    pub fn request_fullscreen_x11(
+        &mut self,
+        surface: &smithay::xwayland::X11Surface,
+        fullscreen: bool,
+    ) {
+        let Some(window) = self
+            .space
+            .elements()
+            .find(|w| match w.underlying_surface() {
+                WindowSurface::X11(x11) => x11 == surface,
+                WindowSurface::Wayland(_) => false,
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let Some(id) = self.layout.id_of(&window) else {
+            return;
+        };
+        // Told as well as asked, unlike xdg-shell: an X11 client has no way to
+        // decline, and its own idea of its state has to be kept in step or a
+        // player will show the wrong button.
+        let _ = surface.set_fullscreen(fullscreen);
+        tracing::info!(
+            "X11 window {id} asked to {} fullscreen",
+            if fullscreen { "enter" } else { "leave" }
+        );
+        self.send_to_shell(ToShell::FullscreenRequest { window: id, fullscreen });
+    }
+
     pub fn send_to_shell(&self, message: ToShell) {
         if let Some(shell) = &self.shell {
-            shell.send(message);
+            shell.broadcast(message);
         }
     }
 
+    /// Send to one connection.
+    pub fn send_to_session(&self, session: lwfa_proto::SessionId, message: ToShell) {
+        if let Some(shell) = &self.shell {
+            shell.send_to(session, message);
+        }
+    }
+
+    /// Everyone connected, in a stable order.
+    ///
+    /// Sorted by id, which is allocation order, so the list does not reshuffle
+    /// under the user every time it is sent. A `HashMap` iterated directly
+    /// would do exactly that.
+    pub fn peers(&self) -> Vec<lwfa_proto::PeerInfo> {
+        let mut peers: Vec<lwfa_proto::PeerInfo> = self
+            .sessions
+            .iter()
+            .map(|(id, session)| lwfa_proto::PeerInfo {
+                id: *id,
+                account: session.account.clone(),
+                mode: session.permissions.mode,
+                primary: self.primary == Some(*id),
+                device: session.device.clone(),
+            })
+            .collect();
+        peers.sort_by_key(|p| p.id);
+        peers
+    }
+
+    /// Tell everyone who is connected, and remind each of its own role.
+    ///
+    /// Both, because they change together: a session arriving can make another
+    /// one no longer primary, and a client showing "you are viewing" needs to
+    /// stop showing it the moment that stops being true.
+    pub fn announce_peers(&self) {
+        let peers = self.peers();
+        self.send_to_shell(ToShell::Peers {
+            peers: peers.clone(),
+        });
+        for peer in peers {
+            self.send_to_session(
+                peer.id,
+                ToShell::Role {
+                    primary: peer.primary,
+                },
+            );
+        }
+    }
+
+    /// Say so, once, when a window is being streamed and has never sent a frame.
+    ///
+    /// This exists because of a report that could not be reproduced: a session
+    /// that streamed nothing until the host workspace was visited on the
+    /// physical display. From outside that is indistinguishable from a hang, a
+    /// dead encoder, a network problem, and several other things, and guessing
+    /// between them wasted an afternoon. So the engine names the condition
+    /// itself, with the state needed to tell those apart.
+    fn warn_if_nothing_ever_arrived(&mut self) {
+        let now = std::time::Instant::now();
+        let overdue: Vec<WindowId> = self
+            .awaiting_first_frame
+            .iter()
+            .filter(|(_, asked)| now.duration_since(**asked) >= FIRST_FRAME_GRACE)
+            .map(|(id, _)| *id)
+            .collect();
+        if overdue.is_empty() {
+            return;
+        }
+
+        let size = self.layout.output_size();
+        tracing::warn!(
+            "{} window(s) have been streamed for over {:?} without producing a single \
+             frame: {overdue:?}. {} placed, output {}x{}, mode {:?}. A remote client is \
+             showing these blank.",
+            overdue.len(),
+            FIRST_FRAME_GRACE,
+            self.layout.placements().len(),
+            size.w,
+            size.h,
+            self.layout.mode(),
+        );
+
+        // Once per window per request, not once per frame.
+        for id in overdue {
+            self.awaiting_first_frame.remove(&id);
+        }
+    }
+
+    /// Recompute which windows anyone wants pixels for.
+    ///
+    /// The union across connections, because a window visible on the phone has
+    /// to be captured even if the tablet has scrolled past it. Kept in one
+    /// place so the capture loop never has to reason about who asked.
+    pub fn recompute_streams(&mut self) {
+        let wanted = match self.shell.as_ref() {
+            Some(shell) => shell.clients().streamed_windows(),
+            None => std::collections::HashSet::new(),
+        };
+        // Newly wanted windows need a capture even if they are idle, or an
+        // untouched window would never produce a frame for whoever just asked.
+        let now = std::time::Instant::now();
+        for id in wanted.difference(&self.streaming) {
+            self.capture.invalidate(*id);
+            self.awaiting_first_frame.insert(*id, now);
+        }
+        for id in self.streaming.difference(&wanted) {
+            self.awaiting_first_frame.remove(id);
+        }
+        self.streaming = wanted;
+    }
+
+    /// Start or stop capturing audio, to match whether anyone is listening.
+    ///
+    /// Idempotent, and called from every place that could change the answer.
+    /// Capture is a process and a megabit and a half a second, so it exists
+    /// exactly when at least one connected session has asked for it and not a
+    /// moment longer.
+    pub fn sync_audio_capture(&mut self) {
+        let wanted = self.sessions.values().any(|s| s.audio);
+        match (wanted, self.audio.is_some()) {
+            (true, false) => {
+                let Some(shell) = self.shell.as_ref() else {
+                    return;
+                };
+                let clients = shell.sink();
+                // The session's own device if we have one, so only what lwfa
+                // is playing gets captured. An explicit device in the config
+                // still wins, for anyone who wants something else.
+                let private = self.audio_sink.ensure();
+                let device = self.config.audio.device.clone().or_else(|| {
+                    private.then(|| crate::sink::MONITOR.to_string())
+                });
+                let opus = self.everyone_decodes_opus();
+                self.audio = crate::audio::start(device.as_deref(), opus, move |chunk| {
+                    clients.send_audio(chunk);
+                });
+            }
+            (true, true) => {
+                // Already capturing. A listener joining or leaving can change
+                // whether compression is safe, and that takes effect on the
+                // next chunk rather than needing the capture restarted.
+                if let Some(capture) = self.audio.as_ref() {
+                    capture.set_opus(self.everyone_decodes_opus());
+                }
+            }
+            (false, true) => {
+                // `Capture` stops the process on drop.
+                self.audio = None;
+                tracing::info!("nobody is listening; audio capture stopped");
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether every client that has answered can decode H.264.
+    ///
+    /// All, not any: one encode is shared by everyone watching a window, so a
+    /// single client without a `VideoDecoder` (which is every browser reached
+    /// over plain HTTP, since WebCodecs needs a secure context) decides the
+    /// format. The alternative is encoding each window twice, and there are
+    /// only eight NVENC sessions.
+    ///
+    /// Sessions that have not answered yet are *ignored* rather than counted as
+    /// "cannot". Counting them made the answer flip to JPEG for the moment
+    /// between a client connecting and its first `SetStreams`, and every flip
+    /// clears all the encoder sessions.
+    /// The codec to encode in, given everyone currently watching.
+    ///
+    /// `None` means JPEG: nobody has answered yet, or somebody can decode
+    /// nothing. Sessions that have not yet said are ignored rather than
+    /// assumed, since assuming either way is wrong for one of them. See
+    /// [`lwfa_proto::Codec::best_for_all`].
+    /// Can every listener decode Opus?
+    ///
+    /// One capture is fanned out to all of them, so compressing it when one
+    /// cannot decode it would leave that one in silence. Only sessions that
+    /// are actually listening are asked: somebody with audio switched off has
+    /// no say in what the listeners get.
+    pub fn everyone_decodes_opus(&self) -> bool {
+        let mut listening = self.sessions.values().filter(|s| s.audio).peekable();
+        listening.peek().is_some() && listening.all(|s| s.opus)
+    }
+
+    pub fn codec_for_all(&self) -> Option<lwfa_proto::Codec> {
+        let answered: Vec<&[lwfa_proto::Codec]> = self
+            .sessions
+            .values()
+            .filter_map(|s| s.codecs.as_deref())
+            .collect();
+        lwfa_proto::Codec::best_for_all(answered)
+    }
+
+    /// Broadcast the primary's arrangement to everyone following it.
+    ///
+    /// Followers cannot compute this for themselves: a window has one size, so
+    /// there is one arrangement, and each of them fits it into its own viewport
+    /// rather than deciding it.
+    pub fn broadcast_layout(&self, from: lwfa_proto::SessionId, windows: &[lwfa_proto::WindowLayout]) {
+        let size = self.layout.output_size();
+        let message = ToShell::Layout {
+            windows: windows.to_vec(),
+            output: lwfa_proto::Output {
+                width: size.w,
+                height: size.h,
+                scale: 1.0,
+            },
+        };
+        for id in self.sessions.keys() {
+            if *id != from {
+                self.send_to_session(*id, message.clone());
+            }
+        }
+    }
+
+    /// The current arrangement, for one connection that is following it.
+    pub fn send_layout_to(&self, session: lwfa_proto::SessionId) {
+        let size = self.layout.output_size();
+        self.send_to_session(
+            session,
+            ToShell::Layout {
+                windows: self.last_layout.clone(),
+                output: lwfa_proto::Output {
+                    width: size.w,
+                    height: size.h,
+                    scale: 1.0,
+                },
+            },
+        );
+    }
+
     /// Full current state, sent on every shell connection.
-    pub fn hello(&self) -> ToShell {
+    pub fn hello(&self, session: lwfa_proto::SessionId) -> ToShell {
         let size = self.layout.output_size();
         let mut windows: Vec<WindowInfo> = self
             .layout
@@ -364,8 +743,22 @@ impl Lwfa {
             },
             windows,
             focused: self.focused,
-            permissions: self.permissions.clone(),
-            account: self.account.clone(),
+            permissions: self
+                .sessions
+                .get(&session)
+                .map(|s| s.permissions.clone())
+                .unwrap_or_else(|| lwfa_proto::Permissions {
+                    mode: lwfa_proto::SessionMode::View,
+                    allowed_apps: Some(Vec::new()),
+                }),
+            account: self
+                .sessions
+                .get(&session)
+                .map(|s| s.account.clone())
+                .unwrap_or_default(),
+            session,
+            primary: self.primary == Some(session),
+            peers: self.peers(),
         }
     }
 
@@ -473,10 +866,36 @@ impl Lwfa {
     }
 
     pub fn send_configures(&mut self, configures: Vec<layout::PendingConfigure>) {
+        let output = self.layout.output_size();
         for configure in configures {
             match configure.window.underlying_surface() {
                 WindowSurface::Wayland(toplevel) => {
-                    toplevel.with_pending_state(|state| state.size = Some(configure.rect.size));
+                    // Tell the client whether it is fullscreen, not just how
+                    // big to be.
+                    //
+                    // A size alone is not enough. A window told to fill the
+                    // screen still believes it is an ordinary window, so a
+                    // video player keeps its page chrome and its fullscreen
+                    // button keeps offering to do the thing it is already
+                    // doing. The state is what makes the client change its own
+                    // mind, and it is double-buffered with the size in the
+                    // same configure so the two can never disagree.
+                    //
+                    // Derived from the geometry rather than tracked separately:
+                    // a window covering the whole output *is* fullscreen,
+                    // however it came to be that size. That means lwfa's own
+                    // fullscreen control tells clients too, which it never used
+                    // to. Same rule the shell uses to decide whether to round
+                    // the corners; see `fillsOutput` there.
+                    let fills = configure.rect.size.w >= output.w && configure.rect.size.h >= output.h;
+                    toplevel.with_pending_state(|state| {
+                        state.size = Some(configure.rect.size);
+                        if fills {
+                            state.states.set(xdg_toplevel::State::Fullscreen);
+                        } else {
+                            state.states.unset(xdg_toplevel::State::Fullscreen);
+                        }
+                    });
                     toplevel.send_pending_configure();
                 }
                 WindowSurface::X11(x11) => {
@@ -615,9 +1034,15 @@ impl Lwfa {
     /// whole permission system decorative.
     pub fn accounts_for_owner(
         &self,
+        session: lwfa_proto::SessionId,
         request: &str,
     ) -> Result<Arc<std::sync::Mutex<crate::accounts::Accounts>>, ToShell> {
-        if self.account != "owner" {
+        if self
+            .sessions
+            .get(&session)
+            .map(|s| s.account.as_str())
+            != Some("owner")
+        {
             return Err(ToShell::Error {
                 request: request.to_string(),
                 message: "only the owner may manage accounts".to_string(),
@@ -664,13 +1089,48 @@ impl Lwfa {
         if self.streaming.is_empty() {
             return;
         }
+        self.warn_if_nothing_ever_arrived();
         let Some(shell) = self.shell.as_ref() else {
             return;
         };
         let Some(worker) = self.encoders.as_ref() else {
             return;
         };
-        if !shell.can_accept_frame() || !worker.has_capacity() {
+
+        // Backpressure is the congestion signal.
+        //
+        // A full queue means the far end is not keeping up. This used to be
+        // read only as "skip this frame", which keeps the picture moving but
+        // never asks why. Feeding it to the controller turns the same
+        // observation into a bitrate that fits the connection. See `bitrate`.
+        let congested = !shell.can_accept_frame() || !worker.has_capacity();
+        let now = std::time::Instant::now();
+        let budget_changed = self.bitrate.observe(congested, now).is_some();
+
+        // Divide the budget between the windows actually being streamed, giving
+        // the focused one the larger share.
+        //
+        // The budget is a *total*: each window has its own encoder session, and
+        // the rate handed to a session is that session's ceiling, so giving them
+        // all the same number multiplies it by the window count. The connection
+        // experiences the sum. See `bitrate::allocate`.
+        let streamed: Vec<WindowId> = {
+            let mut ids: Vec<WindowId> = self.streaming.iter().copied().collect();
+            // Sorted so the allocation is stable frame to frame and a set's
+            // iteration order cannot make windows swap shares.
+            ids.sort_unstable();
+            ids
+        };
+        let attended = self.attention.observe(self.focused, now);
+        if budget_changed || streamed != self.streamed_last || attended != self.attended_last {
+            let budget = self.bitrate.bitrate();
+            let rates = crate::bitrate::allocate(budget, &streamed, attended);
+            worker.set_rates(rates, budget);
+            self.streamed_last = streamed;
+            self.attended_last = attended;
+        }
+
+        if congested {
             return;
         }
 
@@ -714,6 +1174,10 @@ impl Lwfa {
             // Hand off. Encoding, and in particular opening an NVENC session,
             // happens on the encoder thread so a 160ms session build cannot
             // stall compositing.
+            // Whatever else happens to this frame, the window has now produced
+            // one, which is the thing `warn_if_nothing_ever_arrived` watches.
+            self.awaiting_first_frame.remove(&id);
+
             if let Some(worker) = self.encoders.as_ref() {
                 if !worker.submit(frame) {
                     // Dropped because the encoder is behind. The capture's

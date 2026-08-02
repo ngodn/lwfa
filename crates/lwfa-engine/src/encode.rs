@@ -52,6 +52,10 @@ pub struct EncodedFrame {
 }
 
 struct Session {
+    /// Which codec this session encodes, so frames can be labelled.
+    codec: lwfa_proto::Codec,
+    /// The rate it was built with, so a changed share can be noticed.
+    bitrate: u32,
     encoder: ff::encoder::video::Encoder,
     scaler: scaling::Context,
     nv12: ff::frame::Video,
@@ -75,7 +79,12 @@ pub struct Encoders {
     /// A browser reached over plain HTTP has no WebCodecs `VideoDecoder`,
     /// because that API is gated on a secure context. Sending it H.264 produces
     /// a permanently blank window, so it gets JPEG instead.
-    client_supports_h264: bool,
+    /// What the clients can decode, or `None` for JPEG. See `codec_for_all`.
+    codec: Option<lwfa_proto::Codec>,
+    /// Bits per second for each window, from the budget. See `bitrate`.
+    rates: std::collections::HashMap<WindowId, u32>,
+    /// What a window with no allocation yet gets.
+    fallback_rate: u32,
 }
 
 impl Default for Encoders {
@@ -88,13 +97,22 @@ impl Encoders {
     pub fn new(config: crate::config::Stream) -> Self {
         let available = match ff::init() {
             Ok(()) => {
-                let found = ff::encoder::find_by_name(ENCODER_NAME).is_some();
-                if !found {
-                    tracing::warn!(
-                        "{ENCODER_NAME} not available in this ffmpeg build; falling back to JPEG"
-                    );
+                // Any hardware encoder at all is enough to be "available";
+                // which one gets used depends on what the clients can decode
+                // and is decided per session. A build with H.264 but not HEVC
+                // is a real configuration, and it should stream rather than
+                // fall back to JPEG for want of the better codec.
+                let usable: Vec<&str> = lwfa_proto::Codec::ALL
+                    .into_iter()
+                    .map(encoder_name)
+                    .filter(|name| ff::encoder::find_by_name(name).is_some())
+                    .collect();
+                if usable.is_empty() {
+                    tracing::warn!("no hardware encoder in this ffmpeg build; falling back to JPEG");
+                } else {
+                    tracing::info!("hardware encoders available: {}", usable.join(", "));
                 }
-                found
+                !usable.is_empty()
             }
             Err(err) => {
                 tracing::warn!("could not initialise ffmpeg ({err}); falling back to JPEG");
@@ -107,7 +125,9 @@ impl Encoders {
             sessions: HashMap::new(),
             fallback: HashMap::new(),
             available,
-            client_supports_h264: true,
+            codec: Some(lwfa_proto::Codec::H264),
+            rates: std::collections::HashMap::new(),
+            fallback_rate: crate::bitrate::STEPS[3],
         }
     }
 
@@ -126,24 +146,55 @@ impl Encoders {
         }
     }
 
-    /// Tell the encoders whether the client can decode H.264.
+    /// Tell the encoders which codec every client can decode.
     ///
-    /// Dropping the sessions on a change matters: a client that cannot decode
-    /// H.264 must not be left holding a stream it will never render, and one
-    /// that can needs a fresh session with an IDR rather than resuming
-    /// mid-GOP.
-    pub fn set_client_supports_h264(&mut self, supported: bool) {
-        if self.client_supports_h264 != supported {
-            tracing::info!(
-                "client {} decode H.264; {}",
-                if supported { "can" } else { "cannot" },
-                if supported {
-                    "using hardware encode"
-                } else {
-                    "falling back to JPEG"
+    /// Dropping the sessions on a change matters: a client cannot be left
+    /// holding a stream in a codec it will never render, and a client that has
+    /// just arrived needs a fresh session with an IDR rather than resuming
+    /// mid-GOP in a codec that has changed underneath it.
+    /// Set each window's share of the budget.
+    ///
+    /// A session's rate is fixed when it is created, and `ffmpeg-next` exposes
+    /// no way to reconfigure one, so a change means rebuilding that window's
+    /// session and paying a keyframe for it. NVENC itself can reconfigure on
+    /// the fly; the binding cannot ask it to.
+    ///
+    /// So only the windows whose share genuinely moved are rebuilt, and only
+    /// when it moved by more than a quarter. Without that, one window opening
+    /// shifts every other window's share by a few percent and rebuilds all of
+    /// them for no visible gain.
+    pub fn set_rates(&mut self, rates: std::collections::HashMap<WindowId, u32>, fallback: u32) {
+        self.fallback_rate = fallback;
+
+        let mut rebuilt = 0;
+        for (id, rate) in &rates {
+            let current = self.sessions.get(id).map(|s| s.bitrate);
+            if let Some(current) = current {
+                let moved = (*rate as f64 - current as f64).abs() / current.max(1) as f64;
+                if moved > crate::bitrate::DEADBAND {
+                    self.sessions.remove(id);
+                    rebuilt += 1;
                 }
-            );
-            self.client_supports_h264 = supported;
+            }
+        }
+        if rebuilt > 0 {
+            tracing::debug!("re-encoding {rebuilt} window(s) at a new share of the budget");
+        }
+        self.rates = rates;
+    }
+
+    /// What this window should be encoded at.
+    fn rate_for(&self, id: WindowId) -> u32 {
+        self.rates.get(&id).copied().unwrap_or(self.fallback_rate)
+    }
+
+    pub fn set_codec(&mut self, codec: Option<lwfa_proto::Codec>) {
+        if self.codec != codec {
+            match codec {
+                Some(codec) => tracing::info!("encoding as {}", encoder_name(codec)),
+                None => tracing::info!("no codec every client can decode; falling back to JPEG"),
+            }
+            self.codec = codec;
             self.sessions.clear();
         }
     }
@@ -151,7 +202,7 @@ impl Encoders {
     /// Encode a captured frame, falling back to JPEG if hardware is unavailable
     /// or the client cannot decode it.
     pub fn encode(&mut self, frame: &CapturedFrame) -> Option<EncodedFrame> {
-        if self.available && self.client_supports_h264 && self.ensure_session(frame) {
+        if self.available && self.codec.is_some() && self.ensure_session(frame) {
             if let Some(encoded) = self.encode_h264(frame) {
                 return Some(encoded);
             }
@@ -190,12 +241,16 @@ impl Encoders {
             return false;
         }
 
-        match Session::new(frame.width, frame.height, self.config.gop) {
+        let Some(codec) = self.codec else {
+            return false;
+        };
+        match Session::new(codec, frame.width, frame.height, self.config.gop, self.rate_for(frame.id)) {
             Ok(session) => {
                 self.fallback.remove(&frame.id);
                 self.sessions.insert(frame.id, session);
                 tracing::info!(
-                    "opened an h264 session for {} ({}x{}), {} of {} in use",
+                    "opened a {} session for {} ({}x{}), {} of {} in use",
+                    encoder_name(codec),
                     frame.id,
                     frame.width,
                     frame.height,
@@ -219,11 +274,27 @@ impl Encoders {
     }
 }
 
-const ENCODER_NAME: &str = "h264_nvenc";
+/// The NVENC encoder for each codec.
+///
+/// HEVC costs the same to encode here, since the card has a dedicated block for
+/// it, and spends roughly a third fewer bits for the same picture.
+fn encoder_name(codec: lwfa_proto::Codec) -> &'static str {
+    match codec {
+        lwfa_proto::Codec::Hevc => "hevc_nvenc",
+        lwfa_proto::Codec::H264 => "h264_nvenc",
+    }
+}
 
 impl Session {
-    fn new(width: u32, height: u32, gop: u32) -> Result<Self, ff::Error> {
-        let codec = ff::encoder::find_by_name(ENCODER_NAME).ok_or(ff::Error::EncoderNotFound)?;
+    fn new(
+        codec: lwfa_proto::Codec,
+        width: u32,
+        height: u32,
+        gop: u32,
+        bitrate: u32,
+    ) -> Result<Self, ff::Error> {
+        let wanted = codec;
+        let codec = ff::encoder::find_by_name(encoder_name(codec)).ok_or(ff::Error::EncoderNotFound)?;
         let ctx = ff::codec::context::Context::new_with_codec(codec);
         let mut enc = ctx.encoder().video()?;
 
@@ -238,7 +309,9 @@ impl Session {
         // No B-frames: they reorder output, which adds latency for no benefit
         // on an interactive stream.
         enc.set_max_b_frames(0);
-        enc.set_bit_rate(4_000_000);
+        // Chosen by the controller from how the connection is coping, not
+        // fixed. See `bitrate`.
+        enc.set_bit_rate(bitrate as usize);
 
         let mut opts = ff::Dictionary::new();
         opts.set("preset", "p1"); // fastest
@@ -278,6 +351,8 @@ impl Session {
             nv12: ff::frame::Video::new(Pixel::NV12, width, height),
             width,
             height,
+            codec: wanted,
+            bitrate,
             pts: 0,
             force_keyframe: true,
         })
@@ -318,7 +393,13 @@ impl Session {
         }
 
         Some(EncodedFrame {
-            format: FrameFormat::H264,
+            // The wire format follows the codec this session was built for, so
+            // the client knows which decoder to configure without guessing
+            // from the bitstream.
+            format: match self.codec {
+                lwfa_proto::Codec::Hevc => FrameFormat::Hevc,
+                lwfa_proto::Codec::H264 => FrameFormat::H264,
+            },
             keyframe,
             bytes,
         })
@@ -473,7 +554,8 @@ struct Job {
 enum Control {
     Forget(WindowId),
     RequestKeyframes,
-    ClientSupportsH264(bool),
+    Codec(Option<lwfa_proto::Codec>),
+    Rates(std::collections::HashMap<WindowId, u32>, u32),
 }
 
 impl EncodeWorker {
@@ -509,7 +591,8 @@ impl EncodeWorker {
                         match message {
                             Control::Forget(id) => encoders.forget(id),
                             Control::RequestKeyframes => encoders.request_keyframes(),
-                            Control::ClientSupportsH264(v) => encoders.set_client_supports_h264(v),
+                            Control::Codec(v) => encoders.set_codec(v),
+                            Control::Rates(rates, fallback) => encoders.set_rates(rates, fallback),
                         }
                     }
 
@@ -526,7 +609,9 @@ impl EncodeWorker {
                         format: encoded.format,
                         keyframe: encoded.keyframe,
                     };
-                    sink.send_frame(header.encode_with_payload(&encoded.bytes));
+                    // Addressed by window, because a frame goes only to the
+                    // clients that asked for that window. See `FrameSink`.
+                    sink.send_frame(job.frame.id, header.encode_with_payload(&encoded.bytes));
                 }
             })?;
 
@@ -566,9 +651,14 @@ impl EncodeWorker {
         let _ = self.control.try_send(Control::RequestKeyframes);
     }
 
-    pub fn set_client_supports_h264(&self, supported: bool) {
+    /// Ask the encoder thread to re-divide the budget. See `bitrate`.
+    pub fn set_rates(&self, rates: std::collections::HashMap<WindowId, u32>, fallback: u32) {
+        let _ = self.control.try_send(Control::Rates(rates, fallback));
+    }
+
+    pub fn set_codec(&self, codec: Option<lwfa_proto::Codec>) {
         let _ = self
             .control
-            .try_send(Control::ClientSupportsH264(supported));
+            .try_send(Control::Codec(codec));
     }
 }

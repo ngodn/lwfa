@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest"
+import type { WindowId } from "@lwfa/proto"
 import {
   DEFAULT_CONFIG,
   EMPTY,
@@ -30,12 +31,20 @@ import {
   focusedWindow,
   WIDTH_PRESETS,
   intersectsViewport,
+  isFullscreen,
   layout,
   moveToWorkspace,
   presetWidth,
   reflow,
   removeWindow,
   stackedHeight,
+  fillsOutput,
+  moveWindow,
+  sendToWorkspace,
+  setColumnWidth,
+  setFullscreen,
+  stripBounds,
+  toggleFullscreen,
 } from "../src/strip.js"
 
 const config = DEFAULT_CONFIG
@@ -497,5 +506,459 @@ describe("purity", () => {
     const a = layout(withWindows([1, 2, 3], nested), nested, config)
     const b = layout(withWindows([1, 2, 3], nested), nested, config)
     expect(a).toEqual(b)
+  })
+})
+
+describe("fullscreen", () => {
+  it("gives the focused window the whole output, with no gap", () => {
+    const state = toggleFullscreen(withWindows([1, 2, 3]), wide, config)
+    expect(isFullscreen(state)).toBe(true)
+
+    const rects = layout(state, wide, config)
+    expect(rects).toEqual([
+      { id: 3, rect: { x: 0, y: 0, width: 1920, height: 1080 }, z: 0 },
+    ])
+  })
+
+  it("reaches 100%, which no width preset does", () => {
+    // The complaint that prompted this: cycling widths tops out below the
+    // viewport, because a column is a fraction of the strip and still sits
+    // inside the gaps.
+    const widest = presetWidth(3, wide, config)
+    expect(widest).toBeLessThan(wide.width)
+
+    const [only] = layout(toggleFullscreen(withWindows([1]), wide, config), wide, config)
+    expect(only!.rect.width).toBe(wide.width)
+    expect(only!.rect.height).toBe(wide.height)
+  })
+
+  it("hides everything else, rather than laying it out underneath", () => {
+    const state = toggleFullscreen(withWindows([1, 2, 3]), wide, config)
+    expect(layout(state, wide, config).map((w) => w.id)).toEqual([3])
+  })
+
+  it("toggles back to the strip it came from", () => {
+    const strip = withWindows([1, 2, 3])
+    const state = toggleFullscreen(toggleFullscreen(strip, wide, config), wide, config)
+    expect(isFullscreen(state)).toBe(false)
+    expect(layout(state, wide, config)).toEqual(layout(strip, wide, config))
+  })
+
+  it("drops out when focus moves, since nothing else is drawn", () => {
+    // Leaving it set would look like the shell had frozen: focus would move
+    // and the same single window would still be filling the screen.
+    const state = focusLeft(toggleFullscreen(withWindows([1, 2, 3]), wide, config), wide, config)
+    expect(isFullscreen(state)).toBe(false)
+    expect(layout(state, wide, config).length).toBe(3)
+  })
+
+  it("drops out when the fullscreen window closes", () => {
+    const state = removeWindow(
+      toggleFullscreen(withWindows([1, 2]), wide, config),
+      2,
+      wide,
+      config,
+    )
+    expect(isFullscreen(state)).toBe(false)
+    expect(layout(state, wide, config).map((w) => w.id)).toEqual([1])
+  })
+
+  it("survives a trip to another workspace and back", () => {
+    // Per workspace, not global: coming back to a fullscreen video should find
+    // it as you left it.
+    let state = toggleFullscreen(withWindows([1, 2]), wide, config)
+    state = focusWorkspace(state, 1, wide, config)
+    expect(isFullscreen(state)).toBe(false)
+    state = focusWorkspace(state, -1, wide, config)
+    expect(isFullscreen(state)).toBe(true)
+  })
+
+  it("does nothing on an empty workspace", () => {
+    expect(toggleFullscreen(EMPTY, wide, config)).toBe(EMPTY)
+  })
+
+  it("follows the client viewport, whatever shape it is", () => {
+    for (const output of [wide, nested, scrollable, { width: 390, height: 844 }]) {
+      const [only] = layout(toggleFullscreen(withWindows([1], output), output, config), output, config)
+      expect(only!.rect).toEqual({ x: 0, y: 0, width: output.width, height: output.height })
+    }
+  })
+})
+
+/**
+ * A fullscreen window kept its rounded corners and its focus ring, so the
+ * desktop showed through four corners of something meant to be edge to edge.
+ * The window was never told it was fullscreen; the fix asks geometrically.
+ */
+describe("fillsOutput", () => {
+  const out: Output = { width: 1920, height: 1080 }
+
+  it("is true for a window covering the whole output", () => {
+    expect(fillsOutput({ x: 0, y: 0, width: 1920, height: 1080 }, out)).toBe(true)
+  })
+
+  it("is true a pixel over, since rects are rounded on the way here", () => {
+    expect(fillsOutput({ x: 0, y: 0, width: 1921, height: 1081 }, out)).toBe(true)
+  })
+
+  it("is false while any of the strip is still visible", () => {
+    // The widest preset still leaves gaps, so it stays a card and keeps its
+    // corners. This is the case the fix must not sweep up.
+    expect(fillsOutput({ x: 12, y: 12, width: 1896, height: 1056 }, out)).toBe(false)
+    expect(fillsOutput({ x: 0, y: 0, width: 1919, height: 1080 }, out)).toBe(false)
+    expect(fillsOutput({ x: 0, y: 0, width: 1920, height: 1079 }, out)).toBe(false)
+  })
+
+  it("is false for a full-size window scrolled off the origin", () => {
+    expect(fillsOutput({ x: 40, y: 0, width: 1920, height: 1080 }, out)).toBe(false)
+  })
+
+  it("agrees with the layout fullscreen actually produces", () => {
+    // Pinned against the real thing, so a change to how fullscreen lays out
+    // cannot silently stop matching.
+    const state = toggleFullscreen(withWindows([1, 2], out), out, config)
+    const placed = layout(state, out, config)
+    expect(placed).toHaveLength(1)
+    expect(fillsOutput(placed[0]!.rect, out)).toBe(true)
+  })
+
+  it("says no for every window in an ordinary strip", () => {
+    const placed = layout(withWindows([1, 2, 3], out), out, config)
+    expect(placed.length).toBeGreaterThan(1)
+    for (const w of placed) expect(fillsOutput(w.rect, out)).toBe(false)
+  })
+})
+
+/**
+ * Arrange mode has to show the whole strip, and under scrollable tiling the
+ * strip is not the viewport: columns run off both ends. Rearranging a desktop
+ * you can only see part of is the problem the mode exists to solve, so getting
+ * this box wrong makes the whole thing pointless.
+ */
+describe("stripBounds", () => {
+  const out: Output = { width: 1000, height: 800 }
+
+  it("is the output when there is nothing placed", () => {
+    expect(stripBounds([], out)).toEqual({ x: 0, y: 0, width: 1000, height: 800 })
+  })
+
+  it("never shrinks below the output", () => {
+    // One narrow window must not scale up to fill the screen.
+    const placed = [{ id: 1 as WindowId, rect: { x: 10, y: 10, width: 100, height: 80 }, z: 0 }]
+    expect(stripBounds(placed, out)).toEqual({ x: 0, y: 0, width: 1000, height: 800 })
+  })
+
+  it("reaches past the right edge to include a column off-screen", () => {
+    const placed = [
+      { id: 1 as WindowId, rect: { x: 0, y: 0, width: 600, height: 800 }, z: 0 },
+      { id: 2 as WindowId, rect: { x: 620, y: 0, width: 600, height: 800 }, z: 1 },
+    ]
+    expect(stripBounds(placed, out)).toMatchObject({ x: 0, width: 1220 })
+  })
+
+  it("reaches past the left edge for a column scrolled off the start", () => {
+    // Negative x is normal here: the strip scrolls, so the focused column sits
+    // at the centre and its neighbours run off behind the origin.
+    const placed = [
+      { id: 1 as WindowId, rect: { x: -400, y: 0, width: 600, height: 800 }, z: 0 },
+      { id: 2 as WindowId, rect: { x: 220, y: 0, width: 600, height: 800 }, z: 1 },
+    ]
+    // Width is 1400, not 1220: the right edge is the output's, since the
+    // output is always included and reaches further than the last column.
+    expect(stripBounds(placed, out)).toEqual({ x: -400, y: 0, width: 1400, height: 800 })
+  })
+
+  it("covers a real strip of five windows completely", () => {
+    // Pinned against the actual layout rather than hand-written rects, so a
+    // change to how columns are placed cannot silently leave one outside.
+    const placed = layout(withWindows([1, 2, 3, 4, 5], out), out, config)
+    const bounds = stripBounds(placed, out)
+    for (const w of placed) {
+      expect(w.rect.x).toBeGreaterThanOrEqual(bounds.x)
+      expect(w.rect.y).toBeGreaterThanOrEqual(bounds.y)
+      expect(w.rect.x + w.rect.width).toBeLessThanOrEqual(bounds.x + bounds.width)
+      expect(w.rect.y + w.rect.height).toBeLessThanOrEqual(bounds.y + bounds.height)
+    }
+  })
+})
+
+/**
+ * Moving a window somewhere chosen, which is what a drag does.
+ *
+ * `consumeIntoColumn` and `expelFromColumn` move the focused window one step in
+ * a fixed direction, which is right for a keyboard and useless for a pointer
+ * that already knows where it is going. Expressing a drag as a run of those
+ * would flash intermediate arrangements and could not say "third row of that
+ * column" at all.
+ */
+describe("moveWindow", () => {
+  const out: Output = { width: 1200, height: 800 }
+  const columnsOf = (s: StripState) => currentWorkspace(s).columns.map((c) => c.windows)
+
+  it("joins an existing column", () => {
+    const state = withWindows([1, 2, 3], out)
+    const moved = moveWindow(state, 3 as WindowId, { kind: "column", index: 0 }, out, config)
+    expect(columnsOf(moved)).toEqual([[1, 3], [2]])
+  })
+
+  it("puts it in the row asked for, not just at the end", () => {
+    const state = moveWindow(
+      withWindows([1, 2, 3], out),
+      3 as WindowId,
+      { kind: "column", index: 0, row: 0 },
+      out,
+      config,
+    )
+    expect(columnsOf(state)).toEqual([[3, 1], [2]])
+  })
+
+  it("gives it a column of its own at the index asked for", () => {
+    const state = withWindows([1, 2, 3], out)
+    const moved = moveWindow(state, 3 as WindowId, { kind: "newColumn", index: 0 }, out, config)
+    expect(columnsOf(moved)).toEqual([[3], [1], [2]])
+  })
+
+  it("closes up the column it left", () => {
+    // Two columns, the second holding only window 2. Moving 2 away must not
+    // leave an empty column behind, which would show as a gap you cannot fill.
+    const state = moveWindow(
+      withWindows([1, 2], out),
+      2 as WindowId,
+      { kind: "column", index: 0 },
+      out,
+      config,
+    )
+    expect(columnsOf(state)).toEqual([[1, 2]])
+  })
+
+  it("indexes the target against the strip after the gap has closed", () => {
+    // The off-by-one this design exists to avoid. Window 1 is alone in column
+    // 0; dropping it after column 1 must land it last, not back where it was.
+    const state = withWindows([1, 2, 3], out)
+    const moved = moveWindow(state, 1 as WindowId, { kind: "newColumn", index: 2 }, out, config)
+    expect(columnsOf(moved)).toEqual([[2], [3], [1]])
+  })
+
+  it("keeps focus on the window that moved", () => {
+    const moved = moveWindow(
+      withWindows([1, 2, 3], out),
+      1 as WindowId,
+      { kind: "column", index: 1 },
+      out,
+      config,
+    )
+    expect(focusedWindow(moved)).toBe(1)
+  })
+
+  it("does not lose a window dropped onto the column it was alone in", () => {
+    // Lifting it out empties that column, so the target no longer exists.
+    // Naively indexing into the emptied list would drop the window entirely.
+    const state = withWindows([1], out)
+    const moved = moveWindow(state, 1 as WindowId, { kind: "column", index: 0 }, out, config)
+    expect(columnsOf(moved)).toEqual([[1]])
+    expect(allWindows(moved)).toEqual([1])
+  })
+
+  it("never loses or duplicates a window, wherever it is dropped", () => {
+    const state = withWindows([1, 2, 3, 4], out)
+    const targets = [
+      { kind: "column", index: 0 },
+      { kind: "column", index: 2, row: 0 },
+      { kind: "newColumn", index: 0 },
+      { kind: "newColumn", index: 99 },
+      { kind: "column", index: 99 },
+    ] as const
+    for (const target of targets) {
+      const moved = moveWindow(state, 2 as WindowId, target, out, config)
+      expect(allWindows(moved).sort()).toEqual([1, 2, 3, 4])
+    }
+  })
+
+  it("ignores a window that is not there", () => {
+    const state = withWindows([1, 2], out)
+    expect(moveWindow(state, 99 as WindowId, { kind: "column", index: 0 }, out, config)).toBe(state)
+  })
+
+  it("drops fullscreen, since the result would otherwise be invisible", () => {
+    const state = toggleFullscreen(withWindows([1, 2], out), out, config)
+    expect(isFullscreen(state)).toBe(true)
+    const moved = moveWindow(state, 1 as WindowId, { kind: "column", index: 0 }, out, config)
+    expect(isFullscreen(moved)).toBe(false)
+  })
+
+  it("keeps the width of the column it came from", () => {
+    // A window pulled out of a half-width column should not snap to a third.
+    let state = withWindows([1, 2], out)
+    state = cycleWidth(state, out, config)
+    const width = currentWorkspace(state).columns[currentWorkspace(state).focus]!.width
+    const moved = moveWindow(state, focusedWindow(state)!, { kind: "newColumn", index: 0 }, out, config)
+    expect(currentWorkspace(moved).columns[0]!.width).toBe(width)
+  })
+})
+
+/**
+ * Dragging a window onto a workspace chip.
+ *
+ * Deliberately not the same as the keyboard's `moveToWorkspace`: that follows
+ * the window, because a keyboard has no other way to show you what happened.
+ * A drag is the opposite. You are tidying, and being thrown onto another
+ * workspace on every flick turns organising three windows into three journeys
+ * back.
+ */
+describe("sendToWorkspace", () => {
+  const out: Output = { width: 1200, height: 800 }
+
+  /** Just the workspace being looked at, since `allWindows` spans all of them. */
+  const here = (s: StripState, at = s.focus) =>
+    s.workspaces[at]!.columns.flatMap((c) => c.windows)
+
+  it("moves the named window, not the focused one", () => {
+    const state = withWindows([1, 2, 3], out)
+    expect(focusedWindow(state)).toBe(3)
+    const moved = sendToWorkspace(state, 1 as WindowId, 1, out, config)
+    expect(here(moved, 0)).not.toContain(1)
+    expect(here(moved, 1)).toContain(1)
+  })
+
+  it("leaves you on the workspace you were arranging", () => {
+    const state = withWindows([1, 2], out)
+    const moved = sendToWorkspace(state, 1 as WindowId, 1, out, config)
+    expect(moved.focus).toBe(0)
+    expect(here(moved)).toEqual([2])
+  })
+
+  it("does nothing sending a window where it already is", () => {
+    const state = withWindows([1, 2], out)
+    expect(sendToWorkspace(state, 1 as WindowId, 0, out, config)).toBe(state)
+  })
+
+  it("ignores a window that does not exist", () => {
+    const state = withWindows([1], out)
+    expect(sendToWorkspace(state, 99 as WindowId, 1, out, config)).toBe(state)
+  })
+
+  it("never loses the window", () => {
+    const state = withWindows([1, 2, 3], out)
+    for (const target of [0, 1, 5, -1]) {
+      const moved = sendToWorkspace(state, 2 as WindowId, target, out, config)
+      const everywhere = moved.workspaces.flatMap((ws) => ws.columns.flatMap((c) => c.windows))
+      expect(everywhere.sort()).toEqual([1, 2, 3])
+    }
+  })
+
+  it("keeps you looking at the same windows when workspaces renumber", () => {
+    // Workspaces are dynamic: emptying one drops it and the rest shift down.
+    // Holding the old index would silently land you somewhere else, so the
+    // check is on what you can see, not on the number.
+    let state = withWindows([1], out)
+    state = focusWorkspace(state, 1, out, config)
+    state = addWindow(state, 2 as WindowId, out, config)
+    const before = here(state)
+    // Pull window 1 over from the workspace that then becomes empty.
+    const moved = sendToWorkspace(state, 1 as WindowId, state.focus, out, config)
+    expect(here(moved)).toEqual([...before, 1])
+  })
+})
+
+/**
+ * Choosing a width, rather than stepping to one.
+ *
+ * The panel offers the presets as four buttons, so it has a destination.
+ * Reaching it with `cycleWidth` would push a layout per step and animate the
+ * column through every width in between on the way to the one asked for.
+ */
+describe("setColumnWidth", () => {
+  const out: Output = { width: 1200, height: 800 }
+  const widthOf = (s: StripState, column = currentWorkspace(s).focus) =>
+    currentWorkspace(s).columns[column]!.width
+
+  it("goes straight to the preset asked for", () => {
+    const state = withWindows([1, 2], out)
+    expect(widthOf(setColumnWidth(state, 2 as WindowId, 3, out, config))).toBe(3)
+    expect(widthOf(setColumnWidth(state, 2 as WindowId, 0, out, config))).toBe(0)
+  })
+
+  it("acts on the named window's column, not the focused one", () => {
+    const state = withWindows([1, 2], out)
+    expect(focusedWindow(state)).toBe(2)
+    const moved = setColumnWidth(state, 1 as WindowId, 3, out, config)
+    expect(widthOf(moved, 0)).toBe(3)
+    // And the focused column is left alone.
+    expect(widthOf(moved, 1)).toBe(widthOf(state, 1))
+  })
+
+  it("does not move focus", () => {
+    const state = withWindows([1, 2], out)
+    expect(focusedWindow(setColumnWidth(state, 1 as WindowId, 3, out, config))).toBe(2)
+  })
+
+  it("is a no-op at the width it already has", () => {
+    const state = withWindows([1], out)
+    const width = widthOf(state)
+    expect(setColumnWidth(state, 1 as WindowId, width, out, config)).toBe(state)
+  })
+
+  it("clamps a preset off either end", () => {
+    const state = withWindows([1], out)
+    expect(widthOf(setColumnWidth(state, 1 as WindowId, 99, out, config))).toBe(
+      WIDTH_PRESETS.length - 1,
+    )
+    expect(widthOf(setColumnWidth(state, 1 as WindowId, -5, out, config))).toBe(0)
+  })
+
+  it("ignores a window that is not there", () => {
+    const state = withWindows([1], out)
+    expect(setColumnWidth(state, 99 as WindowId, 2, out, config)).toBe(state)
+  })
+})
+
+/**
+ * A client asking to be fullscreen: the button inside a video player.
+ *
+ * The engine forwards it because the arrangement is decided here, and a window
+ * the engine put fullscreen alone would be moved straight back to its column
+ * width by the next layout.
+ */
+describe("setFullscreen", () => {
+  const out: Output = { width: 1200, height: 800 }
+
+  it("puts the named window fullscreen", () => {
+    const state = setFullscreen(withWindows([1, 2], out), 1 as WindowId, true, out, config)
+    expect(isFullscreen(state)).toBe(true)
+    expect(layout(state, out, config)).toHaveLength(1)
+    expect(layout(state, out, config)[0]!.id).toBe(1)
+  })
+
+  it("focuses it as well", () => {
+    // A video filling the screen without the keyboard cannot be paused with
+    // the space bar, which is the first thing anybody tries.
+    const state = setFullscreen(withWindows([1, 2], out), 1 as WindowId, true, out, config)
+    expect(focusedWindow(state)).toBe(1)
+  })
+
+  it("is not a toggle", () => {
+    // A player asking to enter fullscreen while already fullscreen must stay
+    // fullscreen. Treating the request as a toggle would drop it out.
+    let state = setFullscreen(withWindows([1, 2], out), 1 as WindowId, true, out, config)
+    state = setFullscreen(state, 1 as WindowId, true, out, config)
+    expect(isFullscreen(state)).toBe(true)
+  })
+
+  it("leaves fullscreen when asked to", () => {
+    let state = setFullscreen(withWindows([1, 2], out), 1 as WindowId, true, out, config)
+    state = setFullscreen(state, 1 as WindowId, false, out, config)
+    expect(isFullscreen(state)).toBe(false)
+  })
+
+  it("ignores a window asking to leave that was not the one fullscreen", () => {
+    // Two players, one fullscreen: the other one exiting must not drop it.
+    let state = setFullscreen(withWindows([1, 2], out), 1 as WindowId, true, out, config)
+    state = setFullscreen(state, 2 as WindowId, false, out, config)
+    expect(isFullscreen(state)).toBe(true)
+  })
+
+  it("ignores a window that is not here", () => {
+    const state = withWindows([1], out)
+    expect(setFullscreen(state, 99 as WindowId, true, out, config)).toBe(state)
   })
 })
