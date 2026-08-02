@@ -1,0 +1,62 @@
+# Traefik dynamic config for lwfa.example.com
+#
+# Drop this in the Traefik host's dynamic directory (192.0.2.1,
+# /etc/traefik/dynamic/). The file provider watches it, so no restart.
+#
+# It follows the same shape as the existing routers there: a Host rule, TLS on,
+# and a service pointing at a machine on the LAN. What is different is the
+# second router, and it is the part that matters.
+#
+# # Why two routers on one hostname
+#
+# The shell is an ordinary web page. The engine is a WebSocket carrying
+# keystrokes and video. They have to share one hostname, because the browser
+# refuses a plaintext socket from an HTTPS page and a second TLS hostname would
+# mean a second certificate.
+#
+# So: `/engine` goes to the engine's socket, everything else to the page. The
+# path is matched first because Traefik picks the router with the highest
+# priority, and a longer, more specific rule needs to win over `Host(...)`
+# alone.
+#
+# # Ports
+#
+# 6733 is the shell page, 6734 is the engine socket. During development 6733 is
+# Vite's dev server; for a built shell it is whatever serves `dist/`.
+
+http:
+  routers:
+    lwfa:
+      rule: "Host(`lwfa.example.com`)"
+      entryPoints:
+        - websecure
+      service: lwfa-shell
+      tls: {}
+
+    lwfa-engine:
+      rule: "Host(`lwfa.example.com`) && PathPrefix(`/engine`)"
+      # Above the bare Host rule, so the socket is not served the page.
+      priority: 100
+      entryPoints:
+        - websecure
+      service: lwfa-engine
+      tls: {}
+      # Deliberately no stripPrefix.
+      #
+      # The obvious thing is to strip `/engine` so the engine sees `/`, and it
+      # breaks the WebSocket: stripping the whole path leaves an empty
+      # request-URI, which is not valid HTTP, so the upgrade dies and Traefik
+      # answers 502. The engine reads only the query string for its token and
+      # ignores the path entirely, so passing it through unchanged is both
+      # simpler and one less thing between the browser and the socket.
+
+  services:
+    lwfa-shell:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.51:6733"
+
+    lwfa-engine:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.51:6734"
