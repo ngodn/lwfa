@@ -179,6 +179,45 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
                 }],
             },
         ));
+        v.push((
+            "file-chooser",
+            ToShell::FileChooser {
+                request: 7,
+                save: true,
+                multiple: false,
+                directory: false,
+                title: "Save File".to_string(),
+                suggested_name: Some("report.pdf".to_string()),
+            },
+        ));
+        v.push((
+            "dir-listing",
+            ToShell::DirListing {
+                request: 7,
+                path: "/home/user/Documents".to_string(),
+                entries: vec![
+                    lwfa_proto::DirEntry {
+                        name: "notes".to_string(),
+                        dir: true,
+                        size: 0,
+                    },
+                    lwfa_proto::DirEntry {
+                        name: "report.pdf".to_string(),
+                        dir: false,
+                        size: 48213,
+                    },
+                ],
+                error: None,
+            },
+        ));
+        v.push((
+            "uploaded",
+            ToShell::Uploaded {
+                request: 7,
+                name: "photo.jpg".to_string(),
+                ok: true,
+            },
+        ));
         v
     };
 
@@ -295,6 +334,30 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
     ));
     to_engine.push(("set-gamepad", ToEngine::SetGamepad { enabled: true }));
     to_engine.push(("set-mic", ToEngine::SetMic { enabled: true }));
+    to_engine.push((
+        "list-dir",
+        ToEngine::ListDir {
+            request: 7,
+            path: "/home/user/Documents".to_string(),
+        },
+    ));
+    to_engine.push((
+        "file-upload",
+        ToEngine::FileUpload {
+            request: 7,
+            name: "photo.jpg".to_string(),
+            size: 183_000,
+        },
+    ));
+    to_engine.push(("file-upload-done", ToEngine::FileUploadDone { request: 7 }));
+    to_engine.push((
+        "file-chosen",
+        ToEngine::FileChosen {
+            request: 7,
+            paths: vec!["/home/user/Documents/report.pdf".to_string()],
+        },
+    ));
+    to_engine.push(("file-cancel", ToEngine::FileCancel { request: 7 }));
     to_engine.push((
         "gamepad-button",
         ToEngine::GamepadButton {

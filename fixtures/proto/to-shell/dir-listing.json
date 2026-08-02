@@ -1,0 +1,18 @@
+{
+  "type": "dirListing",
+  "request": 7,
+  "path": "/home/user/Documents",
+  "entries": [
+    {
+      "name": "notes",
+      "dir": true,
+      "size": 0
+    },
+    {
+      "name": "report.pdf",
+      "dir": false,
+      "size": 48213
+    }
+  ],
+  "error": null
+}

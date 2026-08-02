@@ -38,6 +38,114 @@ use crate::encode::EncodeWorker;
 use crate::layout::{self, Layout};
 use crate::shell::ShellLink;
 
+/// One open file dialog: who is answering it and what has arrived so far.
+///
+/// `reply` reaches back into the blocked portal handler (see `portal.rs`);
+/// sending resolves the application's dialog, dropping cancels it.
+pub struct PendingFile {
+    reply: std::sync::mpsc::Sender<crate::portal::FileReply>,
+    /// The session shown the dialog; the only one whose answers count.
+    session: lwfa_proto::SessionId,
+    /// Files already uploaded from the client under this request.
+    uploads: Vec<std::path::PathBuf>,
+    /// The upload in progress: the open destination.
+    current: Option<(std::fs::File, std::path::PathBuf)>,
+}
+
+/// Cancel a dialog and remove what it uploaded: a dismissed dialog must
+/// leave nothing behind on the machine.
+fn discard_pending_files(pending: PendingFile) {
+    if let Some((_, path)) = pending.current {
+        let _ = std::fs::remove_file(path);
+    }
+    for path in &pending.uploads {
+        let _ = std::fs::remove_file(path);
+    }
+    let _ = pending.reply.send(crate::portal::FileReply {
+        uris: Vec::new(),
+        cancelled: true,
+    });
+}
+
+fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
+}
+
+/// Where uploads land: `~/Uploads`, created on first use.
+fn uploads_dir() -> std::io::Result<std::path::PathBuf> {
+    let dir = home_dir().join("Uploads");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// A path in `dir` for `name` that does not collide with anything present.
+fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, Some(ext)),
+        _ => (name, None),
+    };
+    for n in 2.. {
+        let candidate = match ext {
+            Some(ext) => dir.join(format!("{stem}-{n}.{ext}")),
+            None => dir.join(format!("{stem}-{n}")),
+        };
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("the loop above returns")
+}
+
+/// A directory, sorted the way a file browser reads: directories first,
+/// then case-insensitive by name, capped so a directory of a million files
+/// cannot flood the socket.
+fn read_dir_sorted(path: &std::path::Path) -> std::io::Result<Vec<lwfa_proto::DirEntry>> {
+    let mut entries: Vec<lwfa_proto::DirEntry> = std::fs::read_dir(path)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let meta = entry.metadata().ok()?;
+            Some(lwfa_proto::DirEntry {
+                name,
+                dir: meta.is_dir(),
+                size: if meta.is_dir() { 0 } else { meta.len() },
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        b.dir
+            .cmp(&a.dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    entries.truncate(3000);
+    Ok(entries)
+}
+
+/// `file://` URI for a local path, the shape portal replies carry.
+///
+/// Percent-encoded byte-wise: everything outside the unreserved set and `/`
+/// is escaped, which is what makes a filename with spaces (or worse) survive
+/// the trip through the application's URI parser.
+fn file_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut uri = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        let plain = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/');
+        if plain {
+            uri.push(byte as char);
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
+}
+
 /// One connected shell.
 ///
 /// Everything here is per connection rather than per engine, which is the whole
@@ -110,6 +218,11 @@ pub struct Lwfa {
     pub audio: Option<crate::audio::Capture>,
     /// The virtual microphone, while a session feeds one. See `mic.rs`.
     pub mic: Option<crate::mic::Mic>,
+    /// The file-chooser portal plumbing, when it came up. See `portal.rs`.
+    pub portal: Option<crate::portal::Portal>,
+    /// Open file dialogs, by the request id the shell echoes back.
+    pub pending_files: std::collections::HashMap<u64, PendingFile>,
+    next_file_request: u64,
     /// Which session's microphone the device carries.
     ///
     /// One at a time, most recent enabler wins: mixing two rooms into one
@@ -270,6 +383,9 @@ impl Lwfa {
             audio: None,
             mic: None,
             mic_session: None,
+            portal: None,
+            pending_files: std::collections::HashMap::new(),
+            next_file_request: 1,
             bitrate: crate::bitrate::Controller::new(std::time::Instant::now()),
             attention: crate::bitrate::Attention::new(std::time::Instant::now()),
             streamed_last: Vec::new(),
@@ -714,6 +830,244 @@ impl Lwfa {
                 mic.feed(chunk);
             }
         }
+    }
+
+    /// An application asked for a file dialog; hand it to a connected shell.
+    ///
+    /// The primary session answers if it may interact, else any session that
+    /// may: the dialog is input, and a view-only session must not feed an
+    /// application files. Nobody suitable connected means the request is
+    /// cancelled immediately, which the application shows as a dismissed
+    /// dialog rather than one that hangs forever on a desk nobody is at.
+    pub fn file_request(&mut self, request: crate::portal::FileRequest) {
+        let target = self
+            .primary
+            .filter(|id| {
+                self.sessions
+                    .get(id)
+                    .is_some_and(|s| s.permissions.may_interact())
+            })
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .find(|(_, s)| s.permissions.may_interact())
+                    .map(|(id, _)| *id)
+            });
+        let Some(session) = target else {
+            tracing::info!("file dialog requested with nobody connected to answer it");
+            return; // Dropping `request.reply` is the cancel.
+        };
+
+        let id = self.next_file_request;
+        self.next_file_request += 1;
+        let message = ToShell::FileChooser {
+            request: id,
+            save: request.save,
+            multiple: request.multiple,
+            directory: request.directory,
+            title: request.title.clone(),
+            suggested_name: request.suggested_name.clone(),
+        };
+        self.pending_files.insert(
+            id,
+            PendingFile {
+                reply: request.reply,
+                session,
+                uploads: Vec::new(),
+                current: None,
+            },
+        );
+        self.send_to_session(session, message);
+    }
+
+    /// One directory, for the dialog's browser. Errors travel in the reply.
+    pub fn list_dir(&mut self, session: lwfa_proto::SessionId, request: u64, path: &str) {
+        if !self.file_request_belongs(session, request) {
+            return;
+        }
+        let path = if path.is_empty() || path == "~" {
+            home_dir()
+        } else {
+            std::path::PathBuf::from(path)
+        };
+
+        let listing = read_dir_sorted(&path);
+        let (canonical, entries, error) = match listing {
+            Ok(entries) => (
+                std::fs::canonicalize(&path).unwrap_or(path),
+                entries,
+                None,
+            ),
+            Err(err) => (path, Vec::new(), Some(err.to_string())),
+        };
+        self.send_to_session(
+            session,
+            ToShell::DirListing {
+                request,
+                path: canonical.to_string_lossy().into_owned(),
+                entries,
+                error,
+            },
+        );
+    }
+
+    /// Open the destination for an announced upload.
+    pub fn file_upload(
+        &mut self,
+        session: lwfa_proto::SessionId,
+        request: u64,
+        name: &str,
+        _size: u64,
+    ) {
+        if !self.file_request_belongs(session, request) {
+            return;
+        }
+        // The client names the file; the path is entirely this side's
+        // decision. Stripping to the final component makes "../../.bashrc"
+        // just a strange filename.
+        let name = std::path::Path::new(name)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "upload".to_string());
+
+        let opened = uploads_dir().and_then(|dir| {
+            let path = unique_path(&dir, &name);
+            std::fs::File::create(&path).map(|file| (file, path))
+        });
+        let Some(pending) = self.pending_files.get_mut(&request) else {
+            return;
+        };
+        match opened {
+            Ok(current) => pending.current = Some(current),
+            Err(err) => {
+                tracing::warn!("could not receive an upload: {err}");
+                pending.current = None;
+                self.send_to_session(
+                    session,
+                    ToShell::Uploaded {
+                        request,
+                        name,
+                        ok: false,
+                    },
+                );
+            }
+        }
+    }
+
+    /// One binary chunk of the upload in progress. See [`lwfa_proto::FILE_TAG`].
+    pub fn file_chunk(&mut self, session: lwfa_proto::SessionId, payload: &[u8]) {
+        let Some((request_bytes, chunk)) = payload.split_at_checked(8) else {
+            return;
+        };
+        let request = u64::from_le_bytes(request_bytes.try_into().expect("split at 8"));
+        if !self.file_request_belongs(session, request) {
+            return;
+        }
+        let Some(pending) = self.pending_files.get_mut(&request) else {
+            return;
+        };
+        if let Some((file, path)) = pending.current.as_mut() {
+            if let Err(err) = std::io::Write::write_all(file, chunk) {
+                tracing::warn!("upload to {} failed: {err}", path.display());
+                let abandoned = pending.current.take();
+                if let Some((_, path)) = abandoned {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
+
+    /// The announced upload is complete; it becomes part of the answer.
+    pub fn file_upload_done(&mut self, session: lwfa_proto::SessionId, request: u64) {
+        if !self.file_request_belongs(session, request) {
+            return;
+        }
+        let Some(pending) = self.pending_files.get_mut(&request) else {
+            return;
+        };
+        let message = match pending.current.take() {
+            Some((mut file, path)) => {
+                let ok = std::io::Write::flush(&mut file).is_ok();
+                drop(file);
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if ok {
+                    pending.uploads.push(path);
+                } else {
+                    let _ = std::fs::remove_file(&path);
+                }
+                ToShell::Uploaded { request, name, ok }
+            }
+            None => ToShell::Uploaded {
+                request,
+                name: String::new(),
+                ok: false,
+            },
+        };
+        self.send_to_session(session, message);
+    }
+
+    /// The human answered: these machine paths plus everything uploaded.
+    pub fn file_chosen(
+        &mut self,
+        session: lwfa_proto::SessionId,
+        request: u64,
+        paths: Vec<String>,
+    ) {
+        if !self.file_request_belongs(session, request) {
+            return;
+        }
+        let Some(pending) = self.pending_files.remove(&request) else {
+            return;
+        };
+        let uris: Vec<String> = paths
+            .iter()
+            .map(|p| file_uri(std::path::Path::new(p)))
+            .chain(pending.uploads.iter().map(|p| file_uri(p)))
+            .collect();
+        let _ = pending.reply.send(crate::portal::FileReply {
+            cancelled: uris.is_empty(),
+            uris,
+        });
+    }
+
+    /// The human dismissed the dialog. Uploads under it are discarded, so a
+    /// cancelled dialog leaves nothing behind on the machine.
+    pub fn file_cancel(&mut self, session: lwfa_proto::SessionId, request: u64) {
+        if !self.file_request_belongs(session, request) {
+            return;
+        }
+        if let Some(pending) = self.pending_files.remove(&request) {
+            discard_pending_files(pending);
+        }
+    }
+
+    /// Cancel every dialog a departing session was answering.
+    pub fn cancel_files_for(&mut self, session: lwfa_proto::SessionId) {
+        let gone: Vec<u64> = self
+            .pending_files
+            .iter()
+            .filter(|(_, p)| p.session == session)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in gone {
+            if let Some(pending) = self.pending_files.remove(&id) {
+                discard_pending_files(pending);
+            }
+        }
+    }
+
+    /// Whether this request exists and belongs to this session.
+    ///
+    /// A stale or forged id is ignored rather than answered: the only party
+    /// who could send one is a session that no longer owns the dialog.
+    fn file_request_belongs(&self, session: lwfa_proto::SessionId, request: u64) -> bool {
+        self.pending_files
+            .get(&request)
+            .is_some_and(|p| p.session == session)
     }
 
     /// Start or stop capturing audio, to match whether anyone is listening.

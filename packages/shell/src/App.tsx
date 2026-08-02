@@ -56,6 +56,8 @@ import {
 } from "@/lib/apps"
 import * as audio from "@/lib/audio"
 import { setMicWanted, startMic, useMicWanted, type RunningMic } from "@/lib/mic"
+import { clearFileRequest, fileMessage } from "@/lib/files"
+import { FileDialog } from "@/components/FileDialog"
 import { engineFor } from "@/lib/engineUrl"
 import { requestLeadership } from "@/lib/leader"
 import { log } from "@/lib/log"
@@ -332,6 +334,16 @@ export function App(): React.ReactElement {
   // Read by `push`, which is deliberately dependency-free; the effect keyed
   // on the preference below keeps it current and resends the list.
   const pauseInactiveRef = useRef(prefs.stream.pauseInactive);
+
+  // Stable, so FileDialog's memo holds; reaches through the ref so it
+  // always speaks to the live socket, not the one from mount time.
+  const uploadSink = useMemo(
+    () => ({
+      sendBinary: (data: Uint8Array) => connection.current?.sendBinary(data),
+      bufferedAmount: () => connection.current?.bufferedAmount() ?? 0,
+    }),
+    [],
+  );
 
   /** Forward input aimed at a window, tagging it with which window it hit. */
   const sendInput = useCallback((id: WindowId, event: SurfaceInput) => {
@@ -659,6 +671,14 @@ export function App(): React.ReactElement {
           });
           break;
 
+        case "fileChooser":
+        case "dirListing":
+        case "uploaded":
+          // The file dialog's whole state lives in its own store; see
+          // lib/files.ts and FileDialog.
+          fileMessage(message);
+          break;
+
         case "error":
           // Routing by the request name keeps this from becoming a global
           // error bus that every panel has to filter.
@@ -786,6 +806,9 @@ export function App(): React.ReactElement {
       conn.close();
       decoder.close();
       clearFrames();
+      // A dialog answered over a dead socket answers nobody; the engine
+      // cancels its side on disconnect, so this side matches it.
+      clearFileRequest();
       opusStream.close();
       // The old answer would otherwise linger and claim a codec is in use
       // after the stream has stopped.
@@ -1096,6 +1119,9 @@ export function App(): React.ReactElement {
             onInput={sendInput}
           />
         </ShellChrome>
+        {/* An application's file dialog, when one is open. Modal over
+            everything: the app is genuinely blocked on the answer. */}
+        <FileDialog sink={uploadSink} />
       </SessionStateProvider>
     </SessionActionsProvider>
   );

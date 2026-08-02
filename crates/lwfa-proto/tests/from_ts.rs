@@ -191,6 +191,45 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                 }],
             },
         ),
+        (
+            "file-chooser",
+            ToShell::FileChooser {
+                request: 7,
+                save: true,
+                multiple: false,
+                directory: false,
+                title: "Save File".into(),
+                suggested_name: Some("report.pdf".into()),
+            },
+        ),
+        (
+            "dir-listing",
+            ToShell::DirListing {
+                request: 7,
+                path: "/home/user/Documents".into(),
+                entries: vec![
+                    lwfa_proto::DirEntry {
+                        name: "notes".into(),
+                        dir: true,
+                        size: 0,
+                    },
+                    lwfa_proto::DirEntry {
+                        name: "report.pdf".into(),
+                        dir: false,
+                        size: 48213,
+                    },
+                ],
+                error: None,
+            },
+        ),
+        (
+            "uploaded",
+            ToShell::Uploaded {
+                request: 7,
+                name: "photo.jpg".into(),
+                ok: true,
+            },
+        ),
     ]
 }
 
@@ -305,6 +344,30 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
         ),
         ("set-gamepad", ToEngine::SetGamepad { enabled: true }),
         ("set-mic", ToEngine::SetMic { enabled: true }),
+        (
+            "list-dir",
+            ToEngine::ListDir {
+                request: 7,
+                path: "/home/user/Documents".into(),
+            },
+        ),
+        (
+            "file-upload",
+            ToEngine::FileUpload {
+                request: 7,
+                name: "photo.jpg".into(),
+                size: 183_000,
+            },
+        ),
+        ("file-upload-done", ToEngine::FileUploadDone { request: 7 }),
+        (
+            "file-chosen",
+            ToEngine::FileChosen {
+                request: 7,
+                paths: vec!["/home/user/Documents/report.pdf".into()],
+            },
+        ),
+        ("file-cancel", ToEngine::FileCancel { request: 7 }),
         (
             "gamepad-button",
             ToEngine::GamepadButton {

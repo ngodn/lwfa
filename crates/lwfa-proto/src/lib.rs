@@ -276,6 +276,57 @@ pub enum ToShell {
     #[serde(rename_all = "camelCase")]
     Error { request: String, message: String },
 
+    /// An application on the desktop opened a file dialog.
+    ///
+    /// The engine is the machine's file-chooser portal backend (see
+    /// `portal.rs` there), so "upload a file" inside any portal-aware app
+    /// lands here instead of drawing a dialog on a screen nobody is sitting
+    /// at. The shell answers with [`ToEngine::FileChosen`] (paths on the
+    /// machine, files uploaded from the client device, or both), or
+    /// [`ToEngine::FileCancel`].
+    #[serde(rename_all = "camelCase")]
+    FileChooser {
+        /// Correlates every message about this dialog. Engine-issued.
+        request: u64,
+        /// Saving rather than opening: the shell asks *where*, and the one
+        /// path it returns need not exist yet.
+        save: bool,
+        /// Whether the application accepts more than one file.
+        multiple: bool,
+        /// The application wants a directory, not a file.
+        directory: bool,
+        /// The application's own words for the dialog, shown verbatim.
+        title: String,
+        /// For saves: the filename the application suggests.
+        suggested_name: Option<String>,
+    },
+
+    /// One directory of the machine, in reply to [`ToEngine::ListDir`].
+    ///
+    /// `error` instead of entries when the path cannot be read; the browser
+    /// shows it in place, because a dialog that silently shows nothing reads
+    /// as an empty directory.
+    #[serde(rename_all = "camelCase")]
+    DirListing {
+        request: u64,
+        /// Canonicalised, so the shell can render and climb it honestly.
+        path: String,
+        entries: Vec<DirEntry>,
+        error: Option<String>,
+    },
+
+    /// An upload from the client landed (or failed) on the machine.
+    ///
+    /// Sent when [`ToEngine::FileUploadDone`] closes a transfer. The file is
+    /// already part of the request's answer; this is for the dialog's
+    /// progress display.
+    #[serde(rename_all = "camelCase")]
+    Uploaded {
+        request: u64,
+        name: String,
+        ok: bool,
+    },
+
     /// A window is asking to be fullscreen, or asking to stop.
     ///
     /// Sent when the *client* asks, which is what happens when you press the
@@ -570,6 +621,18 @@ pub enum SessionMode {
     Interact,
 }
 
+/// One entry of a directory listing, for the file dialog's browser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirEntry {
+    pub name: String,
+    /// A directory, so the browser descends instead of choosing.
+    pub dir: bool,
+    /// Bytes, for files. Zero for directories rather than optional: the
+    /// number is decoration, not data, and every entry has a row.
+    pub size: u64,
+}
+
 /// One launchable application, from a freedesktop `.desktop` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -856,6 +919,36 @@ pub enum ToEngine {
         quality: AudioQuality,
     },
 
+    /// Ask for one directory of the machine, for the file dialog's browser.
+    ///
+    /// Bound to an open [`ToShell::FileChooser`] request rather than free-
+    /// standing: the shell has no business listing directories except while
+    /// an application is asking it to choose from them.
+    #[serde(rename_all = "camelCase")]
+    ListDir { request: u64, path: String },
+
+    /// Announce one file about to be uploaded from the client device.
+    ///
+    /// The bytes follow as binary messages tagged [`FILE_TAG`], each carrying
+    /// the request id; [`FileUploadDone`](Self::FileUploadDone) closes the
+    /// transfer. One file at a time per request, in the order announced.
+    #[serde(rename_all = "camelCase")]
+    FileUpload { request: u64, name: String, size: u64 },
+
+    /// The announced upload is complete.
+    #[serde(rename_all = "camelCase")]
+    FileUploadDone { request: u64 },
+
+    /// Answer a [`ToShell::FileChooser`]: these machine paths, plus every
+    /// file uploaded under this request.
+    #[serde(rename_all = "camelCase")]
+    FileChosen { request: u64, paths: Vec<String> },
+
+    /// The user dismissed the dialog. Uploads already received under the
+    /// request are discarded.
+    #[serde(rename_all = "camelCase")]
+    FileCancel { request: u64 },
+
     /// Start or stop feeding this session's microphone to the desktop.
     ///
     /// The audio itself does not travel in JSON: it arrives as binary
@@ -1052,6 +1145,14 @@ pub const MIC_TAG_OPUS: u8 = 0x01;
 /// Same, but interleaved signed 16-bit little-endian PCM, 48kHz mono: the
 /// fallback for a browser whose `AudioEncoder` cannot produce Opus.
 pub const MIC_TAG_PCM: u8 = 0x02;
+
+/// Leading byte of a binary uplink message carrying file-upload bytes.
+///
+/// Layout: the tag, then the request id as a little-endian u64, then the
+/// chunk. Which file it belongs to is unambiguous because uploads within a
+/// request are sequential: the most recent [`ToEngine::FileUpload`] not yet
+/// closed by [`ToEngine::FileUploadDone`].
+pub const FILE_TAG: u8 = 0x03;
 
 /// How an audio payload is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

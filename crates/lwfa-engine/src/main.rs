@@ -31,6 +31,7 @@ mod icons;
 mod input;
 mod layout;
 mod mic;
+mod portal;
 mod remote_input;
 mod shell;
 mod sink;
@@ -204,6 +205,29 @@ fn init_shell_link(
             handle_shell_event(data, event);
         })
         .map_err(|err| format!("failed to insert the shell event source: {err}"))?;
+
+    // The file-chooser portal: its own bus, its own frontend, its own event
+    // channel into this loop. Not fatal when it cannot come up (no
+    // dbus-daemon, no xdg-desktop-portal): applications then draw their own
+    // dialogs, which is yesterday's behaviour rather than a broken session.
+    let (portal_tx, portal_rx) = channel::channel::<crate::portal::FileRequest>();
+    match crate::portal::Portal::start(portal_tx) {
+        Ok(portal) => {
+            data.portal = Some(portal);
+            event_loop
+                .handle()
+                .insert_source(portal_rx, |event, _, data| {
+                    let channel::Event::Msg(request) = event else {
+                        return;
+                    };
+                    data.file_request(request);
+                })
+                .map_err(|err| format!("failed to insert the portal event source: {err}"))?;
+        }
+        Err(err) => {
+            tracing::warn!("file-chooser portal unavailable: {err}");
+        }
+    }
 
     Ok(())
 }
@@ -442,6 +466,9 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // closed tab must not leave a device on the machine claiming to
             // carry a room it can no longer hear.
             state.set_mic(session, false);
+            // File dialogs they were answering resolve as cancelled, so the
+            // application under one sees a dismissed dialog, not a hang.
+            state.cancel_files_for(session);
             // The last listener leaving stops the capture, so an unattended
             // session is not holding a recording process open.
             state.sync_audio_capture();
@@ -483,6 +510,11 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
 
         ShellEvent::MicChunk(session, bytes) => {
             state.mic_chunk(session, &bytes);
+        }
+
+        ShellEvent::FileChunk(session, bytes) => {
+            // Tag stripped here; request id and payload parsed in state.
+            state.file_chunk(session, &bytes[1..]);
         }
 
         ShellEvent::Message(session, message) => {
@@ -850,6 +882,26 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
 
         ToEngine::SetMic { enabled } => {
             state.set_mic(session, enabled);
+        }
+
+        ToEngine::ListDir { request, path } => {
+            state.list_dir(session, request, &path);
+        }
+
+        ToEngine::FileUpload { request, name, size } => {
+            state.file_upload(session, request, &name, size);
+        }
+
+        ToEngine::FileUploadDone { request } => {
+            state.file_upload_done(session, request);
+        }
+
+        ToEngine::FileChosen { request, paths } => {
+            state.file_chosen(session, request, paths);
+        }
+
+        ToEngine::FileCancel { request } => {
+            state.file_cancel(session, request);
         }
 
         ToEngine::SetStreams { windows, codecs } => {

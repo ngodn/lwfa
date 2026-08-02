@@ -187,6 +187,48 @@ export type ToShell =
       program: string
       pid: number
     }
+  /**
+   * An application on the desktop opened a file dialog.
+   *
+   * The engine is the machine's file-chooser portal backend, so "upload a
+   * file" inside a portal-aware app lands here instead of drawing a dialog
+   * on a screen nobody is sitting at. Answered with `fileChosen` (machine
+   * paths, uploads from this device, or both) or `fileCancel`.
+   */
+  | {
+      type: "fileChooser"
+      /** Correlates every message about this dialog. Engine-issued. */
+      request: number
+      /** Saving rather than opening: the one path returned need not exist. */
+      save: boolean
+      multiple: boolean
+      /** The application wants a directory, not a file. */
+      directory: boolean
+      /** The application's own words for the dialog, shown verbatim. */
+      title: string
+      /** For saves: the filename the application suggests. */
+      suggestedName: string | null
+    }
+  /** One directory of the machine, in reply to `listDir`. */
+  | {
+      type: "dirListing"
+      request: number
+      /** Canonicalised, so the browser can render and climb it honestly. */
+      path: string
+      entries: DirEntry[]
+      error: string | null
+    }
+  /** An upload from this device landed (or failed) on the machine. */
+  | { type: "uploaded"; request: number; name: string; ok: boolean }
+
+/** One entry of a directory listing, for the file dialog's browser. */
+export interface DirEntry {
+  name: string
+  /** A directory, so the browser descends instead of choosing. */
+  dir: boolean
+  /** Bytes, for files. Zero for directories. */
+  size: number
+}
 
 /**
  * A video codec the engine can encode and a client might decode.
@@ -408,6 +450,25 @@ export type ToEngine =
    * a phantom microphone on the machine.
    */
   | { type: "setMic"; enabled: boolean }
+  /**
+   * Ask for one directory of the machine, for the file dialog's browser.
+   * Only meaningful while a `fileChooser` request is open.
+   */
+  | { type: "listDir"; request: number; path: string }
+  /**
+   * Announce one file about to be uploaded from this device. The bytes
+   * follow as binary messages tagged `FILE_TAG`; `fileUploadDone` closes
+   * the transfer. One file at a time per request, in the order announced.
+   */
+  | { type: "fileUpload"; request: number; name: string; size: number }
+  | { type: "fileUploadDone"; request: number }
+  /**
+   * Answer a `fileChooser`: these machine paths, plus every file uploaded
+   * under the request.
+   */
+  | { type: "fileChosen"; request: number; paths: string[] }
+  /** Dismissed. Uploads already received under the request are discarded. */
+  | { type: "fileCancel"; request: number }
 
 /** How many bits the session's sound deserves. See `setAudio`. */
 export type AudioQuality = "auto" | "high" | "medium" | "low"
@@ -421,6 +482,13 @@ export const MIC_TAG_OPUS = 0x01
 /** Same, but signed 16-bit little-endian PCM, 48kHz mono: the fallback for
  * a browser whose `AudioEncoder` cannot produce Opus. */
 export const MIC_TAG_PCM = 0x02
+
+/**
+ * Leading byte of a binary uplink message carrying file-upload bytes: the
+ * tag, the request id as a little-endian u64, then the chunk. See the Rust
+ * `FILE_TAG`.
+ */
+export const FILE_TAG = 0x03
 
 /** Motion's defaults, matching `SpringSpec::default` on the Rust side. */
 export const DEFAULT_SPRING: SpringSpec = { stiffness: 100, damping: 10, mass: 1 }
@@ -771,8 +839,58 @@ export function decodeToShell(text: string): ToShell {
       if (!Array.isArray(list)) throw new ProtocolError(`${where}.apps: expected an array`)
       return { type: "apps", apps: list.map((app, i) => decodeApp(app, `${where}.apps[${i}]`)) }
     }
+    case "fileChooser": {
+      const where = `${at}.fileChooser`
+      noExtraKeys(
+        o,
+        ["type", "request", "save", "multiple", "directory", "title", "suggestedName"],
+        where,
+      )
+      return {
+        type: "fileChooser",
+        request: int(o, "request", where),
+        save: bool(o, "save", where),
+        multiple: bool(o, "multiple", where),
+        directory: bool(o, "directory", where),
+        title: str(o, "title", where),
+        suggestedName: nullableStr(o, "suggestedName", where),
+      }
+    }
+    case "dirListing": {
+      const where = `${at}.dirListing`
+      noExtraKeys(o, ["type", "request", "path", "entries", "error"], where)
+      const list = o["entries"]
+      if (!Array.isArray(list)) throw new ProtocolError(`${where}.entries: expected an array`)
+      return {
+        type: "dirListing",
+        request: int(o, "request", where),
+        path: str(o, "path", where),
+        entries: list.map((entry, i) => decodeDirEntry(entry, `${where}.entries[${i}]`)),
+        error: nullableStr(o, "error", where),
+      }
+    }
+    case "uploaded": {
+      const where = `${at}.uploaded`
+      noExtraKeys(o, ["type", "request", "name", "ok"], where)
+      return {
+        type: "uploaded",
+        request: int(o, "request", where),
+        name: str(o, "name", where),
+        ok: bool(o, "ok", where),
+      }
+    }
     default:
       throw new ProtocolError(`${at}: unknown message type ${JSON.stringify(t)}`)
+  }
+}
+
+function decodeDirEntry(value: unknown, at: string): DirEntry {
+  const o = asObject(value, at)
+  noExtraKeys(o, ["name", "dir", "size"], at)
+  return {
+    name: str(o, "name", at),
+    dir: bool(o, "dir", at),
+    size: num(o, "size", at),
   }
 }
 
@@ -955,6 +1073,47 @@ export function decodeToEngine(text: string): ToEngine {
       const where = `${at}.setMic`
       noExtraKeys(o, ["type", "enabled"], where)
       return { type: "setMic", enabled: bool(o, "enabled", where) }
+    }
+    case "listDir": {
+      const where = `${at}.listDir`
+      noExtraKeys(o, ["type", "request", "path"], where)
+      return { type: "listDir", request: int(o, "request", where), path: str(o, "path", where) }
+    }
+    case "fileUpload": {
+      const where = `${at}.fileUpload`
+      noExtraKeys(o, ["type", "request", "name", "size"], where)
+      return {
+        type: "fileUpload",
+        request: int(o, "request", where),
+        name: str(o, "name", where),
+        size: num(o, "size", where),
+      }
+    }
+    case "fileUploadDone": {
+      const where = `${at}.fileUploadDone`
+      noExtraKeys(o, ["type", "request"], where)
+      return { type: "fileUploadDone", request: int(o, "request", where) }
+    }
+    case "fileChosen": {
+      const where = `${at}.fileChosen`
+      noExtraKeys(o, ["type", "request", "paths"], where)
+      const list = o["paths"]
+      if (!Array.isArray(list)) throw new ProtocolError(`${where}.paths: expected an array`)
+      return {
+        type: "fileChosen",
+        request: int(o, "request", where),
+        paths: list.map((p, i) => {
+          if (typeof p !== "string") {
+            throw new ProtocolError(`${where}.paths[${i}]: expected a string`)
+          }
+          return p
+        }),
+      }
+    }
+    case "fileCancel": {
+      const where = `${at}.fileCancel`
+      noExtraKeys(o, ["type", "request"], where)
+      return { type: "fileCancel", request: int(o, "request", where) }
     }
     case "gamepadButton": {
       const where = `${at}.gamepadButton`

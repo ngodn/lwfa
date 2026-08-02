@@ -130,6 +130,10 @@ pub enum ShellEvent {
     /// of a side channel because the socket already orders them correctly
     /// against the `SetMic` that starts and stops the flow.
     MicChunk(SessionId, tungstenite::Bytes),
+    /// A binary uplink message: file-upload bytes, tag included. Same
+    /// reasoning; the socket orders chunks against the `FileUpload` and
+    /// `FileUploadDone` that bracket them.
+    FileChunk(SessionId, tungstenite::Bytes),
     Disconnected(SessionId),
 }
 
@@ -940,14 +944,23 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                 }
             }
             Ok(tungstenite::Message::Binary(bytes)) => {
-                // Microphone audio; see `ShellEvent::MicChunk`. Forwarded
-                // without inspection: the compositor thread checks whether
-                // this session holds the device.
-                if events
-                    .send(ShellEvent::MicChunk(client.id, bytes))
-                    .is_err()
-                {
-                    return false;
+                // Routed by the leading tag byte; the compositor thread does
+                // the real validation (who holds the mic, which dialog an
+                // upload belongs to). An unknown tag is dropped here so a
+                // confused client cannot make the event loop care.
+                let event = match bytes.first() {
+                    Some(&lwfa_proto::MIC_TAG_OPUS | &lwfa_proto::MIC_TAG_PCM) => {
+                        Some(ShellEvent::MicChunk(client.id, bytes))
+                    }
+                    Some(&lwfa_proto::FILE_TAG) => {
+                        Some(ShellEvent::FileChunk(client.id, bytes))
+                    }
+                    _ => None,
+                };
+                if let Some(event) = event {
+                    if events.send(event).is_err() {
+                        return false;
+                    }
                 }
             }
             Ok(tungstenite::Message::Close(_)) => return false,

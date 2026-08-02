@@ -1,0 +1,9 @@
+{
+  "type": "fileChooser",
+  "request": 7,
+  "save": true,
+  "multiple": false,
+  "directory": false,
+  "title": "Save File",
+  "suggestedName": "report.pdf"
+}

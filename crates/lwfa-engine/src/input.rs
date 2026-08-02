@@ -273,6 +273,15 @@ impl Lwfa {
             cmd.env("PULSE_SINK", crate::sink::SINK_NAME);
         }
 
+        // The private portal session, so a file dialog inside the app lands
+        // on the connected device instead of the host screen. See portal.rs.
+        // GTK asks for the portal explicitly; without the nudge it draws its
+        // own dialog when it thinks it is on a plain compositor.
+        if let Some(portal) = self.portal.as_ref() {
+            cmd.env("DBUS_SESSION_BUS_ADDRESS", portal.address());
+            cmd.env("GTK_USE_PORTAL", "1");
+        }
+
         // Set per-process rather than with `set_var`, which is unsafe in
         // edition 2024 and genuinely racy here: by the time Xwayland reports
         // ready, the encoder and shell threads are already running and could be
