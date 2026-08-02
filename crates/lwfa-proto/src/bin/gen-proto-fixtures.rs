@@ -38,6 +38,15 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
             ToShell::Hello {
                 permissions: lwfa_proto::Permissions::owner(),
                 account: "owner".to_string(),
+                session: 1,
+                primary: true,
+                peers: vec![lwfa_proto::PeerInfo {
+                    id: 1,
+                    account: "owner".to_string(),
+                    mode: lwfa_proto::SessionMode::Interact,
+                    primary: true,
+                    device: "iPad".to_string(),
+                }],
                 protocol_version: PROTOCOL_VERSION,
                 output,
                 windows: vec![
@@ -66,6 +75,9 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
                     allowed_apps: Some(vec!["org.example.Thing".to_string()]),
                 },
                 account: "guest".to_string(),
+                session: 2,
+                primary: false,
+                peers: vec![],
                 protocol_version: PROTOCOL_VERSION,
                 output,
                 windows: vec![],
@@ -115,7 +127,62 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         ),
     ];
 
-    let to_engine = vec![
+    let to_shell = {
+        let mut v = to_shell;
+        v.push((
+            "role",
+            ToShell::Role { primary: false },
+        ));
+        v.push((
+            "already-running",
+            ToShell::AlreadyRunning {
+                command: "code".to_string(),
+                terminal: false,
+                program: "code".to_string(),
+                pid: 4321,
+            },
+        ));
+        v.push((
+            "peers",
+            ToShell::Peers {
+                peers: vec![
+                    lwfa_proto::PeerInfo {
+                        id: 1,
+                        account: "owner".to_string(),
+                        mode: lwfa_proto::SessionMode::Interact,
+                        primary: true,
+                        device: "Linux desktop".to_string(),
+                    },
+                    lwfa_proto::PeerInfo {
+                        id: 2,
+                        account: "guest".to_string(),
+                        mode: lwfa_proto::SessionMode::View,
+                        primary: false,
+                        device: "iPad".to_string(),
+                    },
+                ],
+            },
+        ));
+        v.push((
+            "layout",
+            ToShell::Layout {
+                output,
+                windows: vec![WindowLayout {
+                    id: WindowId(1),
+                    rect: Rect {
+                        x: 12.0,
+                        y: 12.0,
+                        width: 640.0,
+                        height: 1056.0,
+                    },
+                    z: 0,
+                }],
+            },
+        ));
+        v
+    };
+
+    let mut to_engine = vec![
         (
             "set-layout-animated",
             ToEngine::SetLayout {
@@ -188,24 +255,58 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
             "set-streams",
             ToEngine::SetStreams {
                 windows: vec![WindowId(1), WindowId(2)],
-                h264: true,
+                codecs: vec![lwfa_proto::Codec::Hevc, lwfa_proto::Codec::H264],
             },
         ),
         (
             "set-streams-none",
             ToEngine::SetStreams {
                 windows: vec![],
-                h264: true,
+                codecs: vec![lwfa_proto::Codec::Hevc, lwfa_proto::Codec::H264],
             },
         ),
         (
             "set-streams-jpeg-only",
             ToEngine::SetStreams {
                 windows: vec![WindowId(1)],
-                h264: false,
+                codecs: vec![],
             },
         ),
     ];
+    to_engine.push(("take-control", ToEngine::TakeControl));
+    to_engine.push(("end-session", ToEngine::EndSession { session: 3 }));
+    to_engine.push(("set-audio", ToEngine::SetAudio { enabled: true, local: false, opus: true }));
+    to_engine.push((
+        "close-and-spawn",
+        ToEngine::CloseAndSpawn {
+            command: "code".into(),
+            terminal: false,
+            pid: 4321,
+            force: false,
+        },
+    ));
+    to_engine.push(("set-gamepad", ToEngine::SetGamepad { enabled: true }));
+    to_engine.push((
+        "gamepad-button",
+        ToEngine::GamepadButton {
+            button: 10,
+            pressed: true,
+        },
+    ));
+    to_engine.push((
+        "gamepad-axis",
+        ToEngine::GamepadAxis {
+            axis: 1,
+            value: -0.75,
+        },
+    ));
+    to_engine.push((
+        "set-session-mode",
+        ToEngine::SetSessionMode {
+            session: 3,
+            mode: SessionMode::View,
+        },
+    ));
 
     (to_shell, to_engine)
 }

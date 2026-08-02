@@ -1,0 +1,19 @@
+{
+  "type": "peers",
+  "peers": [
+    {
+      "id": 1,
+      "account": "owner",
+      "mode": "interact",
+      "primary": true,
+      "device": "Linux desktop"
+    },
+    {
+      "id": 2,
+      "account": "guest",
+      "mode": "view",
+      "primary": false,
+      "device": "iPad"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "type": "closeAndSpawn",
+  "command": "code",
+  "terminal": false,
+  "pid": 4321,
+  "force": false
+}

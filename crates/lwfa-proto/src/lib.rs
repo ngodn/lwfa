@@ -182,9 +182,47 @@ pub enum ToShell {
         permissions: Permissions,
         /// Which account this is, for the UI to show. "owner" for `AUTH_PASS`.
         account: String,
+        /// This connection's own id, so it can find itself in `peers`.
+        session: SessionId,
+        /// Whether this connection drives layout. See [`ToShell::Role`].
+        primary: bool,
+        /// Everyone connected right now, including this session.
+        peers: Vec<PeerInfo>,
     },
     #[serde(rename_all = "camelCase")]
     OutputChanged { output: Output },
+
+    /// Whether this connection is now the one driving layout.
+    ///
+    /// # Why there is a driving connection at all
+    ///
+    /// Several devices can watch and use one session, but a window has exactly
+    /// one size, so there is exactly one arrangement. If every connection
+    /// pushed its own, two tablets with different screens would fight over
+    /// every window, each resizing what the other had just placed, forever. So
+    /// one connection owns layout and the rest follow it.
+    ///
+    /// A follower is not a spectator. It sends input, asks for the streams it
+    /// needs, and receives every frame. It simply does not decide where windows
+    /// go: it is told, with [`ToShell::Layout`]. Any session that may interact
+    /// can take over with [`ToEngine::TakeControl`].
+    #[serde(rename_all = "camelCase")]
+    Role { primary: bool },
+
+    /// The arrangement the primary connection chose, for everyone else.
+    ///
+    /// In the engine's output coordinates. A follower fits this into whatever
+    /// viewport it has rather than recomputing it, because recomputing would
+    /// produce a different arrangement for windows that can only have one size.
+    #[serde(rename_all = "camelCase")]
+    Layout {
+        windows: Vec<WindowLayout>,
+        output: Output,
+    },
+
+    /// Who is connected. Sent whenever that changes.
+    #[serde(rename_all = "camelCase")]
+    Peers { peers: Vec<PeerInfo> },
     #[serde(rename_all = "camelCase")]
     WindowOpened { window: WindowInfo },
     /// Title or app_id changed. Windows are long-lived and rename themselves.
@@ -237,6 +275,86 @@ pub enum ToShell {
     /// dialog waiting for a reply that is never coming.
     #[serde(rename_all = "camelCase")]
     Error { request: String, message: String },
+
+    /// A window is asking to be fullscreen, or asking to stop.
+    ///
+    /// Sent when the *client* asks, which is what happens when you press the
+    /// fullscreen button inside a video player. The engine cannot grant it
+    /// alone: the shell owns the arrangement and would put the window back at
+    /// its column width with the next layout. So the request is forwarded, the
+    /// shell decides, and the size it sends back is what the client is told.
+    ///
+    /// Distinct from lwfa's own fullscreen control, which the shell already
+    /// knows about because it started there.
+    #[serde(rename_all = "camelCase")]
+    FullscreenRequest {
+        window: WindowId,
+        /// False is `unset_fullscreen`: the client asking to come back.
+        fullscreen: bool,
+    },
+
+    /// The application asked for is already running outside this session.
+    ///
+    /// Sent instead of spawning. Applications that key "one instance" on their
+    /// profile directory, which is every Electron application and both major
+    /// browsers, do not start a second copy: the running one is handed the
+    /// request over a socket in the profile and opens a window wherever *it*
+    /// is. Since lwfa is a second session for the same user, that is the other
+    /// screen, and the launch appears to do nothing at all.
+    ///
+    /// Reporting it is the only honest option: the engine cannot move a window
+    /// between compositors, and starting a second copy on a shared profile
+    /// risks corrupting it.
+    AlreadyRunning {
+        /// The command that was asked for, so it can be retried unchanged.
+        command: String,
+        /// Whether that command wanted a terminal, likewise.
+        terminal: bool,
+        /// What to call it. The binary's name, which is what people recognise.
+        program: String,
+        /// The process holding it, so closing it needs no second search.
+        pid: u32,
+    },
+}
+
+/// A video codec the engine can encode and a client might decode.
+///
+/// Ordered by preference, best first, so a comparison is the whole choice:
+/// HEVC is roughly a third fewer bits than H.264 for the same picture, which
+/// over a phone connection decides whether the desktop is usable.
+///
+/// AV1 is deliberately absent. It compresses better still, but hardware decode
+/// wants an A17 Pro or M3 and Apple ships no software fallback, and encoding
+/// needs an Ada-generation card. Worth revisiting, not worth shipping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Codec {
+    Hevc,
+    H264,
+}
+
+impl Codec {
+    /// Best first. The order is the preference.
+    pub const ALL: [Codec; 2] = [Codec::Hevc, Codec::H264];
+
+    /// The best codec every one of these clients can decode.
+    ///
+    /// A window is encoded once and fanned out, so a codec one client cannot
+    /// read is a black window for that client. Encoding twice would mean a
+    /// second NVENC session per window, and sessions are the budget the whole
+    /// streaming path is measured against.
+    ///
+    /// `None` means JPEG: either nobody is connected, or somebody can decode
+    /// nothing.
+    pub fn best_for_all<'a>(clients: impl IntoIterator<Item = &'a [Codec]>) -> Option<Codec> {
+        let clients: Vec<&[Codec]> = clients.into_iter().collect();
+        if clients.is_empty() {
+            return None;
+        }
+        Self::ALL
+            .into_iter()
+            .find(|codec| clients.iter().all(|client| client.contains(codec)))
+    }
 }
 
 /// One resolved application icon, as a `data:` URI.
@@ -295,6 +413,120 @@ impl Permissions {
             Some(allowed) => allowed.iter().any(|a| a == id),
         }
     }
+}
+
+/// Buttons in the W3C standard gamepad mapping.
+///
+/// The order is fixed by that specification and is what every browser reports,
+/// so it is also what the on-screen pad is built around. Named here so the
+/// engine's mapping to Linux button codes reads as a translation rather than a
+/// table of numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GamepadButton {
+    /// A on Xbox, Cross on PlayStation.
+    South = 0,
+    /// B on Xbox, Circle on PlayStation.
+    East = 1,
+    /// X on Xbox, Square on PlayStation.
+    West = 2,
+    /// Y on Xbox, Triangle on PlayStation.
+    North = 3,
+    /// LB / L1.
+    LeftShoulder = 4,
+    /// RB / R1.
+    RightShoulder = 5,
+    /// LT / L2. Reported as a button here and as an axis as well.
+    LeftTrigger = 6,
+    /// RT / R2.
+    RightTrigger = 7,
+    /// View / Share.
+    Select = 8,
+    /// Menu / Options.
+    Start = 9,
+    /// Left stick click. LS on Xbox, L3 on PlayStation.
+    LeftStick = 10,
+    /// Right stick click. RS on Xbox, R3 on PlayStation.
+    RightStick = 11,
+    DpadUp = 12,
+    DpadDown = 13,
+    DpadLeft = 14,
+    DpadRight = 15,
+    /// Guide, Xbox button, PS button.
+    Guide = 16,
+}
+
+impl GamepadButton {
+    /// The button at this index, or `None` for one this mapping does not have.
+    pub fn from_index(index: u8) -> Option<Self> {
+        use GamepadButton::*;
+        Some(match index {
+            0 => South,
+            1 => East,
+            2 => West,
+            3 => North,
+            4 => LeftShoulder,
+            5 => RightShoulder,
+            6 => LeftTrigger,
+            7 => RightTrigger,
+            8 => Select,
+            9 => Start,
+            10 => LeftStick,
+            11 => RightStick,
+            12 => DpadUp,
+            13 => DpadDown,
+            14 => DpadLeft,
+            15 => DpadRight,
+            16 => Guide,
+            _ => return None,
+        })
+    }
+}
+
+/// Axes in the W3C standard gamepad mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GamepadAxis {
+    LeftX = 0,
+    LeftY = 1,
+    RightX = 2,
+    RightY = 3,
+    /// Not in the W3C axis list, which reports triggers as buttons. Carried
+    /// separately so an analog trigger keeps its travel.
+    LeftTrigger = 4,
+    RightTrigger = 5,
+}
+
+impl GamepadAxis {
+    pub fn from_index(index: u8) -> Option<Self> {
+        use GamepadAxis::*;
+        Some(match index {
+            0 => LeftX,
+            1 => LeftY,
+            2 => RightX,
+            3 => RightY,
+            4 => LeftTrigger,
+            5 => RightTrigger,
+            _ => return None,
+        })
+    }
+}
+
+/// Identifies one connection, for the life of that connection.
+pub type SessionId = u64;
+
+/// One connected session, as shown to the others.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerInfo {
+    pub id: SessionId,
+    /// Which account it authenticated as. "owner" for `AUTH_PASS`.
+    pub account: String,
+    pub mode: SessionMode,
+    /// Whether this is the connection currently driving layout.
+    pub primary: bool,
+    /// Best-effort description of the device, from its user agent.
+    pub device: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,6 +605,20 @@ pub enum ToEngine {
     /// Without that it runs, prints into the void, and never appears.
     #[serde(rename_all = "camelCase")]
     Spawn { command: String, terminal: bool },
+
+    /// Close a program running outside this session, then launch it in here.
+    ///
+    /// The answer to [`ToShell::AlreadyRunning`], and only ever sent after
+    /// somebody has been asked. `force` is the second attempt: the first sends
+    /// a polite request to quit, which an application with unsaved work
+    /// answers by opening a dialog on a screen nobody is looking at.
+    CloseAndSpawn {
+        command: String,
+        terminal: bool,
+        pid: u32,
+        /// Kill outright rather than asking. Loses unsaved work.
+        force: bool,
+    },
 
     /// Tell the engine how much room the shell actually has.
     ///
@@ -489,6 +735,86 @@ pub enum ToEngine {
     #[serde(rename_all = "camelCase")]
     TouchUp { id: i32 },
 
+    /// Ask to become the connection that drives layout.
+    ///
+    /// Granted to any session that may interact. Deliberately not a
+    /// negotiation: whoever asks last is holding the device the user is
+    /// actually looking at, and a confirmation prompt on the other device would
+    /// be answered by nobody when that device is a tablet in another room.
+    #[serde(rename_all = "camelCase")]
+    TakeControl,
+
+    /// Disconnect another session. The owner's alone.
+    ///
+    /// Kicks the connection, not the account: whoever it was can log back in.
+    /// This is the "who is on my desktop right now, and stop" control, which is
+    /// a different question from what an account is permitted in general.
+    #[serde(rename_all = "camelCase")]
+    EndSession { session: SessionId },
+
+    /// Change what a live session may do, without touching its account.
+    ///
+    /// For handing someone your desktop to look at and then taking the keys
+    /// back, or the reverse, while they stay connected. Lasts only as long as
+    /// the connection; the account's own permissions are unchanged. The owner's
+    /// alone, and it cannot be used on yourself, because locking yourself out
+    /// of your own machine from your own machine helps nobody.
+    #[serde(rename_all = "camelCase")]
+    SetSessionMode { session: SessionId, mode: SessionMode },
+
+    /// Whether this connection wants to hear the machine.
+    ///
+    /// Per connection and off until asked for, like streams. Capturing costs a
+    /// process and 1.5 Mbit/s per listener, so nobody pays for it until
+    /// somebody is listening, and a device left open on a desk is not quietly
+    /// broadcasting the room.
+    /// Attach or detach the session's virtual game controller.
+    ///
+    /// The device is only created while a client is actually using the pad. It
+    /// is visible to the *whole machine*, not just to lwfa, because that is
+    /// what makes Steam and SDL find it, so leaving one attached would mean an
+    /// idle session advertising a controller nobody is holding.
+    #[serde(rename_all = "camelCase")]
+    SetGamepad { enabled: bool },
+
+    /// A controller button, in the W3C standard mapping.
+    ///
+    /// Indices rather than names, because that mapping is what the browser's
+    /// Gamepad API reports and what the on-screen pad is already built around,
+    /// so a physical controller and the drawn one speak the same language.
+    /// See [`GamepadButton`].
+    #[serde(rename_all = "camelCase")]
+    GamepadButton { button: u8, pressed: bool },
+
+    /// A controller axis, in the W3C standard mapping.
+    ///
+    /// Sticks run -1 to 1 and triggers 0 to 1. Analog, which is the thing the
+    /// keyboard stand-ins could never express: walking slowly, steering
+    /// partially, easing onto a throttle.
+    #[serde(rename_all = "camelCase")]
+    GamepadAxis { axis: u8, value: f64 },
+
+    #[serde(rename_all = "camelCase")]
+    SetAudio {
+        /// Whether *this* connection wants to hear the machine.
+        enabled: bool,
+        /// Whether this connection can decode Opus.
+        ///
+        /// Asked of the browser, like the video codecs: `AudioDecoder` is
+        /// secure-context only, so a page on plain HTTP cannot decode Opus
+        /// however new the browser is. One capture is fanned out to everyone,
+        /// so it is compressed only when *every* listener can take it.
+        #[serde(default)]
+        opus: bool,
+        /// Whether the machine should also play the session's audio aloud.
+        ///
+        /// Machine-wide, not per connection: there is one set of speakers, so
+        /// the last session to express a preference wins. Off by default,
+        /// because the reason to stream audio is usually that nobody is in the
+        /// room, and a desktop talking to an empty room is a surprise.
+        local: bool,
+    },
+
     /// Which windows the shell wants pixels for, and in what form.
     ///
     /// Total, like `SetLayout`: windows not listed stop streaming. A shell that
@@ -501,18 +827,21 @@ pub enum ToEngine {
     ///
     /// # Why the codec is the client's call
     ///
-    /// `h264` false means the client cannot decode H.264 and needs JPEG.
+    /// `codecs` is what this client can actually decode, best first, and empty
+    /// means it can decode nothing and needs JPEG.
     ///
-    /// That is not hypothetical. WebCodecs `VideoDecoder` is only exposed in a
-    /// *secure context*, so a browser on `http://192.168.1.x` — exactly how a
-    /// tablet reaches this over a LAN — has no H.264 decoder at all, while the
-    /// same browser on `http://localhost` does. The engine cannot infer this,
-    /// so the client states it.
+    /// Asked of the browser rather than inferred here. WebCodecs
+    /// `VideoDecoder` is only exposed in a *secure context*, so a browser on
+    /// `http://192.168.1.x` — exactly how a tablet reaches this over a LAN —
+    /// has no decoder at all, while the same browser on `http://localhost`
+    /// does. And HEVC support is a property of the hardware, not the browser:
+    /// two devices running the same Safari differ on it. Nothing here can see
+    /// any of that, so the client states it.
     #[serde(rename_all = "camelCase")]
     SetStreams {
         windows: Vec<WindowId>,
-        /// Whether the client can decode H.264. False means send JPEG.
-        h264: bool,
+        /// What this client can decode, best first. Empty means send JPEG.
+        codecs: Vec<Codec>,
     },
 }
 
@@ -533,6 +862,9 @@ mod tests {
         let hello = ToShell::Hello {
             permissions: Permissions::owner(),
             account: "owner".to_string(),
+            session: 1,
+            primary: true,
+            peers: Vec::new(),
             protocol_version: PROTOCOL_VERSION,
             output: Output {
                 width: 1920,
@@ -641,6 +973,115 @@ pub const FRAME_VERSION: u8 = 0;
 /// Bytes before the payload.
 pub const FRAME_HEADER_LEN: usize = 24;
 
+/// Magic for an audio chunk, distinct from [`FRAME_MAGIC`].
+///
+/// Audio and video share one WebSocket, so a binary message has to say which
+/// it is. A separate magic rather than a discriminator field inside the video
+/// header, because the two carry genuinely different fields and pretending
+/// otherwise would mean a header full of "meaningless for audio" holes.
+pub const AUDIO_MAGIC: [u8; 4] = *b"LWFP";
+
+/// Bytes before an audio payload.
+pub const AUDIO_HEADER_LEN: usize = 16;
+
+/// How an audio payload is encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[repr(u8)]
+pub enum AudioFormat {
+    /// Interleaved signed 16-bit little-endian samples.
+    ///
+    /// Uncompressed on purpose, for the same reason JPEG is the video
+    /// fallback: `WebCodecs` is only exposed in a secure context, so a browser
+    /// reaching this over plain HTTP has no `AudioDecoder` and could not play
+    /// Opus at all. Stereo at 48kHz is 1.5 Mbit/s, which is nothing on a LAN
+    /// and is the wrong answer over cellular; Opus is the upgrade, and it
+    /// needs TLS first.
+    Pcm16 = 0,
+
+    /// Opus, one packet per frame, no container.
+    ///
+    /// Roughly 128 kbit/s against PCM's 1.5 Mbit/s for the same stereo at
+    /// 48kHz: a twelvefold saving, and larger than the one HEVC gives on
+    /// video. Transparent for desktop audio at that rate.
+    ///
+    /// Framed rather than streamed. Each message is exactly one Opus packet
+    /// covering 20ms, which is what lets a client that joins late start
+    /// decoding at the next message with nothing to resynchronise.
+    ///
+    /// Sent only to clients that said they can decode it; `AudioDecoder` is
+    /// secure-context only, so a browser on plain HTTP still gets PCM.
+    Opus = 1,
+}
+
+impl AudioFormat {
+    fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Pcm16),
+            1 => Some(Self::Opus),
+            _ => None,
+        }
+    }
+}
+
+/// Describes one chunk of audio on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioHeader {
+    pub format: AudioFormat,
+    pub channels: u8,
+    pub sample_rate: u32,
+    /// Sample frames in the payload, per channel.
+    pub frames: u32,
+}
+
+impl AudioHeader {
+    pub fn encode_with_payload(&self, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(AUDIO_HEADER_LEN + payload.len());
+        out.extend_from_slice(&AUDIO_MAGIC);
+        out.push(FRAME_VERSION);
+        out.push(self.format as u8);
+        out.push(self.channels);
+        out.push(0); // reserved
+        out.extend_from_slice(&self.sample_rate.to_le_bytes());
+        out.extend_from_slice(&self.frames.to_le_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// Parse a header and return it alongside the payload.
+    ///
+    /// `None` rather than a partial result, so a malformed chunk is dropped
+    /// instead of played as noise, which through speakers is worse than
+    /// silence.
+    pub fn decode(bytes: &[u8]) -> Option<(Self, &[u8])> {
+        if bytes.len() < AUDIO_HEADER_LEN {
+            return None;
+        }
+        if bytes[0..4] != AUDIO_MAGIC || bytes[4] != FRAME_VERSION {
+            return None;
+        }
+        let format = AudioFormat::from_u8(bytes[5])?;
+        let channels = bytes[6];
+        if channels == 0 || channels > 8 {
+            return None;
+        }
+        let sample_rate = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+        let frames = u32::from_le_bytes(bytes[12..16].try_into().ok()?);
+        if sample_rate == 0 || frames == 0 {
+            return None;
+        }
+        Some((
+            Self {
+                format,
+                channels,
+                sample_rate,
+                frames,
+            },
+            &bytes[AUDIO_HEADER_LEN..],
+        ))
+    }
+}
+
 /// How a frame's payload is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -666,6 +1107,15 @@ pub enum FrameFormat {
     /// mid-stream and start decoding at the next keyframe without the engine
     /// having to remember what each client has seen.
     H264 = 1,
+
+    /// HEVC, Annex B, Main profile.
+    ///
+    /// The same shape as H.264 above, including repeating parameter sets on
+    /// every keyframe, and for the same reason. Roughly a third fewer bits for
+    /// the same picture, which over a phone connection is what decides whether
+    /// the desktop is usable. Sent only to clients that have said they can
+    /// decode it; see [`Codec`].
+    Hevc = 2,
 }
 
 impl FrameFormat {
@@ -673,6 +1123,7 @@ impl FrameFormat {
         match value {
             0 => Some(Self::Jpeg),
             1 => Some(Self::H264),
+            2 => Some(Self::Hevc),
             _ => None,
         }
     }
@@ -766,6 +1217,65 @@ impl FrameHeader {
 #[cfg(test)]
 mod frame_tests {
     use super::*;
+
+    #[test]
+    fn an_audio_chunk_round_trips() {
+        let header = AudioHeader {
+            format: AudioFormat::Pcm16,
+            channels: 2,
+            sample_rate: 48_000,
+            frames: 480,
+        };
+        let payload: Vec<u8> = (0..480 * 2 * 2).map(|i| i as u8).collect();
+        let bytes = header.encode_with_payload(&payload);
+        assert_eq!(bytes.len(), AUDIO_HEADER_LEN + payload.len());
+
+        let (decoded, body) = AudioHeader::decode(&bytes).expect("decodes");
+        assert_eq!(decoded, header);
+        assert_eq!(body, payload.as_slice());
+    }
+
+    #[test]
+    fn audio_and_video_do_not_decode_as_each_other() {
+        // They share a socket, so a mix-up would play pixels through the
+        // speakers or paint sound onto the screen.
+        let audio = AudioHeader {
+            format: AudioFormat::Pcm16,
+            channels: 2,
+            sample_rate: 48_000,
+            frames: 8,
+        }
+        .encode_with_payload(&[0; 32]);
+        assert!(FrameHeader::decode(&audio).is_none());
+        assert!(AudioHeader::decode(&audio).is_some());
+
+        let video = header().encode_with_payload(&[1, 2, 3]);
+        assert!(AudioHeader::decode(&video).is_none());
+        assert!(FrameHeader::decode(&video).is_some());
+    }
+
+    #[test]
+    fn an_implausible_audio_header_is_refused() {
+        let mut bytes = AudioHeader {
+            format: AudioFormat::Pcm16,
+            channels: 2,
+            sample_rate: 48_000,
+            frames: 8,
+        }
+        .encode_with_payload(&[0; 32]);
+
+        let good = bytes.clone();
+        bytes[6] = 0; // no channels
+        assert!(AudioHeader::decode(&bytes).is_none());
+
+        bytes = good.clone();
+        bytes[8..12].copy_from_slice(&0u32.to_le_bytes()); // no sample rate
+        assert!(AudioHeader::decode(&bytes).is_none());
+
+        bytes = good;
+        bytes[5] = 99; // a format from the future
+        assert!(AudioHeader::decode(&bytes).is_none());
+    }
 
     fn header() -> FrameHeader {
         FrameHeader {

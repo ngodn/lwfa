@@ -14,5 +14,8 @@
       "org.example.Thing"
     ]
   },
-  "account": "guest"
+  "account": "guest",
+  "session": 2,
+  "primary": false,
+  "peers": []
 }

@@ -23,5 +23,16 @@
     "mode": "interact",
     "allowedApps": null
   },
-  "account": "owner"
+  "account": "owner",
+  "session": 1,
+  "primary": true,
+  "peers": [
+    {
+      "id": 1,
+      "account": "owner",
+      "mode": "interact",
+      "primary": true,
+      "device": "iPad"
+    }
+  ]
 }

@@ -73,6 +73,15 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                 focused: Some(WindowId(1)),
                 permissions: Permissions::owner(),
                 account: "owner".into(),
+                session: 1,
+                primary: true,
+                peers: vec![lwfa_proto::PeerInfo {
+                    id: 1,
+                    account: "owner".into(),
+                    mode: lwfa_proto::SessionMode::Interact,
+                    primary: true,
+                    device: "iPad".into(),
+                }],
             },
         ),
         (
@@ -89,6 +98,9 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                     allowed_apps: Some(vec!["org.example.Thing".into()]),
                 },
                 account: "guest".into(),
+                session: 2,
+                primary: false,
+                peers: vec![],
             },
         ),
         ("output-changed", ToShell::OutputChanged { output }),
@@ -130,6 +142,53 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                     shift: false,
                     logo: false,
                 },
+            },
+        ),
+        ("role", ToShell::Role { primary: false }),
+        (
+            "already-running",
+            ToShell::AlreadyRunning {
+                command: "code".to_string(),
+                terminal: false,
+                program: "code".to_string(),
+                pid: 4321,
+            },
+        ),
+        (
+            "peers",
+            ToShell::Peers {
+                peers: vec![
+                    lwfa_proto::PeerInfo {
+                        id: 1,
+                        account: "owner".into(),
+                        mode: SessionMode::Interact,
+                        primary: true,
+                        device: "Linux desktop".into(),
+                    },
+                    lwfa_proto::PeerInfo {
+                        id: 2,
+                        account: "guest".into(),
+                        mode: SessionMode::View,
+                        primary: false,
+                        device: "iPad".into(),
+                    },
+                ],
+            },
+        ),
+        (
+            "layout",
+            ToShell::Layout {
+                output,
+                windows: vec![WindowLayout {
+                    id: WindowId(1),
+                    rect: Rect {
+                        x: 12.0,
+                        y: 12.0,
+                        width: 640.0,
+                        height: 1056.0,
+                    },
+                    z: 0,
+                }],
             },
         ),
     ]
@@ -207,21 +266,55 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
             "set-streams",
             ToEngine::SetStreams {
                 windows: vec![WindowId(1), WindowId(2)],
-                h264: true,
+                codecs: vec![lwfa_proto::Codec::Hevc, lwfa_proto::Codec::H264],
             },
         ),
         (
             "set-streams-none",
             ToEngine::SetStreams {
                 windows: vec![],
-                h264: true,
+                codecs: vec![lwfa_proto::Codec::Hevc, lwfa_proto::Codec::H264],
             },
         ),
         (
             "set-streams-jpeg-only",
             ToEngine::SetStreams {
                 windows: vec![WindowId(1)],
-                h264: false,
+                codecs: vec![],
+            },
+        ),
+        ("take-control", ToEngine::TakeControl),
+        ("end-session", ToEngine::EndSession { session: 3 }),
+        ("set-audio", ToEngine::SetAudio { enabled: true, local: false, opus: true }),
+        (
+            "close-and-spawn",
+            ToEngine::CloseAndSpawn {
+                command: "code".into(),
+                terminal: false,
+                pid: 4321,
+                force: false,
+            },
+        ),
+        ("set-gamepad", ToEngine::SetGamepad { enabled: true }),
+        (
+            "gamepad-button",
+            ToEngine::GamepadButton {
+                button: 10,
+                pressed: true,
+            },
+        ),
+        (
+            "gamepad-axis",
+            ToEngine::GamepadAxis {
+                axis: 1,
+                value: -0.75,
+            },
+        ),
+        (
+            "set-session-mode",
+            ToEngine::SetSessionMode {
+                session: 3,
+                mode: SessionMode::View,
             },
         ),
     ]

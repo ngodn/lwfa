@@ -1,0 +1,6 @@
+{
+  "type": "setAudio",
+  "enabled": true,
+  "opus": true,
+  "local": false
+}

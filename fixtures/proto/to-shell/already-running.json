@@ -1,0 +1,7 @@
+{
+  "type": "alreadyRunning",
+  "command": "code",
+  "terminal": false,
+  "program": "code",
+  "pid": 4321
+}

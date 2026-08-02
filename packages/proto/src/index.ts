@@ -93,8 +93,42 @@ export type ToShell =
       permissions: Permissions
       /** Which account this is. "owner" for AUTH_PASS. */
       account: string
+      /** This connection's own id, so it can recognise itself in `peers`. */
+      session: SessionId
+      /**
+       * Whether this connection is the one driving layout. See `role`.
+       */
+      primary: boolean
+      /** Everyone connected right now, including this session. */
+      peers: PeerInfo[]
     }
   | { type: "outputChanged"; output: Output }
+  /**
+   * Whether this connection is now the one driving layout.
+   *
+   * # Why there is a "driving" connection at all
+   *
+   * Several devices can watch and use one session, but a window has exactly one
+   * size, so there is exactly one arrangement. Letting every connection push
+   * its own would make two tablets fight over every window, each resizing what
+   * the other just placed. So one connection owns layout and the rest follow
+   * it, and any of them can ask to take over.
+   *
+   * A connection that is not primary still sends input, still asks for the
+   * streams it needs, and still gets every frame. It just does not decide where
+   * windows go; it is told, with `layout`.
+   */
+  | { type: "role"; primary: boolean }
+  /**
+   * The arrangement the primary connection chose, for everyone else.
+   *
+   * In the engine's output coordinates. A follower fits these into whatever
+   * viewport it has rather than recomputing them, because recomputing would
+   * produce a different arrangement for a window that can only have one.
+   */
+  | { type: "layout"; windows: WindowLayout[]; output: Output }
+  /** Who is connected. Sent whenever that changes. */
+  | { type: "peers"; peers: PeerInfo[] }
   | { type: "windowOpened"; window: WindowInfo }
   | { type: "windowChanged"; window: WindowInfo }
   | { type: "windowClosed"; id: WindowId }
@@ -129,6 +163,38 @@ export type ToShell =
    * is taken" rather than leaving a dialog waiting for a reply.
    */
   | { type: "error"; request: string; message: string }
+  /**
+   * The application asked for is already running outside this session.
+   *
+   * Applications that key "one instance" on their profile directory hand the
+   * request to the copy that is already running, which opens a window wherever
+   * it is. lwfa being a second session for the same user, that is the other
+   * screen, and the launch looks like it did nothing.
+   */
+  /**
+   * A window is asking to be fullscreen, or asking to stop.
+   *
+   * Sent when the client asks, which is what the fullscreen button inside a
+   * video player does. The engine cannot grant it alone: the shell owns the
+   * arrangement and would put the window back at its column width on the next
+   * layout.
+   */
+  | { type: "fullscreenRequest"; window: WindowId; fullscreen: boolean }
+  | {
+      type: "alreadyRunning"
+      command: string
+      terminal: boolean
+      program: string
+      pid: number
+    }
+
+/**
+ * A video codec the engine can encode and a client might decode.
+ *
+ * Ordered best first in `PREFERENCE` on the shell side. HEVC is roughly a
+ * third fewer bits than H.264 for the same picture.
+ */
+export type Codec = "hevc" | "h264"
 
 /**
  * What a connected session is allowed to do.
@@ -144,6 +210,21 @@ export interface Permissions {
 }
 
 export type SessionMode = "view" | "interact"
+
+/** Identifies one connection for the life of that connection. */
+export type SessionId = number
+
+/** One connected session, as shown to the others. */
+export interface PeerInfo {
+  id: SessionId
+  /** Which account it authenticated as. "owner" for AUTH_PASS. */
+  account: string
+  mode: SessionMode
+  /** Whether this is the connection currently driving layout. */
+  primary: boolean
+  /** Best-effort description of the device, from its user agent. */
+  device: string
+}
 
 /** One resolved application icon, as a `data:` URI. */
 export interface AppIcon {
@@ -186,6 +267,20 @@ export type ToEngine =
    */
   | { type: "spawn"; command: string; terminal: boolean }
   /**
+   * Close a program running outside this session, then launch it in here.
+   *
+   * Only ever sent after somebody has been asked. `force` is the second
+   * attempt: the polite request is answered by a save dialog on a screen
+   * nobody is looking at.
+   */
+  | {
+      type: "closeAndSpawn"
+      command: string
+      terminal: boolean
+      pid: number
+      force: boolean
+    }
+  /**
    * Tell the engine how much room the shell actually has, in CSS pixels.
    *
    * The engine resizes its output to match rather than the shell scaling a
@@ -214,11 +309,11 @@ export type ToEngine =
   /**
    * Which windows to stream, and whether this client can decode H.264.
    *
-   * `h264: false` is not hypothetical: WebCodecs `VideoDecoder` is only
+   * An empty `codecs` is not hypothetical: WebCodecs `VideoDecoder` is only
    * exposed in a secure context, so a browser reached over plain HTTP on a LAN
    * address has no H.264 decoder while the same browser on localhost does.
    */
-  | { type: "setStreams"; windows: WindowId[]; h264: boolean }
+  | { type: "setStreams"; windows: WindowId[]; codecs: Codec[] }
   /**
    * Pointer moved within a window. Coordinates are window-relative logical
    * pixels, because during an animation the engine's actual window position
@@ -234,6 +329,66 @@ export type ToEngine =
   | { type: "touchDown"; window: WindowId; id: number; x: number; y: number }
   | { type: "touchMotion"; window: WindowId; id: number; x: number; y: number }
   | { type: "touchUp"; id: number }
+  /**
+   * Ask to become the connection that drives layout.
+   *
+   * Granted to any session that may interact. Taking control is deliberately
+   * not a negotiation: whoever asks last is the one holding the device the user
+   * is looking at, and a prompt on the other device would be answered by nobody
+   * when that device is a tablet on a table in another room.
+   */
+  | { type: "takeControl" }
+  /**
+   * Disconnect another session. The owner's alone.
+   *
+   * Kicks the connection, not the account: whoever it was can log back in.
+   */
+  | { type: "endSession"; session: SessionId }
+  /**
+   * Change what a live session may do, without touching its account.
+   *
+   * For handing someone your desktop to look at and taking the keys back
+   * while they stay connected. Lasts only as long as the connection.
+   */
+  | { type: "setSessionMode"; session: SessionId; mode: SessionMode }
+  /**
+   * Attach or detach the session's virtual game controller.
+   *
+   * The device the engine creates is visible to the whole machine, which is
+   * what makes Steam and SDL find it, so it exists only while a client is
+   * actually using the pad.
+   */
+  | { type: "setGamepad"; enabled: boolean }
+  /** A controller button, by W3C standard-mapping index. */
+  | { type: "gamepadButton"; button: number; pressed: boolean }
+  /** A controller axis. Sticks run -1 to 1, triggers 0 to 1. */
+  | { type: "gamepadAxis"; axis: number; value: number }
+  /**
+   * Whether this connection wants to hear the machine.
+   *
+   * Per connection and off until asked for, like streams. Capturing costs a
+   * process and about 1.5 Mbit/s per listener, so nobody pays for it until
+   * somebody is listening.
+   */
+  | {
+      type: "setAudio"
+      /** Whether this connection wants to hear the machine. */
+      enabled: boolean
+      /**
+       * Whether this connection can decode Opus.
+       *
+       * `AudioDecoder` is secure-context only, so a page on plain HTTP cannot,
+       * however new the browser. One capture is fanned out to everyone, so it
+       * is compressed only when every listener can take it.
+       */
+      opus: boolean
+      /**
+       * Whether the machine should also play the session's audio aloud.
+       *
+       * Machine-wide, not per connection: there is one set of speakers.
+       */
+      local: boolean
+    }
 
 /** Motion's defaults, matching `SpringSpec::default` on the Rust side. */
 export const DEFAULT_SPRING: SpringSpec = { stiffness: 100, damping: 10, mass: 1 }
@@ -405,6 +560,22 @@ function decodeModifiers(value: unknown, at: string): Modifiers {
   }
 }
 
+function decodePeer(value: unknown, at: string): PeerInfo {
+  const o = asObject(value, at)
+  noExtraKeys(o, ["id", "account", "mode", "primary", "device"], at)
+  const mode = str(o, "mode", at)
+  if (mode !== "view" && mode !== "interact") {
+    throw new ProtocolError(`${at}.mode: expected "view" or "interact", got ${JSON.stringify(mode)}`)
+  }
+  return {
+    id: int(o, "id", at),
+    account: str(o, "account", at),
+    mode,
+    primary: bool(o, "primary", at),
+    device: str(o, "device", at),
+  }
+}
+
 function decodeWindowLayout(value: unknown, at: string): WindowLayout {
   const o = asObject(value, at)
   noExtraKeys(o, ["id", "rect", "z"], at)
@@ -426,7 +597,18 @@ export function decodeToShell(text: string): ToShell {
       const where = `${at}.hello`
       noExtraKeys(
         o,
-        ["type", "protocolVersion", "output", "windows", "focused", "permissions", "account"],
+        [
+          "type",
+          "protocolVersion",
+          "output",
+          "windows",
+          "focused",
+          "permissions",
+          "account",
+          "session",
+          "primary",
+          "peers",
+        ],
         where,
       )
       return {
@@ -439,12 +621,39 @@ export function decodeToShell(text: string): ToShell {
         focused: nullableId(o, "focused", where),
         permissions: decodePermissions(o["permissions"], `${where}.permissions`),
         account: str(o, "account", where),
+        session: int(o, "session", where),
+        primary: bool(o, "primary", where),
+        peers: array(o, "peers", where).map((p, i) => decodePeer(p, `${where}.peers[${i}]`)),
       }
     }
     case "outputChanged": {
       const where = `${at}.outputChanged`
       noExtraKeys(o, ["type", "output"], where)
       return { type: "outputChanged", output: decodeOutput(o["output"], `${where}.output`) }
+    }
+    case "role": {
+      const where = `${at}.role`
+      noExtraKeys(o, ["type", "primary"], where)
+      return { type: "role", primary: bool(o, "primary", where) }
+    }
+    case "layout": {
+      const where = `${at}.layout`
+      noExtraKeys(o, ["type", "windows", "output"], where)
+      return {
+        type: "layout",
+        windows: array(o, "windows", where).map((w, i) =>
+          decodeWindowLayout(w, `${where}.windows[${i}]`),
+        ),
+        output: decodeOutput(o["output"], `${where}.output`),
+      }
+    }
+    case "peers": {
+      const where = `${at}.peers`
+      noExtraKeys(o, ["type", "peers"], where)
+      return {
+        type: "peers",
+        peers: array(o, "peers", where).map((p, i) => decodePeer(p, `${where}.peers[${i}]`)),
+      }
     }
     case "windowOpened":
     case "windowChanged": {
@@ -502,6 +711,26 @@ export function decodeToShell(text: string): ToShell {
       const where = `${at}.error`
       noExtraKeys(o, ["type", "request", "message"], where)
       return { type: "error", request: str(o, "request", where), message: str(o, "message", where) }
+    }
+    case "fullscreenRequest": {
+      const where = `${at}.fullscreenRequest`
+      noExtraKeys(o, ["type", "window", "fullscreen"], where)
+      return {
+        type: "fullscreenRequest",
+        window: num(o, "window", where) as WindowId,
+        fullscreen: bool(o, "fullscreen", where),
+      }
+    }
+    case "alreadyRunning": {
+      const where = `${at}.alreadyRunning`
+      noExtraKeys(o, ["type", "command", "terminal", "program", "pid"], where)
+      return {
+        type: "alreadyRunning",
+        command: str(o, "command", where),
+        terminal: bool(o, "terminal", where),
+        program: str(o, "program", where),
+        pid: num(o, "pid", where),
+      }
     }
     case "apps": {
       const where = `${at}.apps`
@@ -616,6 +845,17 @@ export function decodeToEngine(text: string): ToEngine {
         terminal: bool(o, "terminal", where),
       }
     }
+    case "closeAndSpawn": {
+      const where = `${at}.closeAndSpawn`
+      noExtraKeys(o, ["type", "command", "terminal", "pid", "force"], where)
+      return {
+        type: "closeAndSpawn",
+        command: str(o, "command", where),
+        terminal: bool(o, "terminal", where),
+        pid: num(o, "pid", where),
+        force: bool(o, "force", where),
+      }
+    }
     case "pointerMotion": {
       const where = `${at}.pointerMotion`
       noExtraKeys(o, ["type", "window", "x", "y"], where)
@@ -670,9 +910,58 @@ export function decodeToEngine(text: string): ToEngine {
       noExtraKeys(o, ["type", "id"], where)
       return { type: "touchUp", id: int(o, "id", where) }
     }
+    case "takeControl": {
+      noExtraKeys(o, ["type"], `${at}.takeControl`)
+      return { type: "takeControl" }
+    }
+    case "setGamepad": {
+      const where = `${at}.setGamepad`
+      noExtraKeys(o, ["type", "enabled"], where)
+      return { type: "setGamepad", enabled: bool(o, "enabled", where) }
+    }
+    case "gamepadButton": {
+      const where = `${at}.gamepadButton`
+      noExtraKeys(o, ["type", "button", "pressed"], where)
+      return {
+        type: "gamepadButton",
+        button: int(o, "button", where),
+        pressed: bool(o, "pressed", where),
+      }
+    }
+    case "gamepadAxis": {
+      const where = `${at}.gamepadAxis`
+      noExtraKeys(o, ["type", "axis", "value"], where)
+      return { type: "gamepadAxis", axis: int(o, "axis", where), value: num(o, "value", where) }
+    }
+    case "setAudio": {
+      const where = `${at}.setAudio`
+      noExtraKeys(o, ["type", "enabled", "local", "opus"], where)
+      return {
+        type: "setAudio",
+        enabled: bool(o, "enabled", where),
+        local: bool(o, "local", where),
+        opus: bool(o, "opus", where),
+      }
+    }
+    case "endSession": {
+      const where = `${at}.endSession`
+      noExtraKeys(o, ["type", "session"], where)
+      return { type: "endSession", session: int(o, "session", where) }
+    }
+    case "setSessionMode": {
+      const where = `${at}.setSessionMode`
+      noExtraKeys(o, ["type", "session", "mode"], where)
+      const mode = str(o, "mode", where)
+      if (mode !== "view" && mode !== "interact") {
+        throw new ProtocolError(
+          `${where}.mode: expected "view" or "interact", got ${JSON.stringify(mode)}`,
+        )
+      }
+      return { type: "setSessionMode", session: int(o, "session", where), mode }
+    }
     case "setStreams": {
       const where = `${at}.setStreams`
-      noExtraKeys(o, ["type", "windows", "h264"], where)
+      noExtraKeys(o, ["type", "windows", "codecs"], where)
       return {
         type: "setStreams",
         windows: array(o, "windows", where).map((w, i) => {
@@ -681,7 +970,13 @@ export function decodeToEngine(text: string): ToEngine {
           }
           return w
         }),
-        h264: bool(o, "h264", where),
+        codecs: array(o, "codecs", where).map((c, i) => {
+          const value = String(c)
+          if (value !== "hevc" && value !== "h264") {
+            throw new ProtocolError(`${where}.codecs[${i}]: unknown codec ${value}`)
+          }
+          return value
+        }),
       }
     }
     default:
@@ -733,6 +1028,10 @@ export const FrameFormat = {
   Jpeg: 0,
   /** H.264 Annex B, SPS/PPS repeated on every keyframe. The normal path. */
   H264: 1,
+  /** HEVC Annex B, parameter sets repeated on every keyframe. Same shape as
+   *  H.264, roughly a third fewer bits, sent only where the client said it can
+   *  decode it. */
+  Hevc: 2,
 } as const
 export type FrameFormat = (typeof FrameFormat)[keyof typeof FrameFormat]
 
@@ -761,6 +1060,84 @@ export interface DecodedFrame {
  * Returns null rather than throwing or partially decoding, so a malformed or
  * foreign binary message is dropped instead of being drawn as garbage.
  */
+/** Magic for an audio chunk. Distinct from `FRAME_MAGIC`; see the Rust side. */
+export const AUDIO_MAGIC = [0x4c, 0x57, 0x46, 0x50] as const // "LWFP"
+
+/** Bytes before an audio payload. */
+export const AUDIO_HEADER_LEN = 16
+
+// A const object rather than an `enum`, matching `FrameFormat`. Node's
+// type-stripping loader refuses enums, and the end-to-end scripts import this
+// module directly.
+export const AudioFormat = {
+  /** Interleaved signed 16-bit little-endian. */
+  Pcm16: 0,
+  /** Opus, one packet per message, 20ms each. Roughly a twelfth of PCM. */
+  Opus: 1,
+} as const
+export type AudioFormat = (typeof AudioFormat)[keyof typeof AudioFormat]
+
+export interface AudioHeader {
+  format: AudioFormat
+  channels: number
+  sampleRate: number
+  /** Sample frames in the payload, per channel. */
+  frames: number
+}
+
+export interface DecodedAudio {
+  header: AudioHeader
+  /** Interleaved signed 16-bit samples, little-endian. */
+  payload: Uint8Array
+}
+
+/**
+ * Parse an audio chunk, or return null if this is not one.
+ *
+ * Returning null is the *normal* path for a video frame: audio and pixels
+ * share one socket, so the reader tries this and `decodeFrame` in turn and the
+ * magic decides. Which is why nothing is logged here.
+ */
+export function decodeAudio(buffer: ArrayBuffer): DecodedAudio | null {
+  if (buffer.byteLength < AUDIO_HEADER_LEN) return null
+  const bytes = new Uint8Array(buffer)
+
+  for (let i = 0; i < AUDIO_MAGIC.length; i++) {
+    if (bytes[i] !== AUDIO_MAGIC[i]) return null
+  }
+  if (bytes[4] !== FRAME_VERSION) return null
+  const format = bytes[5]
+  if (format !== AudioFormat.Pcm16 && format !== AudioFormat.Opus) return null
+
+  const channels = bytes[6] ?? 0
+  if (channels === 0 || channels > 8) return null
+
+  const view = new DataView(buffer)
+  const sampleRate = view.getUint32(8, true)
+  const frames = view.getUint32(12, true)
+  if (sampleRate === 0 || frames === 0) return null
+
+  // For PCM the payload must be exactly what the header claims. A short chunk
+  // played as-is would shift every later sample and turn the stream into
+  // noise.
+  //
+  // An Opus packet has no such relationship: its length is whatever the
+  // encoder produced for those frames, which is the entire point. `frames`
+  // still says how much audio it represents, which is what the decoder needs
+  // to keep the clock straight.
+  if (format === AudioFormat.Pcm16) {
+    const expected = frames * channels * 2
+    if (buffer.byteLength - AUDIO_HEADER_LEN !== expected) return null
+  } else if (buffer.byteLength <= AUDIO_HEADER_LEN) {
+    return null
+  }
+
+  return {
+    header: { format, channels, sampleRate, frames },
+    payload: bytes.subarray(AUDIO_HEADER_LEN),
+  }
+}
+
 export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
   if (buffer.byteLength < FRAME_HEADER_LEN) return null
   const bytes = new Uint8Array(buffer)
@@ -770,7 +1147,8 @@ export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
   }
   if (bytes[4] !== FRAME_VERSION) return null
   const format = bytes[5]
-  if (format !== FrameFormat.Jpeg && format !== FrameFormat.H264) return null
+  if (format !== FrameFormat.Jpeg && format !== FrameFormat.H264 && format !== FrameFormat.Hevc)
+    return null
   const keyframe = ((bytes[6] ?? 0) & FLAG_KEYFRAME) !== 0
 
   const view = new DataView(buffer)

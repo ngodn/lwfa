@@ -1,5 +1,8 @@
 {
   "type": "setStreams",
   "windows": [],
-  "h264": true
+  "codecs": [
+    "hevc",
+    "h264"
+  ]
 }

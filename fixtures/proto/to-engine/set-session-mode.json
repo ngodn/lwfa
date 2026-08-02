@@ -1,0 +1,5 @@
+{
+  "type": "setSessionMode",
+  "session": 3,
+  "mode": "view"
+}
