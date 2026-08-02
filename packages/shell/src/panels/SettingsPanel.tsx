@@ -624,14 +624,14 @@ function StreamSettings() {
       </PanelSection>
 
       <PanelSection
-        title="Microphone"
+        title="Microphone (Experimental)"
         description="Feed this device's microphone to the desktop."
       >
         <MicSettings />
       </PanelSection>
 
       <PanelSection
-        title="Camera"
+        title="Camera (Experimental)"
         description="Feed this device's camera to the desktop."
       >
         <CameraSettings />
