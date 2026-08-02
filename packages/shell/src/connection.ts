@@ -271,6 +271,30 @@ export class Connection {
     this.#socket.send(encode(message))
   }
 
+  /**
+   * Raw binary uplink: tagged microphone chunks. See `lib/mic.ts`.
+   *
+   * Separate from `send` because these are not protocol JSON and because the
+   * sender wants to make its own drop decision from `bufferedAmount` before
+   * paying for the call.
+   */
+  sendBinary(data: Uint8Array): void {
+    if (this.#socket?.readyState !== WebSocket.OPEN) return
+    this.#socket.send(data)
+  }
+
+  /**
+   * Bytes accepted by `send` but not yet handed to the network.
+   *
+   * This is the uplink's backpressure signal, the mirror of the engine's
+   * in-flight accounting on the downlink: a growing number means the link is
+   * not keeping up and the microphone should spend fewer bits rather than
+   * queue seconds of stale audio.
+   */
+  bufferedAmount(): number {
+    return this.#socket?.bufferedAmount ?? 0
+  }
+
   close(): void {
     this.#closed = true
     if (this.#timer !== null) clearTimeout(this.#timer)

@@ -125,6 +125,11 @@ pub enum ShellEvent {
         client: String,
     },
     Message(SessionId, ToEngine),
+    /// A binary uplink message: a tagged microphone chunk. Kept out of
+    /// [`ToEngine`] because 50 chunks a second do not belong in JSON, and out
+    /// of a side channel because the socket already orders them correctly
+    /// against the `SetMic` that starts and stops the flow.
+    MicChunk(SessionId, tungstenite::Bytes),
     Disconnected(SessionId),
 }
 
@@ -932,6 +937,17 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                         // not something to fail silently on.
                         tracing::warn!("undecodable message from shell: {err}; raw: {text}");
                     }
+                }
+            }
+            Ok(tungstenite::Message::Binary(bytes)) => {
+                // Microphone audio; see `ShellEvent::MicChunk`. Forwarded
+                // without inspection: the compositor thread checks whether
+                // this session holds the device.
+                if events
+                    .send(ShellEvent::MicChunk(client.id, bytes))
+                    .is_err()
+                {
+                    return false;
                 }
             }
             Ok(tungstenite::Message::Close(_)) => return false,

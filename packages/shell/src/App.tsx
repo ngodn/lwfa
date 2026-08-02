@@ -55,6 +55,7 @@ import {
   setApps,
 } from "@/lib/apps"
 import * as audio from "@/lib/audio"
+import { setMicWanted, startMic, useMicWanted, type RunningMic } from "@/lib/mic"
 import { engineFor } from "@/lib/engineUrl"
 import { requestLeadership } from "@/lib/leader"
 import { log } from "@/lib/log"
@@ -929,6 +930,39 @@ export function App(): React.ReactElement {
   useEffect(() => {
     audio.setVolume(prefs.stream.volume);
   }, [prefs.stream.volume]);
+
+  // The microphone, the other direction. Session state rather than a saved
+  // preference (a mic that turns itself on after a reload is a surprise no
+  // setting is worth), so this effect keys on the store flag and the session:
+  // a reconnect is a new engine session that has never been told.
+  const micWanted = useMicWanted();
+  useEffect(() => {
+    if (!micWanted) return;
+    const conn = connection.current;
+    if (!conn) return;
+    conn.send({ type: "setMic", enabled: true });
+
+    let cancelled = false;
+    let running: RunningMic | null = null;
+    void startMic(conn)
+      .then((mic) => {
+        // Stopped while the permission prompt was up: undo, do not leak.
+        if (cancelled) mic.stop();
+        else running = mic;
+      })
+      .catch(() => {
+        // State already carries the user-legible reason; the switch resets so
+        // the panel shows intent and reality agreeing.
+        setMicWanted(false);
+        connection.current?.send({ type: "setMic", enabled: false });
+      });
+
+    return () => {
+      cancelled = true;
+      running?.stop();
+      connection.current?.send({ type: "setMic", enabled: false });
+    };
+  }, [micWanted, sessionId]);
 
   // Local playback and the quality choice are re-sent whenever they change
   // rather than only when audio is switched on.

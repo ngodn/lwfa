@@ -304,6 +304,7 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
             },
         ),
         ("set-gamepad", ToEngine::SetGamepad { enabled: true }),
+        ("set-mic", ToEngine::SetMic { enabled: true }),
         (
             "gamepad-button",
             ToEngine::GamepadButton {

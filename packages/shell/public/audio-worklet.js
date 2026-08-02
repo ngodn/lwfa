@@ -131,3 +131,47 @@ class PcmPlayer extends AudioWorkletProcessor {
 }
 
 registerProcessor("lwfa-pcm", PcmPlayer)
+
+/**
+ * Captures the microphone, on the audio thread.
+ *
+ * The mirror of PcmPlayer: the graph hands this 128-frame blocks of float
+ * samples on a hard schedule, and the network wants 20ms chunks of s16.
+ * Accumulating and converting here means the main thread touches microphone
+ * audio fifty times a second at most, already in wire format, instead of
+ * being part of the sample path.
+ *
+ * Chunks are posted as transferred Int16Array buffers: no copy, and no
+ * garbage accumulating on the audio thread beyond one recycled staging
+ * buffer.
+ */
+const CAPTURE_CHUNK = 960 // 20ms at 48kHz, mono
+
+class MicCapture extends AudioWorkletProcessor {
+  constructor() {
+    super()
+    this.staging = new Int16Array(CAPTURE_CHUNK)
+    this.filled = 0
+  }
+
+  process(inputs) {
+    const input = inputs[0]
+    if (!input || input.length === 0) return true
+    // Mono on purpose: a microphone is a voice. If the device is stereo the
+    // first channel carries it.
+    const samples = input[0]
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]))
+      this.staging[this.filled++] = (s * 0x7fff) | 0
+      if (this.filled === CAPTURE_CHUNK) {
+        const chunk = this.staging
+        this.port.postMessage({ pcm: chunk }, [chunk.buffer])
+        this.staging = new Int16Array(CAPTURE_CHUNK)
+        this.filled = 0
+      }
+    }
+    return true
+  }
+}
+
+registerProcessor("lwfa-mic", MicCapture)

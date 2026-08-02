@@ -51,6 +51,7 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
+import { setMicWanted, useMicState, useMicWanted } from "@/lib/mic"
 import { cn } from "@/lib/utils"
 
 const EDGES: { value: NavEdgePref; label: string; icon: typeof PanelLeft }[] = [
@@ -269,6 +270,54 @@ function SettingsPanel() {
  * phone on a train, and "how much video would you like" has a different answer
  * for each. None of it changes what anyone else sees.
  */
+/**
+ * The microphone switch and its live status.
+ *
+ * Deliberately not a preference: every session starts muted and someone
+ * presses this, which doubles as the user gesture the browser wants before
+ * an `AudioContext` may run. The hint carries the truth of the moment,
+ * including the reason when the browser refuses, because a mic switch that
+ * flips back with no explanation reads as broken.
+ *
+ * Once live, the desktop gains a machine-visible "lwfa Microphone" device:
+ * anything there that asks for a mic (a meeting in a browser, a recorder)
+ * can pick it and hears this device.
+ */
+function MicSettings() {
+  const wanted = useMicWanted()
+  const state = useMicState()
+
+  const hint =
+    state.phase === "error"
+      ? state.reason
+      : state.phase === "live"
+        ? state.opus
+          ? "Live, compressed"
+          : "Live, uncompressed"
+        : state.phase === "starting"
+          ? "Asking the browser…"
+          : "Muted"
+
+  return (
+    <>
+      <FieldRow>
+        <Field label="Share this device's microphone" hint={hint} />
+        <Switch
+          checked={wanted}
+          onCheckedChange={setMicWanted}
+          aria-label="Share this device's microphone"
+        />
+      </FieldRow>
+      {state.phase === "live" ? (
+        <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+          Apps on the desktop now list an &ldquo;lwfa-Microphone&rdquo; input
+          device. Pick it in the app that should hear you.
+        </p>
+      ) : null}
+    </>
+  )
+}
+
 /**
  * The pause-inactive switch, with a speed bump on the way off.
  *
@@ -536,6 +585,13 @@ function StreamSettings() {
             </ToggleGroup>
           </div>
         ) : null}
+      </PanelSection>
+
+      <PanelSection
+        title="Microphone"
+        description="Feed this device's microphone to the desktop."
+      >
+        <MicSettings />
       </PanelSection>
 
       <PanelSection

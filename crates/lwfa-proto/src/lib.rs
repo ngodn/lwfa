@@ -856,6 +856,21 @@ pub enum ToEngine {
         quality: AudioQuality,
     },
 
+    /// Start or stop feeding this session's microphone to the desktop.
+    ///
+    /// The audio itself does not travel in JSON: it arrives as binary
+    /// WebSocket messages, one 20ms chunk each, tagged with a leading byte
+    /// (see [`MIC_TAG_OPUS`] and [`MIC_TAG_PCM`]). This message is the
+    /// consent and the lifecycle: the engine creates the machine-visible
+    /// virtual source ("lwfa Microphone") when a session enables it and
+    /// removes the device when the last one disables it, so an idle session
+    /// never leaves a phantom microphone plugged into the machine.
+    ///
+    /// One session feeds the device at a time; the most recent to enable
+    /// wins. Mixing two rooms into one microphone helps nobody.
+    #[serde(rename_all = "camelCase")]
+    SetMic { enabled: bool },
+
     /// Which windows the shell wants pixels for, and in what form.
     ///
     /// Total, like `SetLayout`: windows not listed stop streaming. A shell that
@@ -1024,6 +1039,19 @@ pub const AUDIO_MAGIC: [u8; 4] = *b"LWFP";
 
 /// Bytes before an audio payload.
 pub const AUDIO_HEADER_LEN: usize = 16;
+
+/// Leading byte of a binary message travelling *from* the shell *to* the
+/// engine: a 20ms microphone chunk encoded as one Opus packet, 48kHz mono.
+///
+/// Uplink frames get a single tag byte rather than the magic-plus-header the
+/// downlink uses, because there is exactly one sender per message and it has
+/// already declared everything else in `SetMic`; the tag exists so a future
+/// uplink (the camera) can share the socket unambiguously.
+pub const MIC_TAG_OPUS: u8 = 0x01;
+
+/// Same, but interleaved signed 16-bit little-endian PCM, 48kHz mono: the
+/// fallback for a browser whose `AudioEncoder` cannot produce Opus.
+pub const MIC_TAG_PCM: u8 = 0x02;
 
 /// How an audio payload is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

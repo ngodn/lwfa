@@ -13,7 +13,7 @@
 
 import { beforeAll, describe, expect, it } from "vitest"
 
-/** The processor class, as the browser would register it. */
+/** The playback processor class, as the browser would register it. */
 let Processor: new () => {
   port: { onmessage: (event: { data: unknown }) => void; postMessage: (data: unknown) => void }
   /** `outputs[output][channel]`, which for one stereo output is `[[L, R]]`. */
@@ -22,18 +22,26 @@ let Processor: new () => {
   priming: boolean
 }
 
+/** The capture processor: microphone samples in, 20ms s16 chunks out. */
+let Capture: new () => {
+  port: { postMessage: (data: unknown, transfer?: unknown[]) => void }
+  process: (inputs: Float32Array[][]) => boolean
+}
+
 beforeAll(async () => {
   // The two globals a worklet scope provides. Set before the import, because
-  // the file subclasses one and calls the other at module scope.
+  // the file subclasses one and calls the other at module scope. The file
+  // registers both processors, so they are kept by name.
+  const registered: Record<string, unknown> = {}
   Object.assign(globalThis, {
     AudioWorkletProcessor: class {
       port = {
         onmessage: (_event: { data: unknown }) => {},
-        postMessage: (_data: unknown) => {},
+        postMessage: (_data: unknown, _transfer?: unknown[]) => {},
       }
     },
-    registerProcessor: (_name: string, processor: unknown) => {
-      Processor = processor as typeof Processor
+    registerProcessor: (name: string, processor: unknown) => {
+      registered[name] = processor
     },
   })
   // The real file, not a copy of its logic. A test of a paraphrase would pass
@@ -41,6 +49,8 @@ beforeAll(async () => {
   // it is a worklet, so it has no module surface to describe.
   // @ts-expect-error -- plain JS with no declarations, loaded for its side effect
   await import("../public/audio-worklet.js")
+  Processor = registered["lwfa-pcm"] as typeof Processor
+  Capture = registered["lwfa-mic"] as typeof Capture
 })
 
 /** One chunk of interleaved stereo, as it arrives off the socket. */
@@ -155,5 +165,56 @@ describe("the audio worklet", () => {
     const out = block(128)
     player.process([], out)
     expect([...out[0]![0]!].every((v) => v === 0)).toBe(true)
+  })
+})
+
+/**
+ * The capture side: microphone float samples in, 20ms s16 chunks out.
+ *
+ * The properties that matter are chunking (exactly 960 samples per posted
+ * chunk, whatever block size the graph delivers) and conversion (full scale
+ * without clipping wrap, silence as zero).
+ */
+describe("the mic capture worklet", () => {
+  function collect(capture: InstanceType<typeof Capture>): Int16Array[] {
+    const chunks: Int16Array[] = []
+    capture.port.postMessage = (data: unknown) => {
+      chunks.push((data as { pcm: Int16Array }).pcm)
+    }
+    return chunks
+  }
+
+  it("posts exactly 20ms chunks regardless of block size", () => {
+    const capture = new Capture()
+    const chunks = collect(capture)
+    // 128-frame blocks: 960/128 = 7.5, so a chunk lands mid-block.
+    const input = [[new Float32Array(128).fill(0.5)]]
+    for (let i = 0; i < 15; i++) capture.process(input)
+    // 1920 samples in: exactly two chunks, no remainder posted early.
+    expect(chunks.length).toBe(2)
+    expect(chunks[0]!.length).toBe(960)
+    expect(chunks[1]!.length).toBe(960)
+  })
+
+  it("converts the extremes without wrapping", () => {
+    const capture = new Capture()
+    const chunks = collect(capture)
+    const loud = new Float32Array(960)
+    for (let i = 0; i < 960; i++) loud[i] = i % 2 === 0 ? 1.5 : -1.5
+    capture.process([[loud]])
+    const chunk = chunks[0]!
+    // Clamped to full scale, not wrapped to the other sign.
+    expect(chunk[0]).toBe(0x7fff)
+    expect(chunk[1]).toBe(-0x7fff)
+  })
+
+  it("keeps only the first channel of a stereo device", () => {
+    const capture = new Capture()
+    const chunks = collect(capture)
+    const left = new Float32Array(960).fill(0.25)
+    const right = new Float32Array(960).fill(-0.75)
+    capture.process([[left, right]])
+    // 0.25 * 0x7fff, truncated.
+    expect(chunks[0]![0]).toBe(8191)
   })
 })

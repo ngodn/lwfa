@@ -30,6 +30,7 @@ mod handlers;
 mod icons;
 mod input;
 mod layout;
+mod mic;
 mod remote_input;
 mod shell;
 mod sink;
@@ -437,6 +438,10 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // tab closed mid-press does not leave a character running into a
             // wall forever.
             state.gamepads.remove(&session);
+            // And their microphone, for the same reason a controller goes: a
+            // closed tab must not leave a device on the machine claiming to
+            // carry a room it can no longer hear.
+            state.set_mic(session, false);
             // The last listener leaving stops the capture, so an unattended
             // session is not holding a recording process open.
             state.sync_audio_capture();
@@ -474,6 +479,10 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 state.announce_peers();
                 tracing::info!("session {session} left; {} left", state.sessions.len());
             }
+        }
+
+        ShellEvent::MicChunk(session, bytes) => {
+            state.mic_chunk(session, &bytes);
         }
 
         ShellEvent::Message(session, message) => {
@@ -837,6 +846,10 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             }
             state.sync_audio_capture();
             state.sync_audio_bitrate();
+        }
+
+        ToEngine::SetMic { enabled } => {
+            state.set_mic(session, enabled);
         }
 
         ToEngine::SetStreams { windows, codecs } => {

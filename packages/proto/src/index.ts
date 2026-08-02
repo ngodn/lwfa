@@ -398,9 +398,29 @@ export type ToEngine =
        */
       quality: AudioQuality
     }
+  /**
+   * Start or stop feeding this session's microphone to the desktop.
+   *
+   * The audio itself travels as binary WebSocket messages tagged with
+   * `MIC_TAG_OPUS` or `MIC_TAG_PCM`; this message is the consent and the
+   * lifecycle. The engine plugs a machine-visible "lwfa Microphone" in while
+   * a session feeds it and unplugs it after, so an idle session never leaves
+   * a phantom microphone on the machine.
+   */
+  | { type: "setMic"; enabled: boolean }
 
 /** How many bits the session's sound deserves. See `setAudio`. */
 export type AudioQuality = "auto" | "high" | "medium" | "low"
+
+/**
+ * Leading byte of a binary uplink message: one 20ms Opus packet of
+ * microphone audio, 48kHz mono. See the Rust `MIC_TAG_OPUS`.
+ */
+export const MIC_TAG_OPUS = 0x01
+
+/** Same, but signed 16-bit little-endian PCM, 48kHz mono: the fallback for
+ * a browser whose `AudioEncoder` cannot produce Opus. */
+export const MIC_TAG_PCM = 0x02
 
 /** Motion's defaults, matching `SpringSpec::default` on the Rust side. */
 export const DEFAULT_SPRING: SpringSpec = { stiffness: 100, damping: 10, mass: 1 }
@@ -930,6 +950,11 @@ export function decodeToEngine(text: string): ToEngine {
       const where = `${at}.setGamepad`
       noExtraKeys(o, ["type", "enabled"], where)
       return { type: "setGamepad", enabled: bool(o, "enabled", where) }
+    }
+    case "setMic": {
+      const where = `${at}.setMic`
+      noExtraKeys(o, ["type", "enabled"], where)
+      return { type: "setMic", enabled: bool(o, "enabled", where) }
     }
     case "gamepadButton": {
       const where = `${at}.gamepadButton`

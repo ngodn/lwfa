@@ -108,6 +108,14 @@ pub struct Lwfa {
     pub sessions: std::collections::HashMap<lwfa_proto::SessionId, Session>,
     /// The running audio capture, if anyone is listening. See `audio.rs`.
     pub audio: Option<crate::audio::Capture>,
+    /// The virtual microphone, while a session feeds one. See `mic.rs`.
+    pub mic: Option<crate::mic::Mic>,
+    /// Which session's microphone the device carries.
+    ///
+    /// One at a time, most recent enabler wins: mixing two rooms into one
+    /// microphone helps nobody, and the one doing the talking is the one who
+    /// just pressed the button.
+    pub mic_session: Option<lwfa_proto::SessionId>,
     /// Chooses the total bitrate from how the connection is coping.
     pub bitrate: crate::bitrate::Controller,
     /// Holds focus still before the budget follows it. See `bitrate`.
@@ -260,6 +268,8 @@ impl Lwfa {
             sessions: std::collections::HashMap::new(),
             last_layout: Vec::new(),
             audio: None,
+            mic: None,
+            mic_session: None,
             bitrate: crate::bitrate::Controller::new(std::time::Instant::now()),
             attention: crate::bitrate::Attention::new(std::time::Instant::now()),
             streamed_last: Vec::new(),
@@ -668,6 +678,41 @@ impl Lwfa {
         match self.layout.id_of(window) {
             Some(id) if self.streaming.contains(&id) => Some(std::time::Duration::ZERO),
             _ => Some(std::time::Duration::from_secs(1)),
+        }
+    }
+
+    /// Start or stop carrying this session's microphone.
+    ///
+    /// The device exists exactly while someone feeds it; see `mic.rs`. A
+    /// second session enabling takes the device over rather than mixing in,
+    /// and a disable only counts from the session that currently holds it.
+    pub fn set_mic(&mut self, session: lwfa_proto::SessionId, enabled: bool) {
+        if enabled {
+            if self.mic.is_none() {
+                match crate::mic::Mic::start() {
+                    Ok(mic) => self.mic = Some(mic),
+                    Err(err) => {
+                        tracing::warn!("could not plug in the virtual microphone: {err}");
+                        return;
+                    }
+                }
+            }
+            self.mic_session = Some(session);
+        } else if self.mic_session == Some(session) {
+            self.mic = None;
+            self.mic_session = None;
+        }
+    }
+
+    /// One tagged binary uplink message from a session's microphone.
+    ///
+    /// Silently ignored unless that session holds the device: a stale sender
+    /// racing a takeover must not talk over the new holder.
+    pub fn mic_chunk(&mut self, session: lwfa_proto::SessionId, chunk: &[u8]) {
+        if self.mic_session == Some(session) {
+            if let Some(mic) = self.mic.as_ref() {
+                mic.feed(chunk);
+            }
         }
     }
 
