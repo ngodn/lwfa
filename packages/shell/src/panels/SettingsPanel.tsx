@@ -372,13 +372,13 @@ function StreamSettings() {
       >
         <FieldRow>
           <Field
-            label="Hear the desktop"
+            label="Enable audio"
             hint={stream.audio ? "Streaming" : "Muted"}
           />
           <Switch
             checked={stream.audio}
             onCheckedChange={(audio) => patchPrefs("stream", { audio })}
-            aria-label="Hear the desktop"
+            aria-label="Enable audio"
           />
         </FieldRow>
         {/*
