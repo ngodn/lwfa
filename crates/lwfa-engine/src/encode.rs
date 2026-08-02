@@ -31,7 +31,6 @@
 use std::collections::HashMap;
 
 use ff::format::Pixel;
-use ff::software::scaling;
 use ffmpeg_next as ff;
 use lwfa_proto::{FrameFormat, WindowId};
 
@@ -57,8 +56,6 @@ struct Session {
     /// The rate it was built with, so a changed share can be noticed.
     bitrate: u32,
     encoder: ff::encoder::video::Encoder,
-    scaler: scaling::Context,
-    nv12: ff::frame::Video,
     width: u32,
     height: u32,
     pts: i64,
@@ -201,9 +198,12 @@ impl Encoders {
 
     /// Encode a captured frame, falling back to JPEG if hardware is unavailable
     /// or the client cannot decode it.
-    pub fn encode(&mut self, frame: &CapturedFrame) -> Option<EncodedFrame> {
+    ///
+    /// `&mut` because the frame's pts and picture type are stamped in place;
+    /// the pixels themselves are read, not written.
+    pub fn encode(&mut self, frame: &mut CapturedFrame) -> Option<EncodedFrame> {
         if self.available && self.codec.is_some() && self.ensure_session(frame) {
-            if let Some(encoded) = self.encode_h264(frame) {
+            if let Some(encoded) = self.encode_video(frame) {
                 return Some(encoded);
             }
             // A session that fails mid-stream is dropped so the next frame
@@ -268,9 +268,9 @@ impl Encoders {
         }
     }
 
-    fn encode_h264(&mut self, frame: &CapturedFrame) -> Option<EncodedFrame> {
+    fn encode_video(&mut self, frame: &mut CapturedFrame) -> Option<EncodedFrame> {
         let session = self.sessions.get_mut(&frame.id)?;
-        session.encode(&frame.rgba)
+        session.encode(&mut frame.frame)
     }
 }
 
@@ -300,7 +300,12 @@ impl Session {
 
         enc.set_width(width);
         enc.set_height(height);
-        enc.set_format(Pixel::NV12);
+        // RGB0: the capture's RGBA bytes, with NVENC told to ignore the alpha.
+        // The driver does the RGB-to-YUV conversion on the GPU, which is what
+        // deleted the CPU swscale stage this pipeline used to carry. The
+        // conversion NVENC applies matches the BT.601 matrix swscale used, so
+        // colours did not shift when the stage moved.
+        enc.set_format(Pixel::RGBZ);
         enc.set_time_base(ff::Rational(1, 60));
         // Keyframe interval, and so also the worst case wait before a newly
         // attached browser can decode anything: startup latency against
@@ -333,22 +338,8 @@ impl Session {
 
         let encoder = enc.open_with(opts)?;
 
-        let scaler = scaling::Context::get(
-            Pixel::RGBA,
-            width,
-            height,
-            Pixel::NV12,
-            width,
-            height,
-            // FAST_BILINEAR: this is a 1:1 colour conversion, not a rescale,
-            // so filter quality is irrelevant and speed is not.
-            scaling::Flags::FAST_BILINEAR,
-        )?;
-
         Ok(Self {
             encoder,
-            scaler,
-            nv12: ff::frame::Video::new(Pixel::NV12, width, height),
             width,
             height,
             codec: wanted,
@@ -358,21 +349,24 @@ impl Session {
         })
     }
 
-    fn encode(&mut self, rgba: &[u8]) -> Option<EncodedFrame> {
-        let mut source = ff::frame::Video::new(Pixel::RGBA, self.width, self.height);
-        copy_rows(rgba, &mut source, self.width, self.height);
-
-        self.scaler.run(&source, &mut self.nv12).ok()?;
-        self.nv12.set_pts(Some(self.pts));
+    /// Encode the captured frame in place.
+    ///
+    /// The frame arrives already in the layout the encoder eats, so nothing is
+    /// copied or converted here: NVENC uploads it and does the colour
+    /// conversion itself. `send_frame` copies into the encoder's own input
+    /// surface before returning, which is what makes handing the same pooled
+    /// frame back for reuse safe.
+    fn encode(&mut self, source: &mut ff::frame::Video) -> Option<EncodedFrame> {
+        source.set_pts(Some(self.pts));
         if self.force_keyframe {
-            self.nv12.set_kind(ff::picture::Type::I);
+            source.set_kind(ff::picture::Type::I);
             self.force_keyframe = false;
         } else {
-            self.nv12.set_kind(ff::picture::Type::None);
+            source.set_kind(ff::picture::Type::None);
         }
         self.pts += 1;
 
-        self.encoder.send_frame(&self.nv12).ok()?;
+        self.encoder.send_frame(source).ok()?;
 
         // The encoder may emit several packets, or none. Concatenating is
         // correct for Annex B, where packets are just NAL units in order.
@@ -406,67 +400,21 @@ impl Session {
     }
 }
 
-/// Copy tightly-packed RGBA into an ffmpeg frame, honouring its stride.
-///
-/// ffmpeg aligns each row, so the destination stride is usually wider than
-/// `width * 4`. Copying the buffer wholesale would shear the image.
-fn copy_rows(rgba: &[u8], frame: &mut ff::frame::Video, width: u32, height: u32) {
-    let stride = frame.stride(0);
-    let row_bytes = width as usize * 4;
-    let dst = frame.data_mut(0);
-    for y in 0..height as usize {
-        let src_start = y * row_bytes;
-        let dst_start = y * stride;
-        let Some(src) = rgba.get(src_start..src_start + row_bytes) else {
-            break;
-        };
-        let Some(dst_row) = dst.get_mut(dst_start..dst_start + row_bytes) else {
-            break;
-        };
-        dst_row.copy_from_slice(src);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn frame(width: u32, height: u32) -> CapturedFrame {
-        CapturedFrame {
-            id: WindowId(1),
-            width,
-            height,
-            // A gradient rather than flat colour, so a stride bug shears
-            // visibly instead of being hidden by uniform pixels.
-            rgba: (0..width as usize * height as usize)
-                .flat_map(|i| {
-                    let x = (i % width as usize) as u8;
-                    let y = (i / width as usize) as u8;
-                    [x, y, x.wrapping_add(y), 255]
-                })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn copy_rows_respects_a_wider_destination_stride() {
-        // The bug this guards against shears the image diagonally, which is
-        // easy to mistake for a capture problem three layers away.
-        ff::init().ok();
-        let width = 7; // deliberately not a multiple of any alignment
-        let height = 4;
-        let src = frame(width, height);
-        let mut dst = ff::frame::Video::new(Pixel::RGBA, width, height);
-
-        copy_rows(&src.rgba, &mut dst, width, height);
-
-        let stride = dst.stride(0);
-        let row_bytes = width as usize * 4;
-        for y in 0..height as usize {
-            let expected = &src.rgba[y * row_bytes..(y + 1) * row_bytes];
-            let actual = &dst.data(0)[y * stride..y * stride + row_bytes];
-            assert_eq!(actual, expected, "row {y} differs");
-        }
+        // A gradient rather than flat colour, so a stride bug shears
+        // visibly instead of being hidden by uniform pixels.
+        let rgba: Vec<u8> = (0..width as usize * height as usize)
+            .flat_map(|i| {
+                let x = (i % width as usize) as u8;
+                let y = (i / width as usize) as u8;
+                [x, y, x.wrapping_add(y), 255]
+            })
+            .collect();
+        CapturedFrame::for_tests(WindowId(1), width, height, &rgba)
     }
 
     #[test]
@@ -483,7 +431,7 @@ mod tests {
         let mut encoders = Encoders::new(crate::config::Stream::default());
         encoders.available = false;
         let encoded = encoders
-            .encode(&frame(64, 64))
+            .encode(&mut frame(64, 64))
             .expect("should still encode");
         assert_eq!(encoded.format, FrameFormat::Jpeg);
         assert!(encoded.keyframe, "jpeg is always self-contained");
@@ -571,7 +519,7 @@ impl EncodeWorker {
             .spawn(move || {
                 let mut encoders = Encoders::new(config);
                 loop {
-                    let Ok(job) = frames_rx.recv() else {
+                    let Ok(mut job) = frames_rx.recv() else {
                         return; // compositor is gone
                     };
                     worker_queued.fetch_sub(1, Ordering::Relaxed);
@@ -598,7 +546,7 @@ impl EncodeWorker {
 
                     // A frame for a window that was just forgotten is stale;
                     // encoding it would rebuild the session it just dropped.
-                    let Some(encoded) = encoders.encode(&job.frame) else {
+                    let Some(encoded) = encoders.encode(&mut job.frame) else {
                         continue;
                     };
 

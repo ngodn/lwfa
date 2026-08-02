@@ -387,6 +387,32 @@ impl Layout {
             .collect()
     }
 
+    /// [`Self::placements`], with each window's id.
+    ///
+    /// The streaming path needs the id of every placed window, and looking each
+    /// one up through [`Self::id_of`] is a linear scan inside a loop that is
+    /// itself linear: quadratic per frame, growing with every open window. The
+    /// map is keyed by id, so handing it out here costs nothing.
+    pub fn placements_with_ids(&self) -> Vec<(WindowId, Window, Point<i32, Logical>)> {
+        let mut visible: Vec<(WindowId, &Tracked)> = self
+            .tracked
+            .iter()
+            .filter(|(_, t)| t.visible)
+            .map(|(id, t)| (*id, t))
+            .collect();
+        visible.sort_by_key(|(_, t)| t.z);
+        visible
+            .into_iter()
+            .map(|(id, t)| {
+                (
+                    id,
+                    t.window.clone(),
+                    Point::from((t.x.current.round() as i32, t.y.current.round() as i32)),
+                )
+            })
+            .collect()
+    }
+
     /// Windows the shell left out of the current layout.
     pub fn hidden(&self) -> Vec<Window> {
         self.tracked

@@ -19,3 +19,12 @@ unsafe_code = "deny"
 # The compositor hot path runs per-frame per-surface. Silent precision or
 # allocation surprises there are expensive, so surface them at build time.
 float_cmp = "warn"
+
+# The engine runs per-frame per-window, so runtime speed is worth compile time
+# in release. Fat LTO plus one codegen unit is measured at 10-20% across
+# workloads like this. `panic` stays at unwind: winit and calloop run user
+# callbacks that are allowed to assume unwinding, and the few landing pads are
+# not worth auditing that for.
+[profile.release]
+lto = "fat"
+codegen-units = 1

@@ -934,10 +934,7 @@ impl Lwfa {
         if std::fs::create_dir_all(dir).is_err() {
             return;
         }
-        for (window, _) in self.layout.placements() {
-            let Some(id) = self.layout.id_of(&window) else {
-                continue;
-            };
+        for (id, window, _) in self.layout.placements_with_ids() {
             let size = window.geometry().size.to_physical(1);
             let overlays = self.overlays_for(&window, (0, 0).into());
             let Some(frame) = self.capture.capture(renderer, id, &window, size, &overlays) else {
@@ -1134,18 +1131,24 @@ impl Lwfa {
             return;
         }
 
+        // Read once, not per window per frame: `var_os` takes the process
+        // environment lock and allocates every call.
+        static PROFILE: std::sync::LazyLock<bool> =
+            std::sync::LazyLock::new(|| std::env::var_os("LWFA_PROFILE").is_some());
+
         let targets: Vec<(WindowId, Window, Point<i32, Logical>)> = self
             .layout
-            .placements()
+            .placements_with_ids()
             .into_iter()
-            .filter_map(|(window, loc)| {
-                let id = self.layout.id_of(&window)?;
-                self.streaming.contains(&id).then_some((id, window, loc))
-            })
+            .filter(|(id, _, _)| self.streaming.contains(id))
             .collect();
 
         for (id, window, loc) in targets {
             // Re-checked per window: one large frame can fill either queue.
+            // Stopping here loses nothing. A readback in flight stays parked
+            // in the capture until a pass with room, and damage not yet read
+            // back keeps its commit counters, so both are picked up whenever
+            // the queues drain.
             let (Some(shell), Some(worker)) = (self.shell.as_ref(), self.encoders.as_ref()) else {
                 return;
             };
@@ -1154,8 +1157,7 @@ impl Lwfa {
             }
 
             let size = window.geometry().size.to_physical(1);
-            let profile = std::env::var_os("LWFA_PROFILE").is_some();
-            let t0 = profile.then(std::time::Instant::now);
+            let t0 = PROFILE.then(std::time::Instant::now);
 
             let overlays = self.overlays_for(&window, loc);
             let Some(frame) = self.capture.capture(renderer, id, &window, size, &overlays) else {
@@ -1180,12 +1182,11 @@ impl Lwfa {
 
             if let Some(worker) = self.encoders.as_ref() {
                 if !worker.submit(frame) {
-                    // Dropped because the encoder is behind. The capture's
-                    // damage state was already advanced, so this update is
-                    // lost; the next commit will produce another. Losing a
-                    // frame under load is preferable to unbounded latency.
+                    // Should not happen: capacity was checked above and only
+                    // this thread submits. Skip just this window rather than
+                    // abandoning the rest of the pass.
                     tracing::trace!("encoder busy, dropped a frame for {id}");
-                    return;
+                    continue;
                 }
             }
         }
