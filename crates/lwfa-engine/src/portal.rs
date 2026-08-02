@@ -175,7 +175,7 @@ fn backend(
         .and_then(|builder| {
             builder.serve_at("/org/freedesktop/portal/desktop", FileChooser { events })
         })
-        .and_then(|builder| builder.serve_at("/org/freedesktop/portal/desktop", Settings))
+        .and_then(|builder| builder.serve_at("/org/freedesktop/portal/desktop", Settings::new()))
         .and_then(|builder| builder.build())
         .map_err(|err| format!("could not serve the portal backend: {err}"))
 }
@@ -239,22 +239,69 @@ impl FileChooser {
     }
 }
 
-/// The appearance answers applications ask the portal for.
+/// The settings answers applications ask the portal for, proxied from the
+/// host desktop's own portal.
 ///
-/// Exists because the private bus otherwise has no Settings backend at all,
-/// and GTK and Chromium warn on every launch and fall back to light mode.
-/// lwfa's shell is ink; the applications inside it should agree.
-struct Settings;
+/// Two reasons this is a proxy and not a table of values:
+///
+/// - **Auto-detection.** The colour scheme, the fonts, the cursor theme are
+///   whatever the user's real desktop says they are, and the applications
+///   inside lwfa should agree with the ones outside it. The engine runs
+///   inside that session, so its default bus *is* the host's, and the
+///   host's portal already knows every answer.
+/// - **Completeness.** GTK reads its fonts through this portal (the
+///   `org.gnome.desktop.interface` namespace). A backend that answers with
+///   only a colour scheme starves applications of font configuration, and
+///   text goes visibly wrong: that was a real bug here, Firefox tab titles
+///   vanishing, because GTK trusted the portal that existed over its own
+///   fallbacks.
+///
+/// When the host has no portal (a bare TTY session), the one answer that
+/// matters falls back: prefer dark, matching the shell's own ink.
+struct Settings {
+    /// The host session bus, when it was reachable at startup.
+    host: Option<zbus::blocking::Connection>,
+}
 
 /// `color-scheme`: 0 no preference, 1 prefer dark, 2 prefer light.
 const PREFER_DARK: u32 = 1;
 
-fn appearance() -> HashMap<String, zvariant::OwnedValue> {
-    let mut ns = HashMap::new();
-    if let Ok(scheme) = zvariant::OwnedValue::try_from(zvariant::Value::from(PREFER_DARK)) {
-        ns.insert("color-scheme".to_string(), scheme);
+type SettingsTree = HashMap<String, HashMap<String, zvariant::OwnedValue>>;
+
+impl Settings {
+    fn new() -> Self {
+        let host = zbus::blocking::Connection::session()
+            .map_err(|err| {
+                tracing::info!("no host session bus for settings ({err}); using defaults");
+            })
+            .ok();
+        Self { host }
     }
-    ns
+
+    /// Ask the host desktop's portal, `None` when there is none to ask.
+    fn from_host(&self, namespaces: &[String]) -> Option<SettingsTree> {
+        let host = self.host.as_ref()?;
+        let reply = host
+            .call_method(
+                Some("org.freedesktop.portal.Desktop"),
+                "/org/freedesktop/portal/desktop",
+                Some("org.freedesktop.portal.Settings"),
+                "ReadAll",
+                &(namespaces,),
+            )
+            .ok()?;
+        reply.body().deserialize::<SettingsTree>().ok()
+    }
+
+    fn fallback() -> SettingsTree {
+        let mut ns = HashMap::new();
+        if let Ok(scheme) = zvariant::OwnedValue::try_from(zvariant::Value::from(PREFER_DARK)) {
+            ns.insert("color-scheme".to_string(), scheme);
+        }
+        let mut all = HashMap::new();
+        all.insert("org.freedesktop.appearance".to_string(), ns);
+        all
+    }
 }
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Settings")]
@@ -264,26 +311,20 @@ impl Settings {
         1
     }
 
-    /// The whole tree; the namespace filter is allowed to over-answer.
-    fn read_all(
-        &self,
-        _namespaces: Vec<String>,
-    ) -> HashMap<String, HashMap<String, zvariant::OwnedValue>> {
-        let mut all = HashMap::new();
-        all.insert("org.freedesktop.appearance".to_string(), appearance());
-        all
+    fn read_all(&self, namespaces: Vec<String>) -> SettingsTree {
+        self.from_host(&namespaces).unwrap_or_else(Self::fallback)
     }
 
-    /// One key, or the D-Bus error the spec asks for when it is not ours.
+    /// One key. Answered through `ReadAll` rather than the host's `Read`,
+    /// which double-wraps its variant and would need unwrapping anyway.
     fn read(&self, namespace: String, key: String) -> zbus::fdo::Result<zvariant::OwnedValue> {
-        if namespace == "org.freedesktop.appearance" && key == "color-scheme" {
-            zvariant::OwnedValue::try_from(zvariant::Value::from(PREFER_DARK))
-                .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
-        } else {
-            Err(zbus::fdo::Error::Failed(format!(
-                "no setting {namespace}.{key}"
-            )))
-        }
+        let tree = self
+            .from_host(std::slice::from_ref(&namespace))
+            .unwrap_or_else(Self::fallback);
+        tree.get(&namespace)
+            .and_then(|ns| ns.get(&key))
+            .cloned()
+            .ok_or_else(|| zbus::fdo::Error::Failed(format!("no setting {namespace}.{key}")))
     }
 }
 
