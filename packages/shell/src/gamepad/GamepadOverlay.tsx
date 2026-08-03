@@ -260,7 +260,13 @@ const PlayPad = memo(function PlayPad({
       <span
         className={cn(
           "pointer-events-none grid size-full place-items-center",
-          "border border-white/20 bg-black/45 text-white/90 backdrop-blur-sm",
+          // No backdrop blur, and not for looks: a backdrop filter re-samples
+          // whatever is behind it every time the backdrop changes, and behind
+          // every pad is a live game pushing new frames continuously. With a
+          // full layout that was ~15 blur passes per video frame on the
+          // client's GPU, which read as stream lag the moment the overlay
+          // turned on. A slightly darker flat fill keeps the pads legible.
+          "border border-white/20 bg-black/50 text-white/90",
           "transition-transform group-active:scale-95 group-active:bg-white/25",
           pad.kind === "trigger" ? "rounded-lg text-xs" : "rounded-full text-base",
           skin === "playstation" && pad.kind === "button" && "text-lg",
@@ -312,11 +318,63 @@ const Stick = memo(function Stick({
   /** True when this stick reports a real position rather than four keys. */
   const analog = onAxis !== undefined && axes !== undefined
 
+  // Axis sends are coalesced, not fired per pointer move. A tablet delivers
+  // pointermove at up to 120Hz and each move used to send two messages, so
+  // steering with one thumb was ~240 messages per second up the same socket
+  // the video comes down, every one of them waking the engine's event loop.
+  // A game cannot read the stick faster than once per frame anyway, so the
+  // latest position sits here and one animation frame ships it, and only the
+  // axes that moved enough to matter. A thumb resting in the dead zone now
+  // costs nothing instead of re-sending centre forever.
+  const pending = useRef<[number, number] | null>(null)
+  const sent = useRef<[number, number]>([0, 0])
+  const raf = useRef(0)
+
+  const flush = useCallback(() => {
+    raf.current = 0
+    const next = pending.current
+    if (next === null || axes === undefined) return
+    pending.current = null
+    // Under 1/64 of travel is below anything a game reacts to, and well
+    // under the dead zone every game applies on top.
+    const step = 1 / 64
+    if (Math.abs(next[0] - sent.current[0]) >= step) {
+      sent.current[0] = next[0]
+      onAxis?.(axes[0], next[0])
+    }
+    if (Math.abs(next[1] - sent.current[1]) >= step) {
+      sent.current[1] = next[1]
+      onAxis?.(axes[1], next[1])
+    }
+  }, [onAxis, axes])
+
+  const queue = useCallback(
+    (x: number, y: number) => {
+      pending.current = [x, y]
+      if (raf.current === 0) raf.current = requestAnimationFrame(flush)
+    },
+    [flush],
+  )
+
+  // A frame queued by a stick that is being unmounted must not fire.
+  useEffect(() => {
+    return () => {
+      if (raf.current !== 0) cancelAnimationFrame(raf.current)
+    }
+  }, [])
+
   const release = useCallback(() => {
+    if (raf.current !== 0) {
+      cancelAnimationFrame(raf.current)
+      raf.current = 0
+    }
+    pending.current = null
     if (analog && axes) {
-      // Centre it. A stick left pushed is a character that keeps walking.
+      // Centre it, immediately and unconditionally rather than through the
+      // queue: a stick left pushed is a character that keeps walking.
       onAxis?.(axes[0], 0)
       onAxis?.(axes[1], 0)
+      sent.current = [0, 0]
     }
     for (const code of held.current) onKey(code, false)
     held.current.clear()
@@ -375,11 +433,12 @@ const Stick = memo(function Stick({
           // Rescale so the stick still reaches 1.0 at the rim rather than
           // starting at 0.25 the moment it leaves the dead zone.
           const scale = (magnitude - dead) / (1 - dead) / magnitude
-          onAxis?.(axes[0], Math.max(-1, Math.min(1, nx * scale)))
-          onAxis?.(axes[1], Math.max(-1, Math.min(1, ny * scale)))
+          queue(
+            Math.max(-1, Math.min(1, nx * scale)),
+            Math.max(-1, Math.min(1, ny * scale)),
+          )
         } else {
-          onAxis?.(axes[0], 0)
-          onAxis?.(axes[1], 0)
+          queue(0, 0)
         }
         return
       }
@@ -398,7 +457,7 @@ const Stick = memo(function Stick({
       }
       apply(wanted)
     },
-    [apply, pad.directions],
+    [apply, pad.directions, analog, axes, queue],
   )
 
   return (
@@ -431,7 +490,8 @@ const Stick = memo(function Stick({
       onContextMenu={(event) => event.preventDefault()}
       aria-label={pad.face === "lstick" ? "Left stick" : "Right stick"}
     >
-      <span className="pointer-events-none absolute inset-0 rounded-full border border-white/20 bg-black/35 backdrop-blur-sm" />
+      {/* Flat fill, no backdrop blur: see the note on the button span. */}
+      <span className="pointer-events-none absolute inset-0 rounded-full border border-white/20 bg-black/40" />
       <span
         ref={nub}
         className="pointer-events-none absolute top-1/2 left-1/2 size-[45%] rounded-full border border-white/30 bg-white/25"
@@ -455,8 +515,8 @@ function Segment({
   return (
     <button
       className={cn(
-        "grid place-items-center border border-white/20 bg-black/45 text-[10px] text-white/80",
-        "backdrop-blur-sm active:bg-white/25",
+        "grid place-items-center border border-white/20 bg-black/50 text-[10px] text-white/80",
+        "active:bg-white/25",
         className,
       )}
       style={{ touchAction: "none" }}
@@ -692,13 +752,16 @@ const ResizeBar = memo(function ResizeBar({
 })
 
 /**
- * No `backdrop-blur` here, unlike the pad you actually play with.
+ * No `backdrop-blur` here, and none on the playing pads either.
  *
  * A backdrop filter has to re-read and re-blur whatever is behind it whenever
- * either one moves, and behind this is a live video of the desktop. During a
- * drag that is a full-frame blur per pointer move, which is what made moving a
- * pad feel like it was stepping rather than following. The playing pad keeps
- * its blur: it sits still, so it is paid for once.
+ * either one changes, and behind these controls is a live video of the
+ * desktop. This editor learned it first: a full-frame blur per pointer move
+ * made dragging a pad feel like it was stepping rather than following. Play
+ * mode kept its blur for a while on the theory that a pad which sits still
+ * pays for the blur once. It does not: the *video* changes every frame, so
+ * every pad was re-blurred every frame, and turning the overlay on visibly
+ * lagged the stream.
  */
 const PadNodeView = memo(function PadNodeView({ data }: NodeProps<PadNode>) {
   const { pad, skin, px } = data
