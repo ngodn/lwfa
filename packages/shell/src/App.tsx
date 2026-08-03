@@ -497,6 +497,26 @@ export function App(): React.ReactElement {
           if (message.focused !== null) {
             next = focusWindow(next, message.focused, out, configRef.current);
           }
+
+          // A socket flap must not yank a fullscreen game back to windowed.
+          //
+          // The engine's hello names windows and focus but not arrangement,
+          // because arrangement is this side's job, so the rebuilt strip
+          // starts with nothing fullscreen. Pushing that as-is tells the
+          // engine to un-fullscreen the game, the game immediately asks
+          // again, and the round trip costs two encoder rebuilds and a
+          // visible flicker, in a loop while the connection is flapping.
+          // This page reconnected rather than reloaded, so it still knows
+          // what was fullscreen; carry it over while the window is alive.
+          const before = stripRef.current.workspaces[stripRef.current.focus];
+          const wasFullscreen = before?.fullscreen ?? null;
+          if (
+            wasFullscreen !== null &&
+            message.windows.some((w) => w.id === wasFullscreen)
+          ) {
+            next = setFullscreen(next, wasFullscreen, true, out, configRef.current);
+          }
+
           stripRef.current = next;
           setStrip(next);
 
