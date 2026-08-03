@@ -35,6 +35,7 @@ mod shell;
 mod sink;
 mod state;
 mod winit;
+mod xfocus;
 
 use lwfa_proto::{ToEngine, ToShell};
 use smithay::reexports::calloop::EventLoop;
@@ -59,6 +60,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     winit::init_winit(&mut event_loop, &mut data)?;
     init_shell_link(&mut event_loop, &mut data)?;
     init_xwayland(&mut event_loop, &mut data);
+
+    // The focus guardian's tick: once a second, repair the X server's input
+    // focus if it has fallen on nothing. See `xfocus.rs` for the story.
+    {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        event_loop
+            .handle()
+            .insert_source(
+                Timer::from_duration(std::time::Duration::from_secs(1)),
+                |_, _, data| {
+                    data.guard_x_focus();
+                    TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+                },
+            )
+            .map_err(|err| format!("failed to insert the focus guardian: {err}"))?;
+    }
 
     tracing::info!("lwfa running on WAYLAND_DISPLAY={:?}", data.socket_name);
 
@@ -112,6 +129,7 @@ fn init_xwayland(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut Ca
             // Only now is DISPLAY meaningful. Held on the state rather than put
             // in the environment; see `Lwfa::spawn` for why.
             data.xdisplay = Some(display_number);
+            data.xfocus = Some(crate::xfocus::Guardian::new(display_number));
             match X11Wm::start_wm(data.loop_handle.clone(), x11_socket, client.clone()) {
                 Ok(wm) => {
                     data.xwm = Some(wm);
@@ -324,6 +342,10 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
         } => {
             let interactive = permissions.may_interact();
 
+            // Whatever the grace was holding the world together for, it is
+            // here. See `begin_session_grace`.
+            state.cancel_session_grace();
+
             // A refresh, not a second device.
             //
             // A browser that reloads opens its new socket before the old one
@@ -433,10 +455,11 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
 
         ShellEvent::Disconnected(session) => {
             state.sessions.remove(&session);
-            // Unplug their controller. Dropping it releases every button, so a
-            // tab closed mid-press does not leave a character running into a
-            // wall forever.
-            state.gamepads.remove(&session);
+            // Parked, not unplugged: a network flap must not cost the game
+            // its controller device. Inputs are released on the way into the
+            // parking spot, so a tab closed mid-press does not leave a
+            // character running into a wall. See `park_gamepad`.
+            state.park_gamepad(session);
             // The last listener leaving stops the capture, so an unattended
             // session is not holding a recording process open.
             state.sync_audio_capture();
@@ -464,12 +487,14 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             }
 
             if state.sessions.is_empty() {
-                state.layout.set_mode(Mode::Safe);
-                // Fall back immediately rather than leaving the last
-                // shell-declared layout frozen on screen, which looks like a
-                // hang.
-                state.apply_safe_mode();
-                tracing::info!("last shell gone, back to safe mode");
+                // Not safe mode, not yet: flaky wifi reconnects in seconds,
+                // and the teardown-rebuild cycle is far more disruptive than
+                // a briefly frozen layout. See `begin_session_grace`.
+                state.begin_session_grace();
+                tracing::info!(
+                    "last shell gone; holding the session for {}s",
+                    45
+                );
             } else {
                 state.announce_peers();
                 tracing::info!("session {session} left; {} left", state.sessions.len());
@@ -786,6 +811,14 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                 // Dropping it releases every button first; see `VirtualPad`.
                 state.gamepads.remove(&session);
                 tracing::info!("session {session} put its controller down");
+                return;
+            }
+            // A controller parked by a flapped session is adopted rather
+            // than a new device created: to the game it is the same pad it
+            // has been holding all along.
+            if let Some(pad) = state.adopt_parked_gamepad() {
+                state.gamepads.insert(session, pad);
+                tracing::info!("session {session} adopted the parked controller");
                 return;
             }
             match crate::gamepad::VirtualPad::open() {

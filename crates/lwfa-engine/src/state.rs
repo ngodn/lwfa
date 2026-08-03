@@ -90,6 +90,16 @@ const FIRST_FRAME_GRACE: std::time::Duration = std::time::Duration::from_secs(5)
 /// windows each demanding 60 captures and encodes a second from one GPU.
 const UNFOCUSED_CAPTURE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// How long a vanished last session is presumed to be coming back.
+///
+/// A tablet on flaky wifi reconnects in seconds, and tearing the world down
+/// in between (safe-mode relayout, controller unplugged, audio stopped,
+/// windows suspended) turns a two-second blip into a thirty-second
+/// disruption: the game loses its controller device, every window is
+/// reconfigured twice, and the churn is exactly what knocks X focus into
+/// the void. Within this window the engine simply holds its breath.
+const SESSION_GRACE: std::time::Duration = std::time::Duration::from_secs(45);
+
 pub struct Lwfa {
     /// Settings from `configs/defaults.toml`, resolved once at startup.
     pub config: crate::config::Config,
@@ -172,6 +182,13 @@ pub struct Lwfa {
     /// A pending focus re-assert, so layout churn coalesces into one. See
     /// [`Self::schedule_reassert`].
     reassert_timer: Option<smithay::reexports::calloop::RegistrationToken>,
+    /// Repairs X input focus when it points at nothing. See `xfocus.rs`.
+    pub xfocus: Option<crate::xfocus::Guardian>,
+    /// A controller surviving a session flap. See [`Self::begin_session_grace`].
+    parked_pad: Option<crate::gamepad::VirtualPad>,
+    /// While set, the last session is presumed to be coming back.
+    grace_until: Option<std::time::Instant>,
+    grace_timer: Option<smithay::reexports::calloop::RegistrationToken>,
 
     focused: Option<WindowId>,
     next_window_id: u64,
@@ -280,6 +297,10 @@ impl Lwfa {
             loop_signal,
             loop_handle,
             reassert_timer: None,
+            xfocus: None,
+            parked_pad: None,
+            grace_until: None,
+            grace_timer: None,
             focused: None,
             next_window_id: 1,
             reported: std::collections::HashMap::new(),
@@ -647,7 +668,10 @@ impl Lwfa {
             let Some(toplevel) = window.toplevel() else {
                 continue;
             };
-            let suspend = !self.streaming.contains(&id);
+            // A grace period masks suspension: the client is presumed to be
+            // coming right back, and a game frozen at 1fps for a two-second
+            // wifi blip reads as the whole session hanging.
+            let suspend = !self.streaming.contains(&id) && !self.grace_active();
             let changed = toplevel.with_pending_state(|state| {
                 if suspend {
                     state.states.set(xdg_toplevel::State::Suspended)
@@ -669,6 +693,11 @@ impl Lwfa {
     /// only wastes a frame a second, but no longer an invitation to render a
     /// game at 60 fps behind a stream nobody is receiving.
     pub fn frame_throttle(&self, window: &Window) -> Option<std::time::Duration> {
+        if self.grace_active() {
+            // See `sync_suspended`: a returning client wants the world as it
+            // left it, not thawing from a 1fps nap.
+            return Some(std::time::Duration::ZERO);
+        }
         match self.layout.id_of(window) {
             Some(id) if self.streaming.contains(&id) => Some(std::time::Duration::ZERO),
             _ => Some(std::time::Duration::from_secs(1)),
@@ -682,6 +711,13 @@ impl Lwfa {
     /// exactly when at least one connected session has asked for it and not a
     /// moment longer.
     pub fn sync_audio_capture(&mut self) {
+        // While the grace holds, an empty session list does not stop the
+        // capture: the listener is presumed to be reconnecting, and tearing
+        // the capture process down to restart it four seconds later is churn
+        // for nothing. `end_session_grace` re-runs this for the real stop.
+        if self.sessions.is_empty() && self.grace_active() {
+            return;
+        }
         let wanted = self.sessions.values().any(|s| s.audio);
         match (wanted, self.audio.is_some()) {
             (true, false) => {
@@ -997,6 +1033,101 @@ impl Lwfa {
                 self.reassert_focus();
             }
         }
+    }
+
+    /// The last session vanished; hold the world together for a while.
+    ///
+    /// Layout, suspension, audio capture and the parked controller all stay
+    /// as they were. If nobody returns before [`SESSION_GRACE`] runs out,
+    /// [`Self::end_session_grace`] does the teardown that used to happen
+    /// immediately.
+    pub fn begin_session_grace(&mut self) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        self.grace_until = Some(std::time::Instant::now() + SESSION_GRACE);
+        if let Some(token) = self.grace_timer.take() {
+            self.loop_handle.remove(token);
+        }
+        match self
+            .loop_handle
+            .insert_source(Timer::from_duration(SESSION_GRACE), |_, _, data| {
+                data.end_session_grace();
+                TimeoutAction::Drop
+            }) {
+            Ok(token) => self.grace_timer = Some(token),
+            Err(err) => {
+                tracing::warn!("could not schedule the session grace: {err}");
+                self.end_session_grace();
+            }
+        }
+    }
+
+    /// A session arrived: whatever was being held for, it is here.
+    pub fn cancel_session_grace(&mut self) {
+        if let Some(token) = self.grace_timer.take() {
+            self.loop_handle.remove(token);
+        }
+        self.grace_until = None;
+    }
+
+    /// Nobody came back; do the teardown the grace deferred.
+    pub fn end_session_grace(&mut self) {
+        self.grace_timer = None;
+        self.grace_until = None;
+        if !self.sessions.is_empty() {
+            return;
+        }
+        self.parked_pad = None;
+        self.layout.set_mode(crate::layout::Mode::Safe);
+        self.apply_safe_mode();
+        self.sync_audio_capture();
+        // Re-applies suspension now that the grace is no longer masking it.
+        self.sync_suspended();
+        tracing::info!("nobody came back; back to safe mode");
+    }
+
+    /// Whether the engine is holding the session for a returning client.
+    pub fn grace_active(&self) -> bool {
+        self.grace_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+    }
+
+    /// Park a departing session's controller instead of unplugging it.
+    ///
+    /// The uinput device stays alive, so the game keeps its controller
+    /// across the flap; the inputs are released first, so a disconnect
+    /// mid-press does not leave a character running into a wall. A new
+    /// session adopts it in the `SetGamepad` handler.
+    pub fn park_gamepad(&mut self, session: lwfa_proto::SessionId) {
+        if let Some(pad) = self.gamepads.remove(&session) {
+            pad.neutral();
+            self.parked_pad = Some(pad);
+            tracing::info!("session {session} left; its controller is parked");
+        }
+    }
+
+    /// A parked controller for a new session to adopt, if one is waiting.
+    pub fn adopt_parked_gamepad(&mut self) -> Option<crate::gamepad::VirtualPad> {
+        self.parked_pad.take()
+    }
+
+    /// One guardian tick: repair the X server's focus if it fell to nothing.
+    ///
+    /// Driven by a once-a-second timer in `main`. Cheap: one round trip on a
+    /// local socket, and nothing at all until Xwayland is up and an X11
+    /// window is focused.
+    pub fn guard_x_focus(&mut self) {
+        let Some(guardian) = self.xfocus.as_mut() else {
+            return;
+        };
+        let Some(expected) = self
+            .focused
+            .and_then(|id| self.layout.window(id))
+            .and_then(|w| w.x11_surface())
+            .map(|x| x.window_id())
+        else {
+            return;
+        };
+        guardian.ensure(expected);
     }
 
     pub fn reassert_focus(&mut self) {

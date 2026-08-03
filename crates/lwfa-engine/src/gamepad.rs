@@ -214,6 +214,30 @@ impl VirtualPad {
         Ok(Self { handle })
     }
 
+    /// Release every button and centre every axis.
+    ///
+    /// Called when a session flaps and its pad is parked (see the session
+    /// grace in `state.rs`): a disconnect mid-press must not leave a game
+    /// holding a button or a stick pushed for the length of the outage.
+    pub fn neutral(&self) {
+        for index in 0..17u8 {
+            if let Some(button) = GamepadButton::from_index(index) {
+                self.button(button, false);
+            }
+        }
+        for axis in [
+            GamepadAxis::LeftX,
+            GamepadAxis::LeftY,
+            GamepadAxis::RightX,
+            GamepadAxis::RightY,
+        ] {
+            self.axis(axis, 0.0);
+        }
+        for axis in [GamepadAxis::LeftTrigger, GamepadAxis::RightTrigger] {
+            self.axis(axis, 0.0);
+        }
+    }
+
     /// Press or release a button.
     pub fn button(&self, button: GamepadButton, pressed: bool) {
         let key = key_for(button);

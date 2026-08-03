@@ -1025,6 +1025,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tungstenite",
+ "x11rb",
 ]
 
 [[package]]
