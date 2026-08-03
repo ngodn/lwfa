@@ -169,6 +169,9 @@ pub struct Lwfa {
     /// Kept because `X11Wm` registers its own event sources, and it is started
     /// from inside a callback where the loop itself is not reachable.
     pub loop_handle: LoopHandle<'static, CalloopData>,
+    /// A pending focus re-assert, so layout churn coalesces into one. See
+    /// [`Self::schedule_reassert`].
+    reassert_timer: Option<smithay::reexports::calloop::RegistrationToken>,
 
     focused: Option<WindowId>,
     next_window_id: u64,
@@ -276,6 +279,7 @@ impl Lwfa {
             space: Space::default(),
             loop_signal,
             loop_handle,
+            reassert_timer: None,
             focused: None,
             next_window_id: 1,
             reported: std::collections::HashMap::new(),
@@ -965,6 +969,36 @@ impl Lwfa {
     /// state and sends no configure, and the seat ignores a focus set to the
     /// target it already has. Called after every layout application, which
     /// is precisely when the churn happens.
+    /// Re-assert focus soon, once the layout has stopped churning.
+    ///
+    /// Not immediately, deliberately. A new window opening causes a layout
+    /// change too, and bouncing X11 focus in the middle of that storm races
+    /// the new window's own focus handshake: Steam's settings popup
+    /// sometimes failed to appear at all, depending on timing. Nothing about
+    /// the dead-controller fix needs the re-assert to be instant; it needs
+    /// it to happen once things settle. Each schedule replaces the previous
+    /// one, so a burst of layouts coalesces into a single re-assert shortly
+    /// after the last.
+    pub fn schedule_reassert(&mut self) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        if let Some(token) = self.reassert_timer.take() {
+            self.loop_handle.remove(token);
+        }
+        let timer = Timer::from_duration(std::time::Duration::from_millis(300));
+        match self.loop_handle.insert_source(timer, |_, _, data| {
+            data.reassert_timer = None;
+            data.reassert_focus();
+            TimeoutAction::Drop
+        }) {
+            Ok(token) => self.reassert_timer = Some(token),
+            // Falling back to doing it now beats not doing it at all.
+            Err(err) => {
+                tracing::warn!("could not defer the focus re-assert: {err}");
+                self.reassert_focus();
+            }
+        }
+    }
+
     pub fn reassert_focus(&mut self) {
         let id = self.focused;
         // X11 needs more than idempotence. Its focus lives inside the X
