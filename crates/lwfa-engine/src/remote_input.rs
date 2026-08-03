@@ -181,29 +181,6 @@ impl Lwfa {
             return;
         };
 
-        // X11 clients get a mouse, not a finger.
-        //
-        // Xwayland emulates X11 pointer grabs but not XI2 touch grabs, and a
-        // menu is exactly a grab: Chromium and CEF popups (Steam's whole UI is
-        // CEF) see a touch on their own dropdown as an outside event and
-        // dismiss it without selecting. Verified live against Chromium on this
-        // engine: same item, same coordinates, a pointer click selects, a
-        // touch tap dismisses, with the engine delivering both to the correct
-        // popup surface. The pointer path is the one that works, so a touch
-        // landing on an X11 window becomes a left-button drag. One slot at a
-        // time: a second finger on an X11 window falls through as real touch,
-        // which those clients ignore, rather than fighting over one button.
-        let x11 = self
-            .space
-            .element_under(location)
-            .is_some_and(|(w, _)| w.x11_surface().is_some());
-        if x11 && self.emulated_touch.is_none() {
-            self.emulated_touch = Some(id);
-            self.remote_pointer_motion(window, x, y);
-            self.remote_pointer_button(0x110, true); // BTN_LEFT
-            return;
-        }
-
         let Some(touch) = self.seat.get_touch() else {
             return;
         };
@@ -230,14 +207,6 @@ impl Lwfa {
     }
 
     pub fn remote_touch_motion(&mut self, window: WindowId, id: i32, x: f64, y: f64) {
-        // The slot that became a left-button drag stays one for its lifetime,
-        // even if the finger wanders off the X11 window that started it: a
-        // drag delivering half its motion as touch would tear the gesture in
-        // two.
-        if self.emulated_touch == Some(id) {
-            self.remote_pointer_motion(window, x, y);
-            return;
-        }
         let Some(location) = self.window_point(window, x, y) else {
             return;
         };
@@ -260,11 +229,6 @@ impl Lwfa {
     }
 
     pub fn remote_touch_up(&mut self, id: i32) {
-        if self.emulated_touch == Some(id) {
-            self.emulated_touch = None;
-            self.remote_pointer_button(0x110, false); // BTN_LEFT
-            return;
-        }
         let Some(touch) = self.seat.get_touch() else {
             return;
         };

@@ -186,10 +186,6 @@ pub struct Lwfa {
     pub xfocus: Option<crate::xfocus::Guardian>,
     /// A controller surviving a session flap. See [`Self::begin_session_grace`].
     parked_pad: Option<crate::gamepad::VirtualPad>,
-    /// The touch slot currently being delivered as a left-button drag instead
-    /// of as touch, because it landed on an X11 window. See
-    /// `remote_input.rs` for why X11 clients get a mouse and not a finger.
-    pub emulated_touch: Option<i32>,
     /// While set, the last session is presumed to be coming back.
     grace_until: Option<std::time::Instant>,
     grace_timer: Option<smithay::reexports::calloop::RegistrationToken>,
@@ -303,7 +299,6 @@ impl Lwfa {
             reassert_timer: None,
             xfocus: None,
             parked_pad: None,
-            emulated_touch: None,
             grace_until: None,
             grace_timer: None,
             focused: None,
@@ -1192,7 +1187,44 @@ impl Lwfa {
         guardian.ensure(expected);
     }
 
+    /// Whether an X11 menu, tooltip or other override-redirect window is up.
+    ///
+    /// These are exactly the windows that die when focus moves. See
+    /// [`Self::reassert_focus`].
+    fn x11_popup_open(&self) -> bool {
+        self.space
+            .elements()
+            .filter_map(|w| w.x11_surface())
+            .any(|x| x.is_override_redirect())
+    }
+
     pub fn reassert_focus(&mut self) {
+        // Never while a menu is open.
+        //
+        // The bounce below is a focus *change* as far as the X server is
+        // concerned, and an X11 menu is a window that closes itself the
+        // moment focus leaves it. Steam's menus and dropdowns are exactly
+        // that, so every one of them opened, rendered, and dismissed itself
+        // about a third of a second later: long enough to see, far too short
+        // to use. Traced live, with the menu on screen in the stream between
+        // the two lines:
+        //
+        //   OR MAP   win=0x1a00047 (238x235)   the menu maps
+        //   REASSERT focus -> WindowId(3)      this function, 198ms later
+        //   UNMAP    win=0x1a00047 or=true     the menu, 35ms after that
+        //
+        // A tap focuses the window, focusing re-centres the strip, the strip
+        // is a layout, and every layout schedules one of these; that is why
+        // it looked like a touch bug and why the first tap on a window was
+        // the one that always failed.
+        //
+        // Skipped, not dropped: closing the menu schedules another one, so
+        // the game this exists for still gets its focus back. See
+        // `unmapped_window` in `handlers/xwayland.rs`.
+        if self.x11_popup_open() {
+            return;
+        }
+
         let id = self.focused;
         // X11 needs more than idempotence. Its focus lives inside the X
         // server, and Smithay only issues SetInputFocus from the keyboard

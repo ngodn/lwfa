@@ -103,11 +103,18 @@ impl XwmHandler for Lwfa {
     }
 
     fn unmapped_window(&mut self, _xwm: XwmId, surface: X11Surface) {
+        let was_popup = surface.is_override_redirect();
         self.drop_x11_window(&surface);
-        if !surface.is_override_redirect()
+        if !was_popup
             && let Err(err) = surface.set_mapped(false)
         {
             tracing::warn!("failed to unmap an X11 window: {err}");
+        }
+        // A menu closing is the moment the focus re-assert has been waiting
+        // for: it is refused while a popup is up, because bouncing focus is
+        // what dismisses menus. See `Lwfa::reassert_focus`.
+        if was_popup {
+            self.schedule_reassert();
         }
     }
 
