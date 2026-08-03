@@ -82,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if data.config.autostart_terminal() {
         data.spawn_terminal();
     }
+    data.ensure_persistent_gamepad();
 
     event_loop.run(None, &mut data, |_| {})?;
 
@@ -808,8 +809,15 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                 return;
             }
             if !enabled {
-                // Dropping it releases every button first; see `VirtualPad`.
-                state.gamepads.remove(&session);
+                if state.config.gamepad.persistent {
+                    // The device must outlive the session: games only see
+                    // controllers that existed before they launched. Parked,
+                    // inputs released; see `Gamepad::persistent`.
+                    state.park_gamepad(session);
+                } else {
+                    // Dropping it releases every button first; see `VirtualPad`.
+                    state.gamepads.remove(&session);
+                }
                 tracing::info!("session {session} put its controller down");
                 return;
             }

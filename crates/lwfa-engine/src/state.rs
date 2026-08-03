@@ -1076,7 +1076,10 @@ impl Lwfa {
         if !self.sessions.is_empty() {
             return;
         }
-        self.parked_pad = None;
+        // A persistent pad outlives everything; see `Gamepad::persistent`.
+        if !self.config.gamepad.persistent {
+            self.parked_pad = None;
+        }
         self.layout.set_mode(crate::layout::Mode::Safe);
         self.apply_safe_mode();
         self.sync_audio_capture();
@@ -1108,6 +1111,25 @@ impl Lwfa {
     /// A parked controller for a new session to adopt, if one is waiting.
     pub fn adopt_parked_gamepad(&mut self) -> Option<crate::gamepad::VirtualPad> {
         self.parked_pad.take()
+    }
+
+    /// Create the persistent controller at startup, when configured.
+    ///
+    /// Parked from birth: the same adoption path a flap uses hands it to the
+    /// first session that asks, and parking on release keeps it alive. The
+    /// point is that the device exists *before* any game launches; see
+    /// `Gamepad::persistent` for why order matters to Proton.
+    pub fn ensure_persistent_gamepad(&mut self) {
+        if !self.config.gamepad.persistent || self.parked_pad.is_some() {
+            return;
+        }
+        match crate::gamepad::VirtualPad::open() {
+            Ok(pad) => {
+                self.parked_pad = Some(pad);
+                tracing::info!("persistent controller ready; games will always see it");
+            }
+            Err(err) => tracing::warn!("could not create the persistent controller: {err}"),
+        }
     }
 
     /// One guardian tick: repair the X server's focus if it fell to nothing.

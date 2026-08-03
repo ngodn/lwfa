@@ -61,6 +61,7 @@ pub struct Config {
     #[allow(dead_code)]
     pub layout: toml::Table,
     pub audio: Audio,
+    pub gamepad: Gamepad,
     /// Also the shell's, for the same reason.
     ///
     /// The engine does integrate springs, but with the parameters the shell
@@ -82,6 +83,27 @@ pub struct Audio {
     /// source explicitly to capture something else, such as a null sink that
     /// only the applications you care about are routed to.
     pub device: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Gamepad {
+    /// Create the virtual controller at startup and keep it forever.
+    ///
+    /// Proton runs games inside a container with no udev, and controller
+    /// hotplug detection there is unreliable: a pad that appears *after* a
+    /// game launches is often never seen. Real hardware is plugged in before
+    /// the game starts; a persistent pad behaves the same, so launch order
+    /// stops mattering. The cost is a machine that always advertises one
+    /// idle controller, which on a personal machine is a fair trade and on a
+    /// shared one might not be; hence a switch.
+    pub persistent: bool,
+}
+
+impl Default for Gamepad {
+    fn default() -> Self {
+        Self { persistent: false }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
