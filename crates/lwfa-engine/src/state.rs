@@ -949,6 +949,26 @@ impl Lwfa {
         }
     }
 
+    /// Re-assert the current focus without changing it.
+    ///
+    /// Focus is delivered to a *surface*, and surfaces churn: a fullscreen
+    /// toggle unmaps and remaps windows, and a launching game tears its
+    /// window down and rebuilds it on the way from banner to windowed to
+    /// fullscreen. When the surface under the focus goes, the seat's focus
+    /// goes with it, but `focused` still names the window, so nothing ever
+    /// sent the keyboard enter again. The window then believes it is in the
+    /// background, and SDL games deliberately drop controller input for
+    /// background windows: the pad went dead exactly when the window size
+    /// was toggled, which is how this was found.
+    ///
+    /// Idempotent and cheap: re-activating an activated window changes no
+    /// state and sends no configure, and the seat ignores a focus set to the
+    /// target it already has. Called after every layout application, which
+    /// is precisely when the churn happens.
+    pub fn reassert_focus(&mut self) {
+        self.set_focus(self.focused, false);
+    }
+
     // ---------------------------------------------------------------------
     // Layout
     // ---------------------------------------------------------------------

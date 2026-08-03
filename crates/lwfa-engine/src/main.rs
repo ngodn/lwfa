@@ -619,6 +619,10 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             );
             state.send_configures(configures);
             state.apply_layout();
+            // The churn a layout causes can drop the seat's focus while the
+            // focused window is unchanged, and a game whose window lost
+            // focus stops reading the controller. See `reassert_focus`.
+            state.reassert_focus();
             // Everyone else is following this arrangement rather than deciding
             // their own, so they have to be told what it is. Only the primary
             // reaches this arm; `permitted` dropped the rest.
