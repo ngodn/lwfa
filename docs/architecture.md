@@ -36,8 +36,11 @@ responsive layout is impossible. An iPad would get a shrunken desktop.
 Consequences we accept:
 - N windows means N encoder sessions. On the dev machine's RTX 3060 the cap is
   **8 concurrent NVENC sessions** (NVIDIA raised the consumer limit 3 → 5 in
-  March 2023, then 5 → 8 in early 2024). Past 8 live windows, small ones get
-  batched into a shared atlas stream.
+  March 2023, then 5 → 8 in early 2024). The plan here was an atlas stream
+  batching small windows past the cap. What shipped instead is policy: unwatched
+  windows pause by default, dropping their encoder sessions, so the cap is spent
+  on what somebody is actually looking at, and a ninth live window degrades to
+  JPEG rather than failing. The atlas never earned its complexity.
 - Damage tracking is load-bearing, not an optimisation. Most windows are static
   most of the time, so idle windows must cost approximately nothing.
 
@@ -54,6 +57,14 @@ input lag on the primary display would make it unusable in practice.
 
 Consequence we accept: **two renderers for the same shell.** That is the central
 risk of this design, and section 3 is entirely about containing it.
+
+Where this stands: the native path today is the nested backend presenting into a
+host compositor's window; the TTY DRM/KMS backend is still to come. In daily use
+the host window is often not even shown (`[window] preview = false`) and the
+browser is the only viewer. That does not weaken the decision, it is why the
+engine composites and integrates springs natively instead of being a streaming
+server with a compositor bolted on, but it does mean the remote path is the one
+production has hardened first.
 
 ### 2.3 Scrollable tiling, not dynamic tiling
 
@@ -158,25 +169,23 @@ Layout must not depend on DOM measurement. If it did, the shell could not
 compute a layout without a browser, which breaks "one shell, two backends" and
 forces a reflow round-trip before every frame.
 
-This is why text measurement uses **[PreTeXt.js](https://pretextjs.dev/)**
-rather than `getBoundingClientRect`. Pretext computes line breaks and heights
-arithmetically, with a one-time Canvas glyph-measurement step in `prepare()` and
-zero DOM access in `layout()`. That makes the shell's layout pure, so it is
-runnable in a worker, testable headlessly, and identical across both backends by
-construction.
-
-It matters most where it'll be felt: window titles in the taskbar and overview,
-re-measured every frame during a pinch gesture, on an iPad already busy decoding
-video streams.
+In practice the pure function (`packages/shell/src/strip.ts`) has needed no
+text measurement at all: titles and chrome are DOM, rendered *around* the
+layout rather than inside it, so nothing arithmetic depends on a glyph width.
+The original plan named [PreTeXt.js](https://pretextjs.dev/) for arithmetic
+text measurement, and that remains the answer if text ever does need to enter
+layout, because `getBoundingClientRect` would make the function impure for the
+reasons above. But it is a recorded plan, not a dependency; an earlier revision
+of this document overstated it as implemented.
 
 ## 4. Layers
 
 | Layer | Language | Owns |
 |---|---|---|
-| Engine | Rust, Smithay, wgpu | Wayland protocol, DRM/KMS, libinput, per-surface encode, local compositing, spring integration |
-| Shell protocol | WebSocket | Window state, appearance vocabulary, animation intents, input events |
-| Shell | TypeScript, React 19, shadcn/ui, Motion, PreTeXt | Layout policy, chrome, gesture arbitration, responsive breakpoints |
-| Remote backend | TypeScript, WebCodecs | Per-surface decode, appearance vocabulary via CSS, spring integration |
+| Engine | Rust, Smithay, GLES via Smithay's renderer | Wayland protocol plus XWayland, per-surface encode (NVENC via ffmpeg), audio capture, the uinput gamepad, local compositing, spring integration |
+| Shell protocol | WebSocket | Window state, animation intents, input events, frames, audio, sessions |
+| Shell | TypeScript, React 19, shadcn/ui | Layout policy, chrome, gesture arbitration, responsive behaviour |
+| Remote backend | TypeScript, WebCodecs | Per-surface decode, DOM compositing, spring integration |
 
 The shell does not know which backend it is talking to. That is the point.
 
@@ -184,9 +193,13 @@ The shell does not know which backend it is talking to. That is the point.
 wlroots and KDE protocol extensions, and it is proven at scale by `cosmic-comp`
 (System76's COSMIC) and `niri`.
 
-**Motion** (formerly Framer Motion, package `motion`, imported from
-`motion/react`) animates shell chrome. Note: `react-motion` is a different,
-long-dead library.
+**Motion** (formerly Framer Motion) ended up as the spring's *reference
+implementation* rather than a runtime dependency: `motion-dom` is pinned as a
+dev dependency of `packages/spring` for the parity test (section 5), and
+nothing imports it at runtime. Chrome animates with CSS; window motion is the
+shared spring written straight to the DOM (`packages/shell/src/lib/motion.ts`),
+outside React state, because a spring produces a value per frame and a React
+render per frame per window would fight the video decode.
 
 **shadcn/ui** on Tailwind v4 for the chrome. Not a component library in the
 usual sense: the components are copied into `packages/shell/src/components/ui`
@@ -334,8 +347,14 @@ exists, with `frame` to batch multi-touch updates and `cancel` for when the
 compositor claims a gesture. Delivering touch is easy. The hard part is that
 Linux apps have never seen a touch event and have 16px hit targets. The gesture
 arbitration layer (what stays a shell gesture and what becomes a synthetic
-pointer event, scroll-to-wheel, long-press-to-right-click) is probably the most
-product-defining code in the project, and is still to be built.
+pointer event) is probably the most product-defining code in the project, and
+most of it now exists: a swipe on the strip scrolls it, a touch on a window is
+a pointer to the application, wheel events become axis events, and a long press
+held still for 500ms is a right click, measured in the shell because iOS Safari
+stopped firing `contextmenu` on long press at iOS 13
+(`packages/shell/src/lib/longPress.ts` records the reasoning). Pinch-to-zoom
+inside a window, for apps whose minimum size exceeds the viewport, is the piece
+still to be built.
 
 The on-screen keyboard turned out **not** to need
 `zwp_virtual_keyboard_manager_v1` or `input-method-unstable-v2`, which is what
@@ -352,16 +371,31 @@ to type.
 game-streaming territory and not worth chasing for v1. Mobile networks will miss
 all of these, so quality/latency adaptation is needed early.
 
+Adaptation has since been built, and the load-bearing part turned out to be
+*honesty about delivery*, not the bitrate ladder. A frame counted as delivered
+when handed to the WebSocket let a slow link buffer seconds of video inside the
+socket while the engine believed everything was fine. Frames now stay on a
+client's account until the kernel accepts them, so backpressure is the
+network's own voice: capture pauses at the source, latency is bounded, and the
+bitrate controller (climbing to 32 Mbit/s on a clean link, backing off
+patiently after the first push-back) finally has a signal that does not refute
+itself. Capture is also zero-copy into NVENC when the driver allows, at about
+0.4ms per frame on the compositor thread.
+
 **Security.** This is a remote desktop with full input injection.
 
-Authentication and authorisation now exist (section 10). **TLS still does not.**
-The password and every keystroke after it cross the network in the clear, so the
-socket is only safe on a network you control; anywhere else needs an SSH or
-WireGuard tunnel until TLS lands.
+Authentication and authorisation now exist (section 10). **TLS in the engine
+still does not.** The password and every keystroke after it cross the raw
+sockets in the clear, so those ports are only safe on a network you control.
 
-The lack of TLS has a second cost that is easy to miss: WebCodecs requires a
+The production answer is termination at a reverse proxy, and it is committed:
+`deploy/traefik-lwfa.yml` serves the page and the WebSocket from one HTTPS
+hostname, which matters twice over. A browser refuses a plaintext socket from
+an HTTPS page, so the two must share a hostname; and WebCodecs requires a
 secure context, so a shell served over plain HTTP has no `VideoDecoder` and
 falls back to JPEG. Encryption and hardware decoding arrive together.
+Engine-native TLS remains future work; until then, anywhere without a proxy
+needs an SSH or WireGuard tunnel.
 
 ## 7. Development environment
 
@@ -431,8 +465,9 @@ to tell a spinning loop from an idle one from a blocked syscall.
 
 `configs/defaults.toml`. Settings that were spread across six modules as `const`
 declarations, in one commented place: ports, terminal, Xwayland, encoder limits,
-render timings, layout defaults, and which workspace lwfa's own window should
-take in a host compositor.
+render timings, layout defaults, the shared animation spring, audio capture,
+the persistent gamepad, and which workspace lwfa's own window should take in a
+host compositor.
 
 Precedence, highest first: environment variables, `.env` (gitignored,
 machine-local, holds `AUTH_PASS`), that file, built-in defaults.
@@ -473,8 +508,11 @@ everything keeps building against a stale snapshot.
    against the engine, but it does not yet draw chrome over the native output.
    That needs a `wlr-layer-shell` client hosting a webview, which is a separate
    piece of work.
-4. **Per-surface encode plus remote backend.** ⚠️ Architecture done and
-   verified; the codec is a stopgap.
+4. **Per-surface encode plus remote backend.** ✅ Done, well past the original
+   scope. The "codec is a stopgap" warning that used to sit here is resolved:
+   the codec is negotiated per session (HEVC where every connected device
+   decodes it, H.264 otherwise, JPEG as the floor), bitrate adapts to real
+   socket backpressure (section 6), and capture is zero-copy into NVENC.
 
    Done: per-surface GPU capture with damage tracking
    (`crates/lwfa-engine/src/capture.rs`), a binary frame transport on the same
@@ -511,10 +549,19 @@ everything keeps building against a stale snapshot.
    frames) into the render loop every time you touched the layout. Moving
    encoding to a worker took the render loop's share to a mean of 2.2ms.
 
-   **Zero-copy capture is deprioritised as a result.** It would save around a
+   **Zero-copy capture was deprioritised as a result.** It would save around a
    millisecond. Fixing where encoding runs saved two orders of magnitude more,
    and doing zero-copy first would have meant a fight with CUDA/GL interop for
-   the smaller win. Worth revisiting only once something else makes 1ms matter.
+   the smaller win.
+
+   It was then revisited and built, exactly on the "once something else makes
+   1ms matter" condition: the calloop thread is also the input thread, and with
+   everything else fast its capture share became the biggest remaining term.
+   The rendered texture is handed to CUDA through GL interop and NVENC encodes
+   it in place, 0.4ms per captured frame against 1-4ms for read-back, with the
+   bitstream the only thing that ever reaches system RAM. Any failure falls
+   back to read-back capture for the run, so a machine without the NVIDIA
+   driver quietly takes the old path (`crates/lwfa-engine/src/cuda.rs`).
 5. **XWayland.** ✅ Done. `crates/lwfa-engine/src/handlers/xwayland.rs`. X11
    clients map into the same strip, stream, and take remote input. Steam is
    X11, so everything under Proton is X11, and so are older GTK2/Qt4 programs
@@ -530,13 +577,45 @@ everything keeps building against a stale snapshot.
    rail and the input surfaces.
 7. **Accounts and permissions.** ✅ Done. Section 10.
 8. **Appearance vocabulary** in both backends, with a visual diff test comparing
-   a local screenshot against a remote screenshot of the same state.
-9. **iPad.** Gesture arbitration, PWA lifecycle, offline shell. WebCodecs and
-   the on-screen keyboard are done.
-10. Clipboard, audio, multi-monitor, DPI, TLS, packaging.
+   a local screenshot against a remote screenshot of the same state. Still to
+   do.
+9. **iPad.** Mostly done. The shell installs as a PWA, draws edge to edge under
+   the home indicator, and the engine handles the lifecycle iOS actually has:
+   an app swiped away is terminated with no goodbye, so idle sockets are pinged
+   and silent ones reaped. Gesture arbitration is largely built (section 6);
+   the offline shell is not.
+10. ~~Audio~~ done: Opus over the shared socket, captured via `parec` only when
+    a device asks, quality following the video's budget with sound degrading
+    last. Clipboard, multi-monitor, DPI, engine-native TLS and packaging
+    remain; TLS has a committed reverse-proxy answer in the meantime
+    (section 6).
 
 Steps 1 and 8 are the ones that would get skipped when moving fast, and they are
 exactly the ones that make the two-renderer choice survivable.
+
+### 9.1 What production added beyond the list
+
+The numbered list ends where daily use begins. Driving the thing from an iPad,
+for games under Proton, forced work no milestone had named, and the pattern in
+all of it is the same: **treat the network as weather, not as errors.**
+
+- **A virtual controller** (`gamepad.rs`): the on-screen pad is a real
+  `/dev/uinput` device, created at engine startup and never destroyed
+  (`[gamepad] persistent`), because Proton's container misses hotplug and a pad
+  that exists before the game launches is found the way real hardware is.
+- **X focus discipline** (`focus.rs`, `xfocus.rs`): Wine derives "foreground"
+  from X input focus and SDL games drop controller input in the background, so
+  focus is re-asserted after layout settles and a once-a-second guardian
+  repairs focus that points at nothing, never fighting a real holder.
+- **Session grace**: the last client leaving starts 45 seconds in which the
+  world holds: layout, audio, windows, and the controller parked rather than
+  unplugged. A returning client adopts it all back; the game never sees the
+  device leave. Reconnects also carry fullscreen across the resync, because
+  the engine's window list names windows and focus but not arrangement, and
+  pushing a fullscreen-less strip caused a visible flap on every blip.
+- **Honest liveness**: ten seconds of inbound silence earns a ping, fifteen
+  more unanswered means gone. Browsers answer pings below JavaScript, so an
+  idle page passes and a terminated one cannot.
 
 ## 10. Accounts and permissions
 
