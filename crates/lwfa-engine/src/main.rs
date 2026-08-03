@@ -596,6 +596,10 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
         | ToEngine::ListApps
         | ToEngine::RequestIcons { .. } => true,
 
+        // Liveness is universal: a view-only session needs to know whether its
+        // socket is real exactly as much as anyone else does.
+        ToEngine::Ping => true,
+
         ToEngine::SetLayout { .. } | ToEngine::SetViewport { .. } => is_primary,
 
         // Taking the wheel needs the right to use it.
@@ -704,6 +708,13 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                 // asked to be another shape.
                 None => tracing::debug!("backend cannot resize; ignoring the viewport"),
             }
+        }
+
+        ToEngine::Ping => {
+            // Answered to the asking session only, straight away. The shell
+            // uses the round trip to tell a live socket from the corpse iOS
+            // hands back after a resume; see the variant's docs in lwfa-proto.
+            state.send_to_session(session, lwfa_proto::ToShell::Pong);
         }
 
         ToEngine::ListApps => {

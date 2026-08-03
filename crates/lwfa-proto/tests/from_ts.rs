@@ -145,6 +145,7 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
             },
         ),
         ("role", ToShell::Role { primary: false }),
+        ("pong", ToShell::Pong),
         (
             "already-running",
             ToShell::AlreadyRunning {
@@ -325,6 +326,7 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
                 mode: SessionMode::View,
             },
         ),
+        ("ping", ToEngine::Ping),
     ]
 }
 

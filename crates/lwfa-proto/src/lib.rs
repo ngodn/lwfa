@@ -315,6 +315,9 @@ pub enum ToShell {
         /// The process holding it, so closing it needs no second search.
         pid: u32,
     },
+
+    /// The answer to [`ToEngine::Ping`]. Carries nothing; arriving is the point.
+    Pong,
 }
 
 /// A video codec the engine can encode and a client might decode.
@@ -884,6 +887,16 @@ pub enum ToEngine {
         /// What this client can decode, best first. Empty means send JPEG.
         codecs: Vec<Codec>,
     },
+
+    /// Is this connection actually alive? Answered with [`ToShell::Pong`].
+    ///
+    /// Exists for iPadOS. A home-screen web app that is backgrounded and
+    /// resumed is frequently handed back a socket that looks open to
+    /// JavaScript but delivers nothing, and WebKit never fires `close` on it
+    /// (WebKit bug 247943). The WebSocket protocol's own ping/pong cannot be
+    /// sent from browser JavaScript, so the shell asks at the application
+    /// layer and treats silence as death. See `connection.ts`.
+    Ping,
 }
 
 #[cfg(test)]

@@ -187,6 +187,8 @@ export type ToShell =
       program: string
       pid: number
     }
+  /** The answer to `ping`. Carries nothing; arriving is the point. */
+  | { type: "pong" }
 
 /**
  * A video codec the engine can encode and a client might decode.
@@ -398,6 +400,15 @@ export type ToEngine =
        */
       quality: AudioQuality
     }
+  /**
+   * Is this connection actually alive? Answered with `pong`.
+   *
+   * Exists for iPadOS: a resumed home-screen web app is frequently handed
+   * back a socket that looks open but delivers nothing, and WebKit never
+   * fires `close` on it. Browser JavaScript cannot send protocol-level
+   * pings, so the shell asks here and treats silence as death.
+   */
+  | { type: "ping" }
 
 /** How many bits the session's sound deserves. See `setAudio`. */
 export type AudioQuality = "auto" | "high" | "medium" | "low"
@@ -751,6 +762,10 @@ export function decodeToShell(text: string): ToShell {
       if (!Array.isArray(list)) throw new ProtocolError(`${where}.apps: expected an array`)
       return { type: "apps", apps: list.map((app, i) => decodeApp(app, `${where}.apps[${i}]`)) }
     }
+    case "pong": {
+      noExtraKeys(o, ["type"], `${at}.pong`)
+      return { type: "pong" }
+    }
     default:
       throw new ProtocolError(`${at}: unknown message type ${JSON.stringify(t)}`)
   }
@@ -1000,6 +1015,10 @@ export function decodeToEngine(text: string): ToEngine {
           return value
         }),
       }
+    }
+    case "ping": {
+      noExtraKeys(o, ["type"], `${at}.ping`)
+      return { type: "ping" }
     }
     default:
       throw new ProtocolError(`${at}: unknown message type ${JSON.stringify(t)}`)

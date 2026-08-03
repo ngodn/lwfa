@@ -179,6 +179,7 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
                 }],
             },
         ));
+        v.push(("pong", ToShell::Pong));
         v
     };
 
@@ -315,6 +316,7 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
             mode: SessionMode::View,
         },
     ));
+    to_engine.push(("ping", ToEngine::Ping));
 
     (to_shell, to_engine)
 }

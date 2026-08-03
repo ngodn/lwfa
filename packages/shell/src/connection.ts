@@ -80,6 +80,15 @@ export interface ConnectionHandlers {
 const RECONNECT_MIN_MS = 250
 const RECONNECT_MAX_MS = 5_000
 
+/**
+ * How long a resumed page waits for proof its socket is alive.
+ *
+ * Generous against a slow LAN round trip, tight against a person staring at a
+ * frozen desktop: the reply normally arrives in single-digit milliseconds, so
+ * anything that takes longer than this is not late, it is gone.
+ */
+const RESUME_PROBE_MS = 2_000
+
 export class Connection {
   #url: string
   #handlers: ConnectionHandlers
@@ -87,6 +96,10 @@ export class Connection {
   #retryMs = RECONNECT_MIN_MS
   #timer: ReturnType<typeof setTimeout> | null = null
   #closed = false
+  /** The deadline on an unanswered resume probe. See `#onResume`. */
+  #probe: ReturnType<typeof setTimeout> | null = null
+  /** Bound once so `close()` can remove exactly what was added. */
+  #onResumeBound = () => this.#onResume()
   /**
    * Whether this connection ever completed a handshake.
    *
@@ -102,6 +115,67 @@ export class Connection {
   constructor(url: string, handlers: ConnectionHandlers) {
     this.#url = url
     this.#handlers = handlers
+    // A page coming back from the background must not trust its socket.
+    //
+    // On iPadOS a home-screen web app that is backgrounded and resumed is
+    // routinely handed back a WebSocket that reports OPEN and delivers
+    // nothing, and WebKit never fires `close` on it (WebKit bug 247943), so
+    // without this the shell sits on a corpse forever and the desktop looks
+    // frozen until the app is force-quit or the iPad rebooted. `pageshow`
+    // covers the back/forward-cache restore, `visibilitychange` covers the
+    // ordinary app switch.
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this.#onResumeBound)
+      globalThis.addEventListener("pageshow", this.#onResumeBound)
+    }
+  }
+
+  /** Prove the socket is alive, or replace it. See the constructor. */
+  #onResume(): void {
+    if (this.#closed) return
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return
+
+    const socket = this.#socket
+    if (socket?.readyState === WebSocket.OPEN) {
+      if (this.#probe !== null) return // one probe at a time
+      // Any message at all is the answer: the pong if the session is idle, or
+      // whatever frame was already on the way. See `onmessage`.
+      this.send({ type: "ping" })
+      this.#probe = setTimeout(() => {
+        this.#probe = null
+        // Dead. Abandon it rather than closing it politely: `close()` on a
+        // wedged socket waits on the very TCP teardown that will never come,
+        // and the stale-socket guard in `onclose` ignores the corpse when it
+        // does eventually report in.
+        this.#socket = null
+        try {
+          socket.close()
+        } catch {
+          // Already broken beyond closing, which changes nothing.
+        }
+        this.#handlers.onStatus("connecting")
+        this.#retryMs = RECONNECT_MIN_MS
+        this.connect()
+      }, RESUME_PROBE_MS)
+      return
+    }
+
+    // No live socket. If a retry is queued for later, it was scheduled while
+    // nobody was looking; a person is looking now, so go immediately.
+    if (socket === null && this.#timer !== null) {
+      clearTimeout(this.#timer)
+      this.#timer = null
+      this.#retryMs = RECONNECT_MIN_MS
+      this.connect()
+    }
+  }
+
+  /** The probe question has been answered; the socket is real. */
+  #probeAnswered(): void {
+    if (this.#probe !== null) {
+      clearTimeout(this.#probe)
+      this.#probe = null
+    }
   }
 
   connect(): void {
@@ -122,6 +196,9 @@ export class Connection {
     socket.binaryType = "arraybuffer"
 
     socket.onmessage = (event) => {
+      // Anything arriving proves the socket is alive, which is all the resume
+      // probe wanted to know. The pong itself needs no handling of its own.
+      this.#probeAnswered()
       if (event.data instanceof ArrayBuffer) {
         // Audio first: it is the cheaper check, and on a session with sound
         // there are more audio chunks per second than video frames.
@@ -274,6 +351,11 @@ export class Connection {
   close(): void {
     this.#closed = true
     if (this.#timer !== null) clearTimeout(this.#timer)
+    this.#probeAnswered()
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this.#onResumeBound)
+      globalThis.removeEventListener("pageshow", this.#onResumeBound)
+    }
     this.#socket?.close()
   }
 }
