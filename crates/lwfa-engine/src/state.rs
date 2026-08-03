@@ -966,7 +966,25 @@ impl Lwfa {
     /// target it already has. Called after every layout application, which
     /// is precisely when the churn happens.
     pub fn reassert_focus(&mut self) {
-        self.set_focus(self.focused, false);
+        let id = self.focused;
+        // X11 needs more than idempotence. Its focus lives inside the X
+        // server, and Smithay only issues SetInputFocus from the keyboard
+        // *enter* handler, which a same-target set_focus never produces. A
+        // game's own fullscreen dance moves X server focus around behind our
+        // back, so the focus is bounced for X11 windows: the leave and
+        // re-enter forces SetInputFocus and WM_TAKE_FOCUS to actually go
+        // out. Proton runs every Steam game through XWayland, which makes
+        // this the path that decides whether the controller works.
+        let is_x11 = id
+            .and_then(|id| self.layout.window(id))
+            .is_some_and(|w| w.x11_surface().is_some());
+        if is_x11 {
+            if let Some(keyboard) = self.seat.get_keyboard() {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                keyboard.set_focus(self, None, serial);
+            }
+        }
+        self.set_focus(id, false);
     }
 
     // ---------------------------------------------------------------------
