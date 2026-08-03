@@ -15,7 +15,7 @@
  */
 
 import { memo, useCallback, useEffect, useLayoutEffect, useState } from "react"
-import { getPrefs, resolveEdge, usePrefs } from "@/lib/prefs"
+import { getPrefs, resolveEdge, usePrefSection } from "@/lib/prefs"
 import { NavRail, shellDirection, usePortrait, type NavTarget } from "@/components/NavRail"
 import { PanelHost } from "@/components/PanelHost"
 import { InputDock } from "@/components/InputDock"
@@ -34,7 +34,7 @@ export const ShellChrome = memo(function ShellChrome({
 }: {
   children: React.ReactNode
 }) {
-  const { nav } = usePrefs()
+  const nav = usePrefSection("nav")
   const [active, setActive] = useState<NavItemId | NavGroupId | null>(null)
   /** The action button that just fired, so it can flash. */
   const [fired, setFired] = useState<NavItemId | null>(null)

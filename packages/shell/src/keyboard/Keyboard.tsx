@@ -25,7 +25,7 @@
 import { memo, useCallback, useMemo, useState } from "react"
 import { CornerDownLeft, Zap } from "lucide-react"
 import { useSessionActions } from "@/session"
-import { usePrefs } from "@/lib/prefs"
+import { usePrefSection } from "@/lib/prefs"
 import {
   COMBOS,
   EXTRA_KEYS,
@@ -43,14 +43,14 @@ const MODIFIER_ORDER: ModifierId[] = ["ctrl", "alt", "shift", "super"]
 
 export const Keyboard = memo(function Keyboard() {
   const actions = useSessionActions()
-  const prefs = usePrefs()
+  const keyboardPrefs = usePrefSection("keyboard")
   const [held, setHeld] = useState<Set<ModifierId>>(() => new Set())
   const [sticky, setSticky] = useState(false)
   const [extras, setExtras] = useState(false)
 
   const buzz = useCallback(() => {
-    if (prefs.keyboard.haptics) globalThis.navigator?.vibrate?.(8)
-  }, [prefs.keyboard.haptics])
+    if (keyboardPrefs.haptics) globalThis.navigator?.vibrate?.(8)
+  }, [keyboardPrefs.haptics])
 
   /** Press and release one key, wrapped in whatever modifiers are held. */
   const tap = useCallback(

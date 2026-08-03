@@ -32,7 +32,7 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useRef } from "react"
 import { GripHorizontal, Settings2, X } from "lucide-react"
 import { setDock, useDock } from "@/lib/dock"
-import { usePrefs } from "@/lib/prefs"
+import { usePrefSection } from "@/lib/prefs"
 import { setGamepad, useGamepad, useSetPads } from "@/gamepad/store"
 import { useSessionActions, useSessionState } from "@/session"
 import { Button } from "@/components/ui/button"
@@ -57,7 +57,7 @@ export interface InputDockProps {
 
 export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockProps) {
   const dock = useDock()
-  const prefs = usePrefs()
+  const gamepadPrefs = usePrefSection("gamepad")
   const gamepad = useGamepad()
   const setPads = useSetPads()
   const actions = useSessionActions()
@@ -72,7 +72,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
   // games and everything Steam knows about. Keyboard stays because emulators
   // and older titles often only understand keys, and because a controller
   // needs `/dev/uinput`, which not every machine grants.
-  const controllerMode = prefs.gamepad.mode !== "keyboard"
+  const controllerMode = gamepadPrefs.mode !== "keyboard"
 
   const onKey = useCallback(
     (code: number, pressed: boolean) => actions.send({ type: "key", key: code, pressed }),
@@ -167,7 +167,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         )}
         // Matching the pads exactly, rather than a fixed value that would be
         // the wrong amount of visible at either end of the opacity slider.
-        style={isGamepad ? { opacity: prefs.gamepad.opacity } : undefined}
+        style={isGamepad ? { opacity: gamepadPrefs.opacity } : undefined}
       >
         {isGamepad ? null : (
           <button
@@ -215,9 +215,9 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
           {isGamepad ? (
             <GamepadOverlay
               pads={gamepad.pads}
-              skin={prefs.gamepad.skin}
-              opacity={prefs.gamepad.opacity}
-              haptics={prefs.gamepad.haptics}
+              skin={gamepadPrefs.skin}
+              opacity={gamepadPrefs.opacity}
+              haptics={gamepadPrefs.haptics}
               editing={gamepad.editing}
               onChange={setPads}
               onKey={onKey}

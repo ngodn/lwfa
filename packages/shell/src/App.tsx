@@ -45,7 +45,7 @@ import { AudioFormat } from "@lwfa/proto";
 import type { Codec } from "@lwfa/proto";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
 import { clearFormat } from "@/lib/streamFormat"
-import { setPrefs, usePrefs } from "@/lib/prefs"
+import { setPrefs, usePrefSection } from "@/lib/prefs"
 import {
   appsRequested,
   clearApps,
@@ -207,20 +207,28 @@ export function App(): React.ReactElement {
   // Layout policy the user can change without a rebuild. Held in a ref as well
   // as read here, because the update callbacks are stable and must see the
   // current value rather than the one captured when they were created.
-  const prefs = usePrefs();
+  //
+  // Sections, not the whole store: this is the root of the tree, and a
+  // subscription to everything meant every preference write re-rendered the
+  // entire shell. The gamepad panel writes on every opacity-slider move and on
+  // every skin tap, and each of those re-rendering the desktop under a live
+  // stream is exactly the lag it looked like.
+  const layoutPrefs = usePrefSection("layout");
+  const streamPrefs = usePrefSection("stream");
+  const motionPrefs = usePrefSection("motion");
   const stripConfig = useMemo<StripConfig>(
     () => ({
       ...DEFAULT_CONFIG,
-      orientation: prefs.layout.orientation,
-      centreFocused: prefs.layout.centreFocused,
+      orientation: layoutPrefs.orientation,
+      centreFocused: layoutPrefs.centreFocused,
       // Stored as a plain number so a preferences blob written against a
       // shorter preset list cannot produce an out-of-range index.
       defaultWidth: Math.min(
-        Math.max(0, prefs.layout.defaultWidth),
+        Math.max(0, layoutPrefs.defaultWidth),
         WIDTH_PRESETS.length - 1,
       ) as WidthPreset,
     }),
-    [prefs.layout],
+    [layoutPrefs],
   );
   const configRef = useRef(stripConfig);
   configRef.current = stripConfig;
@@ -238,7 +246,7 @@ export function App(): React.ReactElement {
   const [windows, setWindows] = useState<Map<WindowId, WindowInfo>>(new Map());
   const [strip, setStrip] = useState<StripState>(EMPTY);
   // Streaming is a preference, not fixed state. See `Prefs.stream`.
-  const streaming = prefs.stream.enabled;
+  const streaming = streamPrefs.enabled;
   /**
    * What this browser can actually decode, best first.
    *
@@ -265,11 +273,11 @@ export function App(): React.ReactElement {
   // "Auto" is everything the device can do, and naming one codec pins it, so
   // a JPEG preference is expressed by an empty list.
   const wantCodecs = useMemo<Codec[]>(() => {
-    const choice = prefs.stream.codec;
+    const choice = streamPrefs.codec;
     if (choice === "jpeg") return [];
     if (choice === "auto") return decodes;
     return decodes.filter((codec) => codec === choice);
-  }, [prefs.stream.codec, decodes]);
+  }, [streamPrefs.codec, decodes]);
   /**
    * Whether this connection decides layout.
    *
@@ -307,7 +315,7 @@ export function App(): React.ReactElement {
 
   const streamingRef = useRef(streaming);
   streamingRef.current = streaming;
-  const wantsAudio = prefs.stream.audio;
+  const wantsAudio = streamPrefs.audio;
   const codecsRef = useRef(wantCodecs);
   codecsRef.current = wantCodecs;
 
@@ -326,11 +334,11 @@ export function App(): React.ReactElement {
   useEffect(() => {
     void decodesOpus().then(setOpusKnown);
   }, []);
-  const animateRef = useRef(prefs.motion.animate);
-  animateRef.current = prefs.motion.animate;
+  const animateRef = useRef(motionPrefs.animate);
+  animateRef.current = motionPrefs.animate;
   // Read by `push`, which is deliberately dependency-free; the effect keyed
   // on the preference below keeps it current and resends the list.
-  const pauseInactiveRef = useRef(prefs.stream.pauseInactive);
+  const pauseInactiveRef = useRef(streamPrefs.pauseInactive);
 
   /** Forward input aimed at a window, tagging it with which window it hit. */
   const sendInput = useCallback((id: WindowId, event: SurfaceInput) => {
@@ -445,7 +453,7 @@ export function App(): React.ReactElement {
   // Flipping the pause-inactive preference takes effect when it is flipped,
   // not at the next reflow. The list is otherwise sent from `push`, which
   // runs on strip transitions, and a settings toggle is not one.
-  const pauseInactive = prefs.stream.pauseInactive;
+  const pauseInactive = streamPrefs.pauseInactive;
   useEffect(() => {
     pauseInactiveRef.current = pauseInactive;
     const out = outputRef.current;
@@ -878,8 +886,8 @@ export function App(): React.ReactElement {
   // A follower is not told about layout through `push`, so the animator has to
   // be told here instead. Same declaration, same instant, one frame later.
   useEffect(() => {
-    if (!primary) motion.set(followed, prefs.motion.animate);
-  }, [primary, followed, prefs.motion.animate]);
+    if (!primary) motion.set(followed, motionPrefs.animate);
+  }, [primary, followed, motionPrefs.animate]);
 
   // Stable across renders, so every WindowSurface keeps its memo. Building
   // these inline would hand each surface a fresh function on every frame and
@@ -920,7 +928,7 @@ export function App(): React.ReactElement {
     // learning better means a session of uncompressed audio; see `opusKnown`.
     if (opusKnown === null) return;
     if (!wantsAudio) {
-      connection.current?.send({ type: "setAudio", enabled: false, local: prefs.stream.localPlayback, opus: opusKnown, quality: prefs.stream.audioQuality });
+      connection.current?.send({ type: "setAudio", enabled: false, local: streamPrefs.localPlayback, opus: opusKnown, quality: streamPrefs.audioQuality });
       void audio.stop();
       return;
     }
@@ -932,8 +940,8 @@ export function App(): React.ReactElement {
         log("warn", "audio could not start on this device");
         return;
       }
-      audio.setVolume(prefs.stream.volume);
-      connection.current?.send({ type: "setAudio", enabled: true, local: prefs.stream.localPlayback, opus: opusKnown, quality: prefs.stream.audioQuality });
+      audio.setVolume(streamPrefs.volume);
+      connection.current?.send({ type: "setAudio", enabled: true, local: streamPrefs.localPlayback, opus: opusKnown, quality: streamPrefs.audioQuality });
     });
     // Browsers hold a new AudioContext suspended until the page has been
     // touched. If audio was on from a saved preference, this is what starts it
@@ -947,15 +955,15 @@ export function App(): React.ReactElement {
   }, [wantsAudio, sessionId, opusKnown]);
 
   useEffect(() => {
-    audio.setVolume(prefs.stream.volume);
-  }, [prefs.stream.volume]);
+    audio.setVolume(streamPrefs.volume);
+  }, [streamPrefs.volume]);
 
   // Local playback and the quality choice are re-sent whenever they change
   // rather than only when audio is switched on.
   useEffect(() => {
     if (!wantsAudio || opusKnown === null) return;
-    connection.current?.send({ type: "setAudio", enabled: true, local: prefs.stream.localPlayback, opus: opusKnown, quality: prefs.stream.audioQuality });
-  }, [wantsAudio, opusKnown, prefs.stream.localPlayback, prefs.stream.audioQuality]);
+    connection.current?.send({ type: "setAudio", enabled: true, local: streamPrefs.localPlayback, opus: opusKnown, quality: streamPrefs.audioQuality });
+  }, [wantsAudio, opusKnown, streamPrefs.localPlayback, streamPrefs.audioQuality]);
 
   // Re-report the viewport whenever this device starts driving a session.
   //

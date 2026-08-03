@@ -460,10 +460,33 @@ export function getPrefs(): Prefs {
 /**
  * Subscribe to all preferences.
  *
- * `current` is replaced rather than mutated, so the identity check React does
- * is enough and there is no need for a selector layer. If a hot path ever needs
- * one, add `usePref(selector)` here rather than reaching into the store.
+ * For panels and other small trees that read a bit of everything. Anything
+ * mounted permanently should use {@link usePrefSection} instead: this hook
+ * re-renders its component on *every* preference write, and the writes are not
+ * all rare. The gamepad opacity slider writes on every pointer move, and with
+ * `App` subscribed here each of those moves re-rendered the entire shell over
+ * the live video, which read as stream lag on a tablet.
  */
 export function usePrefs(): Prefs {
   return useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+
+/**
+ * Subscribe to one section of the preferences.
+ *
+ * `patchPrefs` replaces only the section it touches and keeps the identity of
+ * every other, so React's own snapshot comparison makes this precise: a write
+ * to `gamepad` wakes the components reading `gamepad` and no one else. That is
+ * the entire mechanism; there is no selector machinery to keep in sync.
+ *
+ * The exception is another tab writing preferences, which replaces the whole
+ * object and re-renders every subscriber once. Cross-tab writes are rare and
+ * correctness matters more than precision there.
+ */
+export function usePrefSection<K extends keyof Prefs>(section: K): Prefs[K] {
+  return useSyncExternalStore(
+    subscribe,
+    () => current[section],
+    () => current[section],
+  )
 }

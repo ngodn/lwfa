@@ -8,7 +8,7 @@
  */
 
 import { useEffect } from "react"
-import { usePrefs } from "@/lib/prefs"
+import { usePrefSection } from "@/lib/prefs"
 
 /** The system's preference, watched so "system" follows it live. */
 function prefersDark(): boolean {
@@ -16,7 +16,7 @@ function prefersDark(): boolean {
 }
 
 export function ThemeProvider(): null {
-  const { theme } = usePrefs()
+  const theme = usePrefSection("theme")
 
   useEffect(() => {
     const root = document.documentElement

@@ -13,7 +13,7 @@
 
 import { Suspense, lazy, memo, useMemo } from "react"
 import { Loader2 } from "lucide-react"
-import { resolveEdge, usePrefs, type NavItemId } from "@/lib/prefs"
+import { resolveEdge, usePrefSection, type NavItemId } from "@/lib/prefs"
 import { NAV_GROUPS, NAV_ITEMS, type NavGroupId } from "@/nav/registry"
 import { usePortrait } from "@/components/NavRail"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
@@ -54,7 +54,7 @@ export interface PanelHostProps {
 }
 
 export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostProps) {
-  const { nav } = usePrefs()
+  const nav = usePrefSection("nav")
 
   // What the sheet is showing: one panel, or a tabbed set from a merged group.
   const view = useMemo(() => {

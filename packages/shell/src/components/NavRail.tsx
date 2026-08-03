@@ -23,7 +23,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { describeStatus } from "@/lib/status"
 import { cn } from "@/lib/utils"
-import { resolveEdge, usePrefs, type NavEdge, type NavItemId } from "@/lib/prefs"
+import { resolveEdge, usePrefSection, type NavEdge, type NavItemId } from "@/lib/prefs"
 import { useSessionState } from "@/session"
 import type { Status } from "@/connection"
 import { useDock } from "@/lib/dock"
@@ -62,7 +62,7 @@ const SIZES = {
 const isVertical = (edge: NavEdge) => edge === "left" || edge === "right"
 
 export const NavRail = memo(function NavRail({ active, fired, onSelect }: NavRailProps) {
-  const { nav } = usePrefs()
+  const nav = usePrefSection("nav")
   const { order, hidden, anchored, centred, size } = nav
   const edge = resolveEdge(nav.edge, usePortrait())
   const dock = useDock()
