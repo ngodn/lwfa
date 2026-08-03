@@ -1,45 +1,67 @@
-# lwfa
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/svg/mark-on-dark.svg">
+    <img src="brand/svg/mark-on-light.svg" alt="The lwfa mark: three columns of the scrollable strip with the spring curve running across them" width="140">
+  </picture>
+</p>
 
-**literally work from anywhere**
+<h1 align="center">lwfa</h1>
 
-A Wayland compositor with a browser-native shell. The same desktop runs on the
-machine's physical display and in a browser on any other device, with layout
-that responds to the viewport it's being viewed on.
+<p align="center"><strong>literally work from anywhere</strong></p>
 
-- **Engine**: Rust, [Smithay](https://smithay.github.io/), wgpu. Wayland
-  protocol, DRM/KMS, per-surface encode, native local compositing. Owns
-  mechanism, not policy.
-- **Shell**: TypeScript, React 19, [Motion](https://motion.dev/),
-  [PreTeXt.js](https://pretextjs.dev/). Runs unchanged against either backend.
+<p align="center">A Wayland compositor with a browser-native shell. The same desktop runs on the
+machine's physical display and in a browser on any other device, and it is
+built to be <em>used</em> from that browser: video, audio, keyboard, mouse,
+touch, and a controller games treat as real hardware.</p>
+
+---
+
+- **Engine**: Rust, [Smithay](https://smithay.github.io/), running nested in a
+  host compositor. Wayland plus XWayland, per-window NVENC encode, PipeWire
+  audio capture, a uinput virtual gamepad. Owns mechanism, not policy.
+- **Shell**: TypeScript, React 19, [shadcn/ui](https://ui.shadcn.com/) on
+  Tailwind v4. Owns layout policy and everything the user touches.
 - **Layout**: scrollable tiling, following [niri](https://github.com/niri-wm/niri).
-- **Remote**: per-surface streams decoded with WebCodecs and composited in the
-  DOM, so the browser can lay windows out however the viewport demands.
+  Columns on an infinite strip, workspaces stacked vertically.
+- **Remote**: per-window video streams (H.264 or HEVC, chosen by what every
+  connected device can decode) decoded with WebCodecs and composited in the
+  DOM, so the browser lays windows out however the viewport demands. Audio is
+  Opus on the same socket.
 
 Read [docs/architecture.md](docs/architecture.md) before changing anything
 structural. It records the decisions and, more importantly, why.
 
 ## Status
 
-Milestone 4 of 7 complete. See the build order in the architecture doc.
+Daily-driven in production: a gaming PC in one room, an iPad on the couch,
+Steam games under Proton played over wifi with the on-screen controller. The
+original seven milestones are done, and the work since has been the things
+production surfaces: audio, the virtual controller, adaptive streaming, and
+sessions that survive their own network.
 
-- [x] **1. Spring parity harness** — `crates/lwfa-spring`, `packages/spring`
-- [x] **2. Smithay compositor, nested backend** — `crates/lwfa-engine`
-- [x] **3. Shell protocol v0** — `crates/lwfa-proto`, `packages/proto`, `packages/shell`
-      (the layer-shell chrome path is *not* done; see the architecture doc)
-- [x] **4. Per-surface streaming and the remote backend** — hardware H.264 via
-      NVENC, decoded with WebCodecs, composited in the browser DOM
-- [x] **Remote input** — pointer, keyboard and touch from the browser into the
-      compositor, gated by a shared token. Reachable over the LAN; **no TLS yet**
-- [x] **XWayland** — X11 clients (Steam, Proton, older GTK2/Qt4, non-ozone
-      Electron) map into the same strip, stream, and take remote input
-- [x] **The shell UI** — shadcn/ui, a navigation rail you can put on any edge
-      and reorder, an on-screen keyboard and gamepad, a launcher, and window
-      management. See [The shell](#the-shell)
-- [x] **Accounts** — named users in SQLite with per-account permissions,
-      enforced by the engine. See [Accounts](#accounts)
-- [ ] 5. Appearance vocabulary in both backends
-- [ ] 6. iPad: gestures, PWA install, offline shell
-- [ ] 7. Clipboard, audio, multi-monitor, DPI, TLS, packaging
+What works today:
+
+- [x] Per-window hardware video with WebCodecs decode, zero-copy from the
+      GL texture into NVENC when the NVIDIA driver is present
+- [x] Adaptive bitrate driven by real socket backpressure, up to 32 Mbit/s,
+      with the focused window getting the budget and unwatched windows paused
+- [x] Audio: Opus over the wire, per-device opt-in, quality that degrades last
+- [x] Remote input: keyboard, mouse, touch (long-press right-click), and an
+      on-screen gamepad that is a real `/dev/uinput` controller on the machine
+- [x] XWayland, so Steam, Proton and everything X11 runs in the same strip
+- [x] Sessions that survive reconnects: a wifi blip costs nothing visible.
+      45 seconds of grace, the controller stays in the game's hands,
+      fullscreen and audio carry across
+- [x] Accounts: named users in SQLite, watch-only or interact, per-app launch
+      permissions, enforced in the engine
+- [x] Multi-device: one client drives, the rest watch, control is taken
+      explicitly
+- [x] Installs as a PWA, edge to edge on an iPad, with the brand's icons
+
+Deliberately not done yet: built-in TLS (terminate it at a reverse proxy, see
+[Production](#production)), clipboard sync, multi-monitor, DPI awareness, the
+layer-shell chrome path for the native output, and a TTY backend. The engine
+runs nested inside an existing compositor; it does not own a display outright.
 
 ## Requirements
 
@@ -52,6 +74,16 @@ Pinned in `.mise.toml` and `rust-toolchain.toml`:
 mise install
 pnpm install
 ```
+
+Hardware and system expectations, all degrading rather than failing:
+
+- **NVIDIA + NVENC** for hardware video. Without it, frames fall back to JPEG,
+  which works but costs bandwidth. Eight concurrent encoder sessions is the
+  consumer-card limit; the ninth window degrades to JPEG.
+- **PipeWire or PulseAudio**, with `parec` on the path, for audio capture.
+  No audio without it, nothing else affected.
+- **`/dev/uinput` access** for the virtual controller. Without it the gamepad
+  still works in keyboard mode, mapping pads to keys.
 
 ## Running
 
@@ -84,53 +116,63 @@ that layout policy exists in exactly one place. See `crates/lwfa-engine/src/layo
 | `Alt+Shift+L` | shell | expel: push this window out into its own column |
 | `Alt+Shift+K` / `Alt+Shift+J` | shell | move this window to the workspace above/below |
 | `Alt+1` … `Alt+3` | shell | jump to a workspace |
-| `Alt+4` | shell | cycle the focused column's width (⅓, ½, ⅔) |
+| `Alt+4` | shell | cycle the focused column's width (⅓, ½, ⅔, 90%) |
+| `Alt+F` | shell | toggle fullscreen for the focused window |
 | `Alt+W` | shell | close the focused window |
 
 Layout follows [niri](https://github.com/niri-wm/niri): windows live in columns
-on an infinite horizontal strip, a column can hold a vertical stack, and
-workspaces stack vertically. Workspaces need no protocol support at all, because
-`SetLayout` is total: the shell omits the windows on other workspaces and the
-engine hides whatever it is not told about.
+on an infinite strip, a column can hold a vertical stack, and workspaces stack
+vertically. The strip runs along the viewport's long axis by default, so it is
+a row of columns on a monitor and a stack of rows on a phone held upright.
+Workspaces need no protocol support at all, because `SetLayout` is total: the
+shell omits the windows on other workspaces and the engine hides whatever it is
+not told about.
 
 All of that is layout policy, so the engine forwards those keys to the shell
 rather than acting on them. Alt rather than Super, because the host compositor
-sees keys first and usually has Super bound. The TTY backend will move these to
-Super.
+sees keys first and usually has Super bound.
 
 ### Configuration
 
 Settings live in [`configs/defaults.toml`](configs/defaults.toml): ports, the
-terminal, Xwayland, encoder limits, render timings, layout defaults, and which
-workspace lwfa's own window should take in a host compositor. It is commented,
-and it is the place to look before going hunting for a constant.
+terminal, Xwayland, encoder limits, render timings, layout defaults, the shared
+animation spring, audio capture, the persistent gamepad, and which workspace
+lwfa's own window should take in a host compositor. It is commented, and it is
+the place to look before going hunting for a constant.
 
 Precedence, highest first: environment variables, then `.env` (gitignored,
-machine-local, holds `AUTH_PASS`), then that file, then built-ins. Loading never
-fails: a missing or broken file falls back to defaults with a warning, because a
-compositor you cannot start is a compositor you cannot fix from inside. Unknown
-keys *are* rejected, so a typo is reported rather than silently ignored.
+machine-local, holds `AUTH_PASS`), then that file, then built-ins. Loading
+never fails: a missing or broken file falls back to defaults with a warning,
+because a compositor you cannot start is a compositor you cannot fix from
+inside. Unknown keys *are* rejected, so a typo is reported rather than silently
+ignored.
 
 The shell cannot read the file (it runs in a browser), so
-`scripts/gen-config.mjs` generates its layout defaults from the same source.
-That runs automatically from `dev`, `build`, `test` and `typecheck`.
+`scripts/gen-config.mjs` generates its layout and animation defaults from the
+same source. That runs automatically from `dev`, `build`, `test` and
+`typecheck`.
 
 Environment:
 
-- `LWFA_CONFIG` — path to a config file, overriding `configs/defaults.toml`
-- `LWFA_TERMINAL` — which terminal to spawn (default `alacritty`)
-- `LWFA_NO_AUTOSTART` — set to skip opening a terminal on launch
-- `LWFA_NO_XWAYLAND` — set to skip starting Xwayland, so X11 clients cannot run
-- `LWFA_SHELL_ADDR` — where the engine listens (default `127.0.0.1:6734`;
+- `LWFA_CONFIG`: path to a config file, overriding `configs/defaults.toml`
+- `LWFA_TERMINAL`: which terminal to spawn (default `alacritty`)
+- `LWFA_NO_AUTOSTART`: set to skip opening a terminal on launch
+- `LWFA_NO_XWAYLAND`: set to skip starting Xwayland, so X11 clients cannot run
+- `LWFA_NO_PREVIEW`: set to stop presenting to the nested host window. Do this
+  when the window is parked on a hidden workspace and the session is only used
+  remotely; presenting to a window the host never shows can block the engine
+  (see `[window] preview` in the config for the full story)
+- `LWFA_SHELL_ADDR`: where the engine listens (default `127.0.0.1:6734`;
   use `0.0.0.0:6734` to reach it from other devices)
-- `SHELL_PORT` — port for the shell page (default `6733`)
-- `AUTH_PASS` — the shared password. Read from `.env` if not in the environment.
+- `SHELL_PORT`: port for the shell page (default `6733`)
+- `AUTH_PASS`: the shared password. Read from `.env` if not in the environment.
   A temporary one is generated if neither is set, which breaks bookmarked URLs
-- `LWFA_PROFILE` — log per-window capture timings
-- `LWFA_HEARTBEAT` — log redraws and ticks per second, once a second. `0
-  redraws` with a healthy tick count is a hidden window behaving correctly; both
-  at zero means the event loop has stopped
-- `RUST_LOG=debug` — Smithay is chatty at `info`; `warn` is usually the useful level
+- `LWFA_PROFILE`: log per-window capture timings
+- `LWFA_HEARTBEAT`: log redraws and ticks per second, once a second. `0
+  redraws` with a healthy tick count is a hidden window behaving correctly;
+  both at zero means the event loop has stopped
+- `RUST_LOG=debug`: Smithay is chatty at `info`; `warn` is usually the useful
+  level
 
 ### Using it from another device
 
@@ -170,61 +212,62 @@ The shell connects to whatever host served the page, so nothing else needs
 configuring. Bookmark that URL on the tablet; it keeps working as long as
 `AUTH_PASS` stays the same.
 
-Environment variables override `.env`, so a one-off
-`LWFA_SHELL_ADDR=127.0.0.1:9843 cargo run -p lwfa-engine` works without
-editing the file.
-
 > **Security, plainly.** The shell protocol injects keystrokes and spawns
 > processes, so whoever can open the socket controls the session. A shared
 > token is required on every connection, which stops casual access.
 >
-> There is **no encryption**. The token and everything after it cross the
-> network in the clear, so anyone who can watch the traffic can read your
-> keystrokes and replay the token. That is an acceptable trade on a home
-> network you control. It is not acceptable on café wifi, a shared office, or
-> anywhere reachable from the internet — tunnel it over SSH or WireGuard until
-> TLS exists.
->
-> `AUTH_PASS` in `.env` keeps the password stable across restarts. Without it a
-> fresh one is generated each run and any bookmarked URL stops working.
+> The engine itself speaks **no TLS**. Over plain HTTP the token and
+> everything after it cross the network readable, and the browser refuses
+> WebCodecs on an insecure page, so you get the JPEG fallback too. On a home
+> network you control that can be an acceptable trade for a quick test. For
+> anything more, put a TLS-terminating reverse proxy in front (see
+> [Production](#production)) or tunnel over SSH or WireGuard. Never expose the
+> raw ports to the internet.
 
-Changing `AUTH_PASS` takes effect within a couple of seconds, no restart needed
-— which matters, because restarting the compositor kills every window in the
-session. Existing connections are left alone; only the next one is affected.
+Changing `AUTH_PASS` takes effect within a couple of seconds, no restart
+needed, which matters because restarting the compositor kills every window in
+the session. Existing connections are left alone; only the next one is
+affected.
 
-### X11 clients
+## Production
 
-Xwayland starts with the engine and gets its own display, so `DISPLAY` inside
-lwfa is *not* the host's. Clients spawned by the engine inherit the right one
-automatically; to launch one by hand, take the display number the engine logs:
-
-```
-xwayland ready on DISPLAY=:1
-```
+The dev servers work, but the production pieces are built and committed:
 
 ```sh
-WAYLAND_DISPLAY= DISPLAY=:1 xterm     # forced onto X11
+pnpm run build             # the shell, built to packages/shell/dist
+pnpm run start             # serve it, same host and port rules as dev
+pnpm run engine:release    # the engine, optimised (fat LTO)
+./target/release/lwfa-engine
 ```
 
-Unsetting `WAYLAND_DISPLAY` is what forces a dual-backend program down the X11
-path; most will pick Wayland if both are offered, which is what you usually
-want. Clearing `DISPLAY` instead is how you force the opposite.
+Put a reverse proxy with TLS in front of both ports, on **one hostname**: the
+page and the WebSocket must share it, because a browser refuses a plaintext
+socket from an HTTPS page. [`deploy/traefik-lwfa.yml`](deploy/traefik-lwfa.yml)
+is a working Traefik config: `/engine` routes to the socket at higher priority,
+everything else to the page, and the prefix is deliberately not stripped
+(stripping the whole path leaves an empty request-URI and the upgrade dies with
+a 502). Any proxy that can do the same split works; nginx does.
 
-X11 windows land in the strip like any other, with `WM_CLASS` standing in for
-the app id. Interactive move and resize are refused, as they are for Wayland,
-and so are maximise and fullscreen: the shell owns column width. Override-
-redirect windows (menus, tooltips) render on the local display but are not yet
-composited into a remote shell, which is the same gap Wayland popups have.
+HTTPS is not only transport security here. WebCodecs requires a secure
+context, so the proxy is also what turns the stream from JPEG into hardware
+H.264/HEVC.
+
+On the tablet, open the HTTPS address and add it to the home screen. The shell
+ships the manifest and icons from [brand/](brand/), draws edge to edge under
+the iPad's home indicator, and behaves as an installed app. iOS never says
+goodbye when an app is swiped away, so the engine pings idle sockets and reaps
+the ones that stop answering; a discarded client cannot hold windows or the
+microphone.
 
 ### Giving lwfa a workspace of its own
 
-lwfa's window is a whole desktop, not an app: it runs full-screen and takes the
-keyboard, so it should not share a workspace with anything you were using. The
-engine reports app id `lwfa`, so a host compositor can rule on it. On Hyprland
-(0.53+ syntax):
+lwfa's window is a whole desktop, not an app: it runs full-screen and takes
+the keyboard, so it should not share a workspace with anything you were using.
+The engine reports app id `lwfa`, so a host compositor can rule on it. On
+Hyprland (0.53+ syntax):
 
 ```
-# ~/.config/hypr/monitors.conf — a workspace of its own, kept alive when empty
+# ~/.config/hypr/monitors.conf: a workspace of its own, kept alive when empty
 workspace = 10, monitor:DP-1, persistent:true
 
 # ~/.config/hypr/hyprland.conf
@@ -237,15 +280,36 @@ starting the engine never interrupts what you are doing. Keep the workspace
 number in step with `[host].workspace` in `configs/defaults.toml`, which is
 what `scripts/dev-nested.sh` reads.
 
-A window on a workspace you are not looking at gets no frame callbacks from the
-host, which the nested backend now handles in two places: the streaming path is
-driven from a timer so remote clients keep working, and the on-screen path
-refuses to present faster than a display interval, because presenting to a
-surface the host has never shown blocks forever and takes the whole compositor
-with it. See `[render]` in the config.
+A window on a workspace you are not looking at gets no frame callbacks from
+the host. The streaming path is driven from a timer so remote clients keep
+working regardless, and for a session that is only ever used remotely, set
+`[window] preview = false` (or `LWFA_NO_PREVIEW=1`) so the engine never
+touches the host's swapchain at all.
 
 `scripts/dev-nested.sh` does the same placement on a host without those rules
 installed, and verifies it afterwards.
+
+## Streaming
+
+Every window is its own video stream, encoded on NVENC and decoded with
+WebCodecs, so the browser composites real DOM elements rather than a screen
+rectangle. The codec is negotiated: HEVC where every connected device decodes
+it, H.264 otherwise, JPEG as the last resort.
+
+When the driver allows it, pixels never leave the GPU: the rendered window
+texture is handed to CUDA through GL interop and NVENC reads it in place, so
+nothing but the compressed bitstream ever reaches system RAM. On any failure
+the engine falls back to read-back capture by itself; `[stream] gpu_direct`
+exists to force the fallback for debugging.
+
+Bitrate adapts to the network it is actually on. A frame stays on a client's
+account until the kernel accepts it, so backpressure is the network's own
+voice rather than a guess: a fresh connection climbs to the 32 Mbit/s ceiling
+in about six seconds on a clean LAN, and a congested one backs off without
+buffering seconds of stale video inside the socket. The focused window gets
+the budget; inactive windows pause by default, frozen on their last frame, and
+resume the moment they are focused. A paused window's application is told to
+stop rendering too, so a window nobody watches costs approximately nothing.
 
 ## The shell
 
@@ -256,96 +320,171 @@ paints.
 
 ### The navigation rail
 
-One strip of buttons along an edge you choose, in **two clusters**. The ones you
-reach for while working (windows, keyboard, gamepad) are anchored to the far end
-where a thumb rests; the ones you touch once a week sit at the near end, out of
-accidental reach, with the slack between them. That is a reachability decision,
-not decoration, and it survives every edge and every size.
+One strip of buttons along an edge you choose, in **two clusters**. The ones
+you reach for while working (windows, keyboard, gamepad) are anchored to the
+far end where a thumb rests; the ones you touch once a week sit at the near
+end, out of accidental reach, with the slack between them. That is a
+reachability decision, not decoration, and it survives every edge and every
+size.
 
-The rail **measures itself** rather than trusting breakpoints, because "do nine
-buttons fit" is a different question along the bottom of a phone than down its
-side. When they stop fitting they merge rather than disappear: keyboard and
-gamepad into **Input**, the management panels into **More**, down to a floor of
-Apps, Windows and the two grouped buttons. Nothing becomes unreachable, only
-differently routed.
+The rail **measures itself** rather than trusting breakpoints, because "do
+nine buttons fit" is a different question along the bottom of a phone than
+down its side. When they stop fitting they merge rather than disappear:
+keyboard and gamepad into **Input**, the management panels into **More**.
+Nothing becomes unreachable, only differently routed.
 
 Edge, order, visibility, which end each button is anchored to, and button size
-are all in Settings, stored per device. They are per device on purpose: a phone
-wants the bar where a thumb is, the same person on a 27" display wants it down
-the side, and syncing them would make one device's ergonomics fight the other's.
+are all in Settings, stored per device. They are per device on purpose: a
+phone wants the bar where a thumb is, the same person on a 27" display wants
+it down the side, and syncing them would make one device's ergonomics fight
+the other's.
 
 ### Input
 
 The keyboard and gamepad are **input devices, not settings screens**, so they
 dock across the bottom rather than opening in a side panel. The keyboard takes
 space from the desktop, because typing while the keyboard covers the line you
-are editing is the failure it exists to prevent. The gamepad floats over it: a
-game wants every pixel, and its interesting parts are not under your thumbs.
+are editing is the failure it exists to prevent. The gamepad floats over the
+game at reduced opacity: a game wants every pixel, and its interesting parts
+are not under your thumbs.
 
-- **Keyboard** — Escape and the function row are always on screen; the
-  full-size tail (Insert, Home, Page Up, Print Screen, Scroll Lock…) is behind
-  a toggle, which is the right way round. Modifiers latch for one keypress in
-  normal mode and stay held in **combo** mode, so one finger can build
-  Ctrl+Alt+F2. Keys are sent as evdev keycodes, so the remote machine's own
-  keymap decides what they mean.
-- **Gamepad** — the [W3C standard mapping](https://w3c.github.io/gamepad/#remapping):
-  two analog sticks that click for L3/R3, L1/L2/R1/R2, face cluster, d-pad,
-  select/start/guide. Sticks quantise to eight directions with a dead zone, so a
-  resting thumb sends nothing and diagonals hold two keys. Edit mode is
-  [React Flow](https://reactflow.dev/); the dot grid appears **only** while
-  editing, never over a running game. Skins are PlayStation, Xbox or neutral and
+- **Keyboard**: Escape and the function row are always on screen; the
+  full-size tail (Insert, Home, Page Up…) is behind a toggle. Modifiers latch
+  for one keypress in normal mode and stay held in **combo** mode, so one
+  finger can build Ctrl+Alt+F2. Keys are sent as evdev keycodes, so the remote
+  machine's own keymap decides what they mean.
+- **Gamepad**: the [W3C standard mapping](https://w3c.github.io/gamepad/#remapping),
+  and in controller mode it is not an on-screen abstraction: presses land on a
+  virtual controller the engine creates through `/dev/uinput`, which Steam and
+  games enumerate exactly like a plugged-in pad. Analog sticks carry real axis
+  values with a 5% dead zone, coalesced to one send per animation frame so a
+  moving thumb never floods the socket the video shares. Keyboard mode remains
+  for emulators and older titles, quantising sticks to eight directions. Edit
+  mode rearranges and resizes pads on a dot grid, "Copy layout" puts the
+  arrangement on the clipboard as JSON, and skins (PlayStation, Xbox, neutral)
   change labels only.
+
+### Audio
+
+Off until a device asks: audio is a per-device switch in the shell, and the
+engine captures nothing until someone flips it. What gets captured is the
+default sink's monitor (whatever you would hear at the machine), or a source
+you name in `[audio]`; the config shows the null-sink recipe for routing only
+chosen programs. On the wire it is Opus, with its own send accounting so fifty
+audio chunks a second can never crowd video out. Quality is Auto by default,
+following the same budget as the video with sound degrading last, or pinned to
+High, Medium or Low per device.
 
 ### Launcher and windows
 
 **Apps** reads the machine's freedesktop desktop entries, the same list every
-other Linux launcher shows.
+other Linux launcher shows. Icons are resolved through the icon theme chain on
+the machine and cached in IndexedDB on the device, so a returning client
+requests nothing; icons that resolve to nothing are cached as tombstones so
+the shell does not ask again forever. Which apps an account may launch is
+enforced by the engine, per account.
 
-Icons are resolved through the icon theme chain (`gtk-icon-theme-name`, its
-`Inherits=`, then `hicolor`, then `/usr/share/pixmaps`) and sent as data URIs on
-request. A full set is over a megabyte, so the shell caches them in IndexedDB
-and asks only for what it does not already have; a returning client requests
-nothing. Icons that resolve to nothing are cached as tombstones, because roughly
-a sixth of desktop entries name an icon that is not installed and without that
-the shell would ask again on every reload forever. In the DOM they are blob
-URLs, not data URIs, so the browser decodes each once instead of re-parsing
-base64 per element.
+**Windows** has workspaces, per-window actions, pause and resume per stream,
+and **arrange mode**, which edits the desktop on the desktop: drag a window
+along the strip, drop it where it should go, leave. Moves animate on the
+shared spring, so the same gesture looks the same from the physical display
+and from a browser.
 
-**Windows** has workspaces, per-window actions, and an *arrange* view that lays
-columns out as separated cards so a finger has something to grab, since windows
-on the real strip run off the viewport edges.
+Touch also carries a right click: a long press held still for half a second,
+measured in the shell because iOS Safari stopped firing `contextmenu` on long
+press at iOS 13, and iPads are the point of this project.
+
+### Sessions that survive their own network
+
+A tablet on wifi disconnects; that is not an error, it is the medium. The
+shell reconnects by itself, and the engine treats the gap as weather rather
+than departure:
+
+- The last client leaving starts a **45-second grace** in which the world
+  holds: layout stays, windows stay awake, audio keeps flowing, and the
+  virtual controller is parked rather than unplugged, so the game never sees
+  the device leave.
+- A returning client adopts the parked controller, keeps its fullscreen
+  window fullscreen, and re-announces its gamepad on its own; nothing needs
+  toggling by hand.
+- Silent clients are found honestly: ten seconds of inbound silence earns a
+  ping, fifteen more unanswered means the client is gone and it is reaped
+  through the same path as a clean disconnect. Browsers answer pings below
+  JavaScript, so a live page always passes, however idle.
+- When several devices are connected, one **drives** and the rest **watch**;
+  control is taken explicitly, not stolen by whoever last touched the screen.
+
+## Playing games
+
+Steam is X11, so everything under Proton is X11; Xwayland starts with the
+engine and those windows land in the strip like any other. Three details make
+the on-screen controller reliable in practice:
+
+- `[gamepad] persistent = true` creates the virtual controller at engine
+  startup and never destroys it. Proton runs games in a container where
+  controller hotplug is unreliable; a pad that exists before the game launches
+  is found like real hardware, because that is what real hardware does.
+- Wine decides whether a game is foreground from X input focus, and SDL games
+  deliberately drop controller input in the background. The engine re-asserts
+  focus after layout changes and runs a once-a-second guardian that repairs X
+  focus if it points at nothing, so a fullscreen toggle cannot leave the pad
+  unheard.
+- Disable **Steam Input** for the game (Properties → Controller), while the
+  game is closed. Steam otherwise grabs the pad and re-emits its own, with
+  forwarding gated on its idea of the foreground window.
+
+### X11 clients by hand
+
+Xwayland gets its own display, so `DISPLAY` inside lwfa is *not* the host's.
+Clients spawned by the engine inherit the right one automatically; to launch
+one by hand, take the display number the engine logs:
+
+```
+xwayland ready on DISPLAY=:1
+```
+
+```sh
+WAYLAND_DISPLAY= DISPLAY=:1 xterm     # forced onto X11
+```
+
+Unsetting `WAYLAND_DISPLAY` is what forces a dual-backend program down the X11
+path; clearing `DISPLAY` instead forces the opposite. X11 windows use
+`WM_CLASS` as the app id. Interactive move, resize, maximise and fullscreen
+grabs are refused on both backends for the same reason: the shell owns layout.
+Override-redirect windows (menus, tooltips) render locally but are not yet
+composited into a remote shell, the same gap Wayland popups have.
 
 ## Accounts
 
-The engine has one shared password (`AUTH_PASS`) and, since accounts landed,
-named users as well. Everyone who knows the shared password can do everything;
-handing somebody a link so they can *watch* should not also let them run
-commands.
+The engine has one shared password (`AUTH_PASS`) and named users as well.
+Everyone who knows the shared password can do everything; handing somebody a
+link so they can *watch* should not also let them run commands.
 
 Accounts live in SQLite on the machine they authenticate for, at
-`$XDG_STATE_HOME/lwfa/accounts.db`. There is no control plane to enrol with and
-nothing to be offline from. Passwords are Argon2id with a per-user salt.
+`$XDG_STATE_HOME/lwfa/accounts.db`. There is no control plane to enrol with
+and nothing to be offline from. Passwords are Argon2id with a per-user salt.
 
-Each account has a **mode** (watch only, or interact) and a list of applications
-it may launch. `AUTH_PASS` means **the owner**: the bootstrap credential, the
-only identity that may administer accounts, and the way back in if the last
-named account locks itself out. Manage them in the Access panel.
+Each account has a **mode** (watch only, or interact) and a list of
+applications it may launch. `AUTH_PASS` means **the owner**: the bootstrap
+credential, the only identity that may administer accounts, and the way back
+in if the last named account locks itself out. Manage them in the Access
+panel.
 
 Enforcement is in the engine, at the single point every shell message passes
-through. The shell greys out what it cannot use, which is a courtesy rather than
-a control: anyone can open a socket and send whatever they like.
+through. The shell greys out what it cannot use, which is a courtesy rather
+than a control: anyone can open a socket and send whatever they like.
 
 Saved **connections** are the opposite and live in the browser. Which machines
-*you* care about is a property of the device in your hand, and storing that on a
-machine would mean that machine being switched off loses you the list of the
+*you* care about is a property of the device in your hand, and storing that on
+a machine would mean that machine being switched off loses you the list of the
 others.
 
 ## Tests
 
-Use `test:all` and check its **exit code**. Grepping the output for `FAILED` is
-not enough: a Rust *compile* error never prints that word, so a broken build
-reads as green. That has already happened once, when a field was added to
-`Hello` and `crates/lwfa-proto/tests/from_ts.rs` was not updated.
+Use `test:all` and check its **exit code**. Grepping the output for `FAILED`
+is not enough: a Rust *compile* error never prints that word, so a broken
+build reads as green. That has already happened once, when a field was added
+to `Hello` and `crates/lwfa-proto/tests/from_ts.rs` was not updated.
 
 ```sh
 pnpm run test:all     # Rust unit tests, then cross-language parity
@@ -362,6 +501,7 @@ a headless client rather than mocking the protocol:
 cargo run -p lwfa-engine &
 node --experimental-strip-types scripts/e2e-shell.mjs    # protocol + layout
 node --experimental-strip-types scripts/e2e-stream.mjs   # per-surface streaming
+pnpm run e2e:audio                                       # audio capture + opus
 ```
 
 `LWFA_CAPTURE_DUMP=/some/dir` makes the engine write a PNG per window each
@@ -370,9 +510,9 @@ on screen.
 
 The protocol fixtures round-trip in both directions, and each half regenerates
 the other's input: `cargo run -p lwfa-proto --bin gen-proto-fixtures` writes
-`fixtures/proto`, and `pnpm test` writes `fixtures/proto-from-ts` from it. After
-changing a protocol message, run **both**, in that order, or the Rust side
-compares against a stale TypeScript round trip and fails confusingly.
+`fixtures/proto`, and `pnpm test` writes `fixtures/proto-from-ts` from it.
+After changing a protocol message, run **both**, in that order, or the Rust
+side compares against a stale TypeScript round trip and fails confusingly.
 
 `pnpm test` regenerates `fixtures/rust.*.tsv` from the Rust implementation
 before running. Those files are gitignored on purpose: a committed copy would
@@ -381,16 +521,23 @@ let the Rust side drift while the test kept passing against a stale snapshot.
 ### About the parity test
 
 `packages/spring` and `crates/lwfa-spring` are two implementations of the same
-spring solver, and `packages/spring/test/parity.test.ts` checks that they agree
-with each other and with upstream `motion-dom` to 1e-9.
+spring solver, and `packages/spring/test/parity.test.ts` checks that they
+agree with each other and with upstream `motion-dom` to 1e-9.
 
 This is not redundancy for its own sake. The engine integrates window
 animations natively for the local display, the browser integrates them for
-remote displays, and the same animation has to look identical on both. Section 5
-of the architecture doc explains the contract.
+remote displays, and the same animation has to look identical on both. The
+spring itself is one set of constants in `[animation]`, shared by both halves.
+Section 5 of the architecture doc explains the contract.
 
-**When you change one implementation, change the other.** The test will tell you
-if you forgot.
+**When you change one implementation, change the other.** The test will tell
+you if you forgot.
+
+## Brand
+
+The mark, wordmark lockups, favicons and PWA icons live in [brand/](brand/),
+with usage rules in [brand/README.md](brand/README.md). The shell references
+them directly; if you fork this, that is the one directory to replace.
 
 ## License
 
