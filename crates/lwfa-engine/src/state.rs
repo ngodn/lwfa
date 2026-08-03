@@ -1113,6 +1113,41 @@ impl Lwfa {
         self.parked_pad.take()
     }
 
+    /// The session's controller, binding one on demand.
+    ///
+    /// A shell that reconnects mid-game keeps sending presses believing its
+    /// controller is still attached, but the pad was parked with the session
+    /// that died and the new session never said `setGamepad` again. Dropping
+    /// those presses silently was a controller that "stopped working" after
+    /// every wifi blip until the user toggled it off and on by hand. So a
+    /// press from a pad-less session binds one first: the parked device when
+    /// one is waiting, a fresh one otherwise.
+    pub fn gamepad_for(
+        &mut self,
+        session: lwfa_proto::SessionId,
+    ) -> Option<&crate::gamepad::VirtualPad> {
+        use std::collections::hash_map::Entry;
+        match self.gamepads.entry(session) {
+            Entry::Occupied(bound) => Some(&*bound.into_mut()),
+            Entry::Vacant(slot) => {
+                let pad = match self.parked_pad.take() {
+                    Some(parked) => parked,
+                    None => match crate::gamepad::VirtualPad::open() {
+                        Ok(fresh) => fresh,
+                        Err(err) => {
+                            tracing::warn!("no virtual controller for a pressed button: {err}");
+                            return None;
+                        }
+                    },
+                };
+                tracing::info!(
+                    "session {session} pressed a controller it never announced; bound one"
+                );
+                Some(&*slot.insert(pad))
+            }
+        }
+    }
+
     /// Create the persistent controller at startup, when configured.
     ///
     /// Parked from birth: the same adoption path a flap uses hands it to the

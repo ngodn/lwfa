@@ -34,7 +34,7 @@ import { GripHorizontal, Settings2, X } from "lucide-react"
 import { setDock, useDock } from "@/lib/dock"
 import { usePrefs } from "@/lib/prefs"
 import { setGamepad, useGamepad, useSetPads } from "@/gamepad/store"
-import { useSessionActions } from "@/session"
+import { useSessionActions, useSessionState } from "@/session"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -61,6 +61,9 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
   const gamepad = useGamepad()
   const setPads = useSetPads()
   const actions = useSessionActions()
+  // Only the id, and only for the controller effect below: a reconnect gets
+  // a fresh session, and the engine needs `setGamepad` said again to it.
+  const { session } = useSessionState()
   const root = useRef<HTMLDivElement | null>(null)
 
   // Whether the pad drives a controller or a keyboard.
@@ -96,9 +99,15 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
   const padOpen = dock === "gamepad"
   useEffect(() => {
     if (!padOpen || !controllerMode) return
+    // `session` is a dependency on purpose: a connection blip comes back as a
+    // new session, and a controller announced to the dead one is a controller
+    // the engine no longer associates with this client. Without the re-send,
+    // every press after a reconnect was silently dropped until the pad was
+    // toggled off and on by hand. The disable on cleanup is a no-op to an
+    // engine that has already parked the pad, so re-running is safe.
     actions.send({ type: "setGamepad", enabled: true })
     return () => actions.send({ type: "setGamepad", enabled: false })
-  }, [padOpen, controllerMode, actions])
+  }, [padOpen, controllerMode, actions, session])
 
   // Straight to the DOM. The alternative re-renders the whole keyboard on every
   // pointermove of the drag, which on a tablet is visibly janky.

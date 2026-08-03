@@ -851,8 +851,11 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
         }
 
         ToEngine::GamepadButton { button, pressed } => {
+            // `gamepad_for`, not `gamepads.get`: a reconnected session that
+            // never re-announced its controller must not have its presses
+            // silently eaten. See `Lwfa::gamepad_for`.
             let (Some(pad), Some(button)) = (
-                state.gamepads.get(&session),
+                state.gamepad_for(session),
                 lwfa_proto::GamepadButton::from_index(button),
             ) else {
                 return;
@@ -862,7 +865,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
 
         ToEngine::GamepadAxis { axis, value } => {
             let (Some(pad), Some(axis)) = (
-                state.gamepads.get(&session),
+                state.gamepad_for(session),
                 lwfa_proto::GamepadAxis::from_index(axis),
             ) else {
                 return;
