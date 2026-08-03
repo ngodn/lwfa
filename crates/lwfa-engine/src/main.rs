@@ -461,8 +461,19 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // parking spot, so a tab closed mid-press does not leave a
             // character running into a wall. See `park_gamepad`.
             state.park_gamepad(session);
+            // The grace must begin *before* the audio sync below looks at
+            // the session list, or the sync sees "empty, no grace" and
+            // tears the capture down in the same breath the grace was
+            // meant to keep it alive. That ordering bug was a six-second
+            // audio dropout on every reconnect.
+            let now_empty = state.sessions.is_empty();
+            if now_empty {
+                state.begin_session_grace();
+                tracing::info!("last shell gone; holding the session for 45s");
+            }
             // The last listener leaving stops the capture, so an unattended
-            // session is not holding a recording process open.
+            // session is not holding a recording process open. During the
+            // grace it keeps running; see `sync_audio_capture`.
             state.sync_audio_capture();
             // Streams are per connection and the registry already forgot this
             // one, so the union simply shrinks. Recomputing rather than
@@ -487,16 +498,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 }
             }
 
-            if state.sessions.is_empty() {
-                // Not safe mode, not yet: flaky wifi reconnects in seconds,
-                // and the teardown-rebuild cycle is far more disruptive than
-                // a briefly frozen layout. See `begin_session_grace`.
-                state.begin_session_grace();
-                tracing::info!(
-                    "last shell gone; holding the session for {}s",
-                    45
-                );
-            } else {
+            if !now_empty {
                 state.announce_peers();
                 tracing::info!("session {session} left; {} left", state.sessions.len());
             }

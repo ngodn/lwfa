@@ -989,7 +989,23 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                     }
                 }
             }
-            Ok(tungstenite::Message::Close(_)) => return false,
+            // Say which way the connection died. "disconnected" alone cannot
+            // distinguish a page the user closed (clean close frame), a
+            // network path that broke (read error below), and a client that
+            // silently vanished (heartbeat), and those point at different
+            // culprits when a session is flapping.
+            Ok(tungstenite::Message::Close(frame)) => {
+                match frame {
+                    Some(f) => tracing::info!(
+                        "shell {} sent close: {} {:?}",
+                        client.id,
+                        f.code,
+                        f.reason
+                    ),
+                    None => tracing::info!("shell {} sent close with no reason", client.id),
+                }
+                return false;
+            }
             Ok(_) => {}
             Err(tungstenite::Error::Io(err)) if err.kind() == ErrorKind::WouldBlock => break,
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
