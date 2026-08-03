@@ -461,6 +461,12 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // parking spot, so a tab closed mid-press does not leave a
             // character running into a wall. See `park_gamepad`.
             state.park_gamepad(session);
+            // Same reasoning for a finger: a touch being delivered as a
+            // left-button drag (see `remote_input.rs`) must not leave the
+            // button held forever when the socket dies mid-gesture.
+            if state.emulated_touch.take().is_some() {
+                state.remote_pointer_button(0x110, false); // BTN_LEFT
+            }
             // The grace must begin *before* the audio sync below looks at
             // the session list, or the sync sees "empty, no grace" and
             // tears the capture down in the same breath the grace was

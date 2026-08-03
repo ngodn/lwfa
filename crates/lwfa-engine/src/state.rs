@@ -186,6 +186,10 @@ pub struct Lwfa {
     pub xfocus: Option<crate::xfocus::Guardian>,
     /// A controller surviving a session flap. See [`Self::begin_session_grace`].
     parked_pad: Option<crate::gamepad::VirtualPad>,
+    /// The touch slot currently being delivered as a left-button drag instead
+    /// of as touch, because it landed on an X11 window. See
+    /// `remote_input.rs` for why X11 clients get a mouse and not a finger.
+    pub emulated_touch: Option<i32>,
     /// While set, the last session is presumed to be coming back.
     grace_until: Option<std::time::Instant>,
     grace_timer: Option<smithay::reexports::calloop::RegistrationToken>,
@@ -299,6 +303,7 @@ impl Lwfa {
             reassert_timer: None,
             xfocus: None,
             parked_pad: None,
+            emulated_touch: None,
             grace_until: None,
             grace_timer: None,
             focused: None,
