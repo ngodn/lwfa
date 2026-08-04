@@ -100,7 +100,10 @@ if [ "$BUILD" = 1 ]; then
   cargo build -p lwfa-engine --release || { echo "engine build failed" >&2; exit 1; }
 fi
 
-ENGINE="$ROOT/target/release/lwfa-engine"
+# LWFA_ENGINE lets the portable build point at a binary compiled elsewhere,
+# without writing over the host's own target directory. See
+# scripts/package-portable.sh.
+ENGINE="${LWFA_ENGINE:-$ROOT/target/release/lwfa-engine}"
 DIST="$ROOT/packages/shell/dist"
 [ -x "$ENGINE" ] || { echo "no $ENGINE; run without --no-build" >&2; exit 1; }
 [ -f "$DIST/index.html" ] || { echo "no built shell at $DIST" >&2; exit 1; }

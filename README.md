@@ -278,16 +278,19 @@ pnpm run build && pnpm run engine:release
 ./install.sh
 ```
 
-> **Which machines the `.run` works on.** It bundles FFmpeg and its
-> dependencies, so those need not be installed. What it cannot bundle is
-> glibc: every bundled library still requires symbols from the glibc it was
-> built against. A release built on Arch therefore runs on Arch and other
-> rolling distributions, and **not** on Debian stable or Ubuntu LTS, where it
-> fails at exec with a message about `libm`. Build from source there.
+> **Which machines the `.run` works on.** Releases are built in a Debian 11
+> container, so they need glibc 2.31 or newer: Debian 11+, Ubuntu 20.04+,
+> Fedora 32+, RHEL 9+, and every rolling distribution. Building against an old
+> glibc is the only thing that works, because glibc is backward compatible in
+> one direction only, and no amount of bundling changes that.
 >
-> The graphics stack deliberately comes from your machine, not the bundle: a
-> bundled libEGL or libdrm cannot talk to your kernel modules. `scripts/package.sh`
-> records exactly which libraries are excluded and why.
+> FFmpeg travels with the binary, so the version your distribution ships does
+> not matter. The graphics stack deliberately does not: a bundled libEGL or
+> libdrm cannot talk to your kernel modules, so `libdrm` is the one library you
+> need, and any machine with working graphics already has it.
+>
+> `scripts/package-portable.sh` builds one; `deploy/build/Dockerfile` and
+> `scripts/package.sh` record what is bundled and why.
 
 It looks first and writes second: distribution, host compositor, GPU,
 Xwayland, audio, terminal, `/dev/uinput`, and any controller already plugged
