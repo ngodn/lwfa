@@ -264,10 +264,30 @@ affected.
 
 ## Installing
 
+From a release, which is one self-extracting file:
+
+```sh
+./lwfa-1.0.0.run                      # unpack and install
+./lwfa-1.0.0.run --extract /tmp/lwfa  # or unpack and read it first
+```
+
+Or from a checkout:
+
 ```sh
 pnpm run build && pnpm run engine:release
 ./install.sh
 ```
+
+> **Which machines the `.run` works on.** It bundles FFmpeg and its
+> dependencies, so those need not be installed. What it cannot bundle is
+> glibc: every bundled library still requires symbols from the glibc it was
+> built against. A release built on Arch therefore runs on Arch and other
+> rolling distributions, and **not** on Debian stable or Ubuntu LTS, where it
+> fails at exec with a message about `libm`. Build from source there.
+>
+> The graphics stack deliberately comes from your machine, not the bundle: a
+> bundled libEGL or libdrm cannot talk to your kernel modules. `scripts/package.sh`
+> records exactly which libraries are excluded and why.
 
 It looks first and writes second: distribution, host compositor, GPU,
 Xwayland, audio, terminal, `/dev/uinput`, and any controller already plugged
