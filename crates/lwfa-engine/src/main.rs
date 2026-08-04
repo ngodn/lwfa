@@ -80,7 +80,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("lwfa running on WAYLAND_DISPLAY={:?}", data.socket_name);
 
-    if data.config.autostart_terminal() {
+    // A fresh session opens a terminal so there is something in it. Without
+    // one the shell shows an empty workspace, which looks the same whether
+    // nothing was meant to start or the terminal is simply not installed.
+    //
+    // So the missing case is said out loud. `Alt+Return` is dead for the same
+    // reason and would otherwise be the second confusing thing.
+    if let Some((message, serious)) = data.config.terminal_report() {
+        if serious {
+            tracing::warn!("{message}");
+        } else {
+            tracing::info!("{message}");
+        }
+    }
+    if data.config.terminal_available() && data.config.autostart_terminal() {
         data.spawn_terminal();
     }
     data.ensure_persistent_gamepad();

@@ -98,6 +98,14 @@ preview = true
 # ---------------------------------------------------------------------------
 [session]
 # Spawned by Alt+Return, and on startup unless `autostart_terminal` is false.
+#
+# If this is not installed the engine falls back to whatever is: foot, kitty,
+# ghostty, wezterm, gnome-terminal, konsole, xfce4-terminal, then xterm. That
+# is not politeness, it is the difference between a first run that works and
+# one that shows an empty desktop with the reason only in the log.
+#
+# The fallback is reported once at startup, so a machine quietly using
+# something other than what is written here says so.
 terminal = "alacritty"
 
 # Open a terminal at startup, so a fresh session has something in it.

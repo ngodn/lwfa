@@ -161,7 +161,9 @@ same source. That runs automatically from `dev`, `build`, `test` and
 Environment:
 
 - `LWFA_CONFIG`: path to a config file, overriding `configs/defaults.toml`
-- `LWFA_TERMINAL`: which terminal to spawn (default `alacritty`)
+- `LWFA_TERMINAL`: which terminal to spawn (default `alacritty`, falling back
+  to any of foot, kitty, ghostty, wezterm, gnome-terminal, konsole,
+  xfce4-terminal or xterm that is actually installed)
 - `LWFA_NO_AUTOSTART`: set to skip opening a terminal on launch
 - `LWFA_NO_XWAYLAND`: set to skip starting Xwayland, so X11 clients cannot run
 - `LWFA_NO_PREVIEW`: set to stop presenting to the nested host window. Do this

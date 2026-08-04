@@ -332,8 +332,81 @@ impl Config {
     }
 
     /// Which terminal to spawn. `LWFA_TERMINAL` wins, as it always did.
+    ///
+    /// # Why this falls back rather than trusting the setting
+    ///
+    /// The default is `alacritty`, and a fresh machine very often does not
+    /// have it. What used to happen then was one `failed to spawn alacritty`
+    /// line in a log nobody is reading, an empty desktop, and an `Alt+Return`
+    /// that silently does nothing. That is a bad first five minutes, and the
+    /// cause is invisible from the only place the user is looking.
+    ///
+    /// So a configured terminal that is not installed falls through to one
+    /// that is. The list is ordered by what a machine running lwfa is likely
+    /// to have, Wayland-native first, ending at `xterm` because it is the one
+    /// thing that is nearly always present once X11 is.
+    ///
+    /// If none of them exist the configured name is returned unchanged, so the
+    /// failure names what was actually asked for rather than the last thing
+    /// tried.
+    ///
+    /// Deliberately silent. It is called on every spawn and once per startup
+    /// check, and an earlier version logged the fallback from in here, which
+    /// printed the same warning three times before the session had opened
+    /// anything. Reporting belongs at startup, where it happens once; see
+    /// [`Self::terminal_report`].
     pub fn terminal(&self) -> String {
+        let configured = self.configured_terminal();
+        // Only the program name is checked: the setting may carry arguments,
+        // and `foo --bar` is not the name of anything on PATH.
+        let program = program_name(&configured);
+        if program.is_empty() || on_path(program) {
+            return configured;
+        }
+        FALLBACK_TERMINALS
+            .iter()
+            .find(|name| on_path(name))
+            .map(|found| (*found).to_string())
+            .unwrap_or(configured)
+    }
+
+    /// What was asked for, before any fallback.
+    fn configured_terminal(&self) -> String {
         crate::auth::setting("LWFA_TERMINAL").unwrap_or_else(|| self.session.terminal.clone())
+    }
+
+    /// What to say about the terminal at startup, if anything.
+    ///
+    /// `None` when the configured terminal exists, which is the ordinary case
+    /// and not worth a line. Otherwise the message, already worded for the
+    /// person reading the log, and whether it is bad enough to be a warning.
+    pub fn terminal_report(&self) -> Option<(String, bool)> {
+        let configured = self.configured_terminal();
+        let program = program_name(&configured);
+        if program.is_empty() || on_path(program) {
+            return None;
+        }
+        let chosen = self.terminal();
+        if on_path(program_name(&chosen)) {
+            Some((
+                format!("{program} is not installed, so {chosen} is used instead"),
+                false,
+            ))
+        } else {
+            Some((
+                format!(
+                    "no terminal emulator found ({program} is not installed, and neither \
+                     is any fallback), so the session starts empty and Alt+Return will do \
+                     nothing. Install one, or set [session] terminal."
+                ),
+                true,
+            ))
+        }
+    }
+
+    /// Is a terminal available at all?
+    pub fn terminal_available(&self) -> bool {
+        on_path(program_name(&self.terminal()))
     }
 
     /// Whether to open a terminal at startup. `LWFA_NO_AUTOSTART` forces off.
@@ -345,6 +418,53 @@ impl Config {
     pub fn xwayland(&self) -> bool {
         std::env::var_os("LWFA_NO_XWAYLAND").is_none() && self.session.xwayland
     }
+}
+
+/// Terminals to fall back to when the configured one is not installed.
+///
+/// Wayland-native first, since lwfa is a Wayland compositor and an X11
+/// terminal costs an Xwayland round trip. `xterm` is last and deliberate: it
+/// is nearly always present once X11 is, so it is the difference between a
+/// working `Alt+Return` and a dead one.
+const FALLBACK_TERMINALS: &[&str] = &[
+    "alacritty",
+    "foot",
+    "kitty",
+    "ghostty",
+    "wezterm",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "xterm",
+];
+
+/// The program a command line names, ignoring its arguments.
+fn program_name(command: &str) -> &str {
+    command.split_whitespace().next().unwrap_or_default()
+}
+
+/// Is this program on `PATH` and executable?
+///
+/// Written out rather than shelling out to `which`, which would be a process
+/// spawn to answer a question about whether a process can be spawned.
+fn on_path(program: &str) -> bool {
+    if program.is_empty() {
+        return false;
+    }
+    // An explicit path is checked directly; PATH does not apply to it.
+    if program.contains('/') {
+        return is_executable(Path::new(program));
+    }
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| is_executable(&dir.join(program)))
+}
+
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 /// Find `configs/defaults.toml`.
@@ -407,6 +527,61 @@ mod tests {
             "127.0.0.1:6733",
             "untouched sections are default"
         );
+    }
+
+    #[test]
+    fn a_configured_terminal_that_exists_is_used_unchanged() {
+        let config = Config {
+            session: Session {
+                terminal: "xterm".to_string(),
+                ..Session::default()
+            },
+            ..Config::default()
+        };
+        // Present on essentially every machine with X11, including this one.
+        assert_eq!(config.terminal(), "xterm");
+    }
+
+    #[test]
+    fn a_missing_terminal_falls_back_to_one_that_exists() {
+        let config = Config {
+            session: Session {
+                terminal: "definitely-not-a-terminal-xyzzy".to_string(),
+                ..Session::default()
+            },
+            ..Config::default()
+        };
+        let chosen = config.terminal();
+        assert_ne!(chosen, "definitely-not-a-terminal-xyzzy");
+        assert!(
+            FALLBACK_TERMINALS.contains(&chosen.as_str()),
+            "fell back to something not on the list: {chosen}"
+        );
+        assert!(config.terminal_available());
+    }
+
+    #[test]
+    fn arguments_do_not_stop_the_program_being_found() {
+        // The setting may carry arguments; `xterm -e foo` is not a filename.
+        let config = Config {
+            session: Session {
+                terminal: "xterm -class lwfa".to_string(),
+                ..Session::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(config.terminal(), "xterm -class lwfa");
+    }
+
+    #[test]
+    fn on_path_understands_the_shapes_a_setting_can_take() {
+        assert!(on_path("sh"));
+        assert!(on_path("/bin/sh"));
+        assert!(!on_path(""));
+        assert!(!on_path("definitely-not-a-program-xyzzy"));
+        // A directory is not a program, however executable its bits look.
+        assert!(!on_path("/usr/bin"));
+        assert!(!on_path("/etc/hostname"));
     }
 
     #[test]
