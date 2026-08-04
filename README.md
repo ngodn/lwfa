@@ -15,14 +15,15 @@ browser on any other device: video, audio, keyboard, mouse, touch, and a
 controller games treat as real hardware.</p>
 
 <p align="center">
-  <video src="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4" controls muted playsinline width="720"></video>
+  <a href="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4">
+    <img src="docs/demo-preview.webp" alt="lwfa driven from an iPad: the navigation rail down the left, the on-screen controller floating over a game running under Proton" width="760">
+  </a>
 </p>
 
 <p align="center"><sub>
-  A session driven from an iPad: windows on the strip, the on-screen keyboard
-  and controller, and a game under Proton.
-  <a href="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4">Download the clip</a>
-  if it does not play here.
+  An iPad driving a desktop in another room, playing a game under Proton with
+  the on-screen controller.
+  <a href="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4">Watch the full clip</a>.
 </sub></p>
 
 ---
