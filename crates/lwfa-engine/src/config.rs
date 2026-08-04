@@ -41,6 +41,12 @@ pub const WINDOW_TITLE: &str = "lwfa";
 /// Where to look for the config, relative to the repository root.
 const CONFIG_PATH: &str = "configs/defaults.toml";
 
+/// The user's own config, under `$XDG_CONFIG_HOME` or `~/.config`.
+const USER_CONFIG_LEAF: &str = "lwfa/config.toml";
+
+/// Machine-wide config, for something an administrator set.
+const SYSTEM_CONFIG: &str = "/etc/lwfa/config.toml";
+
 /// Everything the engine reads out of `defaults.toml`.
 ///
 /// `#[serde(default)]` on every container, so a file containing one section is
@@ -246,9 +252,19 @@ impl Config {
     /// cannot fix from inside.
     pub fn load() -> Self {
         let Some(path) = config_path() else {
-            tracing::debug!("no {CONFIG_PATH} found, using built-in defaults");
+            // Info, not debug. There are four places a config can live now, and
+            // "none of them had one" is the first thing worth knowing when a
+            // setting appears to be ignored.
+            tracing::info!(
+                "no config file found, using built-in defaults. Looked at \
+                 LWFA_CONFIG, {}, {CONFIG_PATH} above this binary, and {SYSTEM_CONFIG}",
+                user_config_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(no HOME)".to_string()),
+            );
             return Self::default();
         };
+        tracing::info!("config: {}", path.display());
         Self::load_from(&path)
     }
 
@@ -467,11 +483,43 @@ fn is_executable(path: &Path) -> bool {
         .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
-/// Find `configs/defaults.toml`.
+/// Where the config lives, in the order the places are tried.
 ///
-/// `LWFA_CONFIG` names it outright. Otherwise walk up from the executable and
-/// from the working directory, which between them cover `cargo run` from
-/// anywhere in the tree and an installed binary sitting next to its configs.
+/// # Why there is more than one
+///
+/// `configs/defaults.toml` alone assumed lwfa is always run out of a
+/// checkout. An installed copy has no repository above it, so it would find
+/// nothing and silently use built-ins, and there was nowhere for an installer
+/// or a person to put a setting that survives an upgrade.
+///
+/// So, highest first:
+///
+/// 1. **`LWFA_CONFIG`**, which names a file outright. An explicit answer wins,
+///    and a bad one is reported rather than quietly skipped: naming a file
+///    that is not there is a mistake, not a preference.
+/// 2. **`$XDG_CONFIG_HOME/lwfa/config.toml`**, falling back to
+///    `~/.config/lwfa/config.toml`. Where a person's own settings belong, and
+///    where an installer writes what it detected about this machine.
+/// 3. **`configs/defaults.toml`** somewhere above the binary or the working
+///    directory. The development copy: a checkout is an unambiguous signal
+///    that this is a working tree rather than an installation.
+/// 4. **`/etc/lwfa/config.toml`**, for a machine-wide setting an
+///    administrator made, which any user's own file may override.
+///
+/// Nothing found is not an error. Every value has a built-in fallback, so an
+/// installation with no config file at all runs on the defaults.
+///
+/// # Why the file is not merged with the ones below it
+///
+/// Because it does not need to be. Every section and every key already falls
+/// back individually, so a `config.toml` holding one line gets built-in
+/// defaults for everything else. A merge would add a second, subtler set of
+/// precedence rules to reason about for no gain, and it would make a file
+/// that *looks* complete behave differently from one that is.
+///
+/// The practical consequence, worth knowing before writing an installer: a
+/// user config shadows the repository copy entirely rather than layering over
+/// it. Write only the machine-specific values, and let the rest fall through.
 fn config_path() -> Option<PathBuf> {
     if let Some(explicit) = std::env::var_os("LWFA_CONFIG") {
         let path = PathBuf::from(explicit);
@@ -485,13 +533,16 @@ fn config_path() -> Option<PathBuf> {
         return None;
     }
 
+    if let Some(user) = user_config_path().filter(|path| path.is_file()) {
+        return Some(user);
+    }
+
     let starts = [
         std::env::current_dir().ok(),
         std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf)),
     ];
-
     for start in starts.into_iter().flatten() {
         for dir in start.ancestors() {
             let candidate = dir.join(CONFIG_PATH);
@@ -500,7 +551,47 @@ fn config_path() -> Option<PathBuf> {
             }
         }
     }
+
+    let system = PathBuf::from(SYSTEM_CONFIG);
+    if system.is_file() {
+        return Some(system);
+    }
     None
+}
+
+/// `$XDG_CONFIG_HOME/lwfa/config.toml`, or the `~/.config` fallback.
+///
+/// Returns the path whether or not it exists, so an installer and the loader
+/// agree on where the file goes.
+pub fn user_config_path() -> Option<PathBuf> {
+    user_config_path_for(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+/// The decision behind [`user_config_path`], with the environment passed in.
+///
+/// Split out so it is testable: mutating the environment is unsafe in edition
+/// 2024 and races every other test in the binary. Same shape as
+/// `input::spawn_dir_for`.
+fn user_config_path_for(
+    xdg: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    // The spec says a relative XDG_CONFIG_HOME must be ignored, not resolved,
+    // and an empty one is the same as unset.
+    if let Some(dir) = xdg
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        return Some(dir.join(USER_CONFIG_LEAF));
+    }
+    home.filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .map(|home| home.join(".config").join(USER_CONFIG_LEAF))
 }
 
 #[cfg(test)]
@@ -527,6 +618,45 @@ mod tests {
             "127.0.0.1:6733",
             "untouched sections are default"
         );
+    }
+
+    #[test]
+    fn the_user_config_follows_xdg_when_it_is_set() {
+        let path = user_config_path_for(Some("/xdg".into()), Some("/home/someone".into()));
+        assert_eq!(path.unwrap(), PathBuf::from("/xdg/lwfa/config.toml"));
+    }
+
+    #[test]
+    fn the_user_config_falls_back_to_dot_config() {
+        let path = user_config_path_for(None, Some("/home/someone".into()));
+        assert_eq!(
+            path.unwrap(),
+            PathBuf::from("/home/someone/.config/lwfa/config.toml")
+        );
+    }
+
+    #[test]
+    fn a_relative_or_empty_xdg_is_ignored_rather_than_resolved() {
+        // The spec is explicit: a relative XDG_CONFIG_HOME is invalid and must
+        // be ignored. Resolving it against the cwd would put the config
+        // wherever the engine happened to be started from.
+        for bad in ["relative/path", ""] {
+            let path = user_config_path_for(Some(bad.into()), Some("/home/someone".into()));
+            assert_eq!(
+                path.unwrap(),
+                PathBuf::from("/home/someone/.config/lwfa/config.toml"),
+                "{bad:?} should have been ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn no_home_and_no_xdg_means_no_user_config() {
+        // A daemon with a scrubbed environment. Built-in defaults, rather than
+        // a path built from an empty string that would land at the root.
+        assert!(user_config_path_for(None, None).is_none());
+        assert!(user_config_path_for(None, Some("".into())).is_none());
+        assert!(user_config_path_for(None, Some("not/absolute".into())).is_none());
     }
 
     #[test]

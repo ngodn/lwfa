@@ -147,11 +147,29 @@ lwfa's own window should take in a host compositor. It is commented, and it is
 the place to look before going hunting for a constant.
 
 Precedence, highest first: environment variables, then `.env` (gitignored,
-machine-local, holds `AUTH_PASS`), then that file, then built-ins. Loading
+machine-local, holds `AUTH_PASS`), then a config file, then built-ins. Loading
 never fails: a missing or broken file falls back to defaults with a warning,
 because a compositor you cannot start is a compositor you cannot fix from
 inside. Unknown keys *are* rejected, so a typo is reported rather than silently
 ignored.
+
+The config file is looked for in four places, highest first:
+
+| Where | For |
+|---|---|
+| `$LWFA_CONFIG` | an explicit answer, and a bad one is reported |
+| `~/.config/lwfa/config.toml` | your own settings, and what an installer writes |
+| `configs/defaults.toml` above the binary | a development checkout |
+| `/etc/lwfa/config.toml` | machine-wide, overridable per user |
+
+`$XDG_CONFIG_HOME` is honoured where set. The engine logs which file it used,
+so a setting that appears to be ignored is one line away from an explanation.
+
+Files do **not** merge. The first one found is the config, and every key it
+omits falls through to the built-in default rather than to the file below it.
+That keeps precedence to one rule instead of two, and it means a minimal
+`config.toml` holding only what is specific to your machine is the right thing
+to write.
 
 The shell cannot read the file (it runs in a browser), so
 `scripts/gen-config.mjs` generates its layout and animation defaults from the
@@ -160,7 +178,7 @@ same source. That runs automatically from `dev`, `build`, `test` and
 
 Environment:
 
-- `LWFA_CONFIG`: path to a config file, overriding `configs/defaults.toml`
+- `LWFA_CONFIG`: path to a config file, overriding every other location
 - `LWFA_TERMINAL`: which terminal to spawn (default `alacritty`, falling back
   to any of foot, kitty, ghostty, wezterm, gnome-terminal, konsole,
   xfce4-terminal or xterm that is actually installed)
