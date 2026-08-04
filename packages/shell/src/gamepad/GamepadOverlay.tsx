@@ -36,6 +36,7 @@ import {
   clampPad,
   type Pad,
 } from "@/gamepad/model"
+import { tap } from "@/lib/haptics"
 import type { GamepadSkin } from "@/lib/prefs"
 import { cn } from "@/lib/utils"
 
@@ -157,7 +158,7 @@ const PlayPad = memo(function PlayPad({
   const holding = useRef(new Map<number, Binding>())
 
   const buzz = useCallback(() => {
-    if (haptics) globalThis.navigator?.vibrate?.(6)
+    if (haptics) tap()
   }, [haptics])
 
   /**
@@ -297,6 +298,30 @@ const PlayPad = memo(function PlayPad({
  *
  * There is no click-to-press: see `onPointerUp`.
  */
+/**
+ * How much of the analog response is curved rather than linear. See `track`.
+ *
+ * 0 is the old straight-line response, 1 a pure square that feels dead around
+ * centre. A bit over half keeps the top of the range honest while giving the
+ * slow half most of the thumb's travel.
+ */
+const EXPO = 0.55
+
+/**
+ * How far a stick's zero may move to meet the thumb, as a share of its radius.
+ *
+ * A real stick is already centred when your thumb arrives, because it is in a
+ * cup and sprung. A drawn one is wherever the thumb landed, so measuring from
+ * the *drawn* centre means every grab starts with a deflection nobody asked
+ * for: put a thumb down slightly high and the character walks forward before
+ * you have moved. Taking the touch point as zero fixes that.
+ *
+ * It is clamped rather than free so that full travel stays reachable in every
+ * direction: grab the very edge of the ring and an unclamped origin would
+ * leave no room to push further that way.
+ */
+const RECENTRE = 0.45
+
 const Stick = memo(function Stick({
   pad,
   style,
@@ -313,6 +338,21 @@ const Stick = memo(function Stick({
   const nub = useRef<HTMLSpanElement | null>(null)
   const held = useRef<Set<number>>(new Set())
   const moved = useRef(false)
+
+  /**
+   * The geometry of the grab in progress, measured once when it starts.
+   *
+   * `cx`/`cy` are the recentred zero (see [`RECENTRE`]); `ox`/`oy` are where
+   * that sits relative to the drawn centre, which is what the nub is
+   * positioned against.
+   */
+  const grabbed = useRef<{
+    radius: number
+    cx: number
+    cy: number
+    ox: number
+    oy: number
+  } | null>(null)
 
   const axes = STICK_AXES[pad.face]
   /** True when this stick reports a real position rather than four keys. */
@@ -363,7 +403,25 @@ const Stick = memo(function Stick({
     }
   }, [])
 
+  /** Measure the stick and choose this grab's zero. See [`RECENTRE`]. */
+  const grab = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    const box = event.currentTarget.getBoundingClientRect()
+    const radius = box.width / 2
+    const bx = box.left + radius
+    const by = box.top + radius
+    let ox = event.clientX - bx
+    let oy = event.clientY - by
+    const away = Math.hypot(ox, oy)
+    const limit = radius * RECENTRE
+    if (away > limit && away > 0) {
+      ox = (ox / away) * limit
+      oy = (oy / away) * limit
+    }
+    grabbed.current = { radius, cx: bx + ox, cy: by + oy, ox, oy }
+  }, [])
+
   const release = useCallback(() => {
+    grabbed.current = null
     if (raf.current !== 0) {
       cancelAnimationFrame(raf.current)
       raf.current = 0
@@ -397,21 +455,37 @@ const Stick = memo(function Stick({
 
   const track = useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
-      const box = event.currentTarget.getBoundingClientRect()
-      const radius = box.width / 2
-      let dx = event.clientX - (box.left + radius)
-      let dy = event.clientY - (box.top + radius)
+      // Geometry is read once per grab, in `grab`, not once per move. A tablet
+      // delivers pointermove at 120Hz and `getBoundingClientRect` forces a
+      // layout flush, so measuring here put a synchronous reflow between every
+      // frame of a thumb drag and the video decoding beside it.
+      const origin = grabbed.current
+      if (!origin) return
+      const { radius, cx, cy } = origin
+      let dx = event.clientX - cx
+      let dy = event.clientY - cy
       const distance = Math.hypot(dx, dy)
 
-      // Clamp the nub to the rim, so it reads as a physical stick rather than
+      // Clamp travel to the rim, so it reads as a physical stick rather than
       // a dot that can be dragged across the screen.
       if (distance > radius) {
         dx = (dx / distance) * radius
         dy = (dy / distance) * radius
       }
+
+      // The nub is drawn against the *drawn* centre, so it carries the
+      // recentring offset too, and is clamped again: a grab near the rim plus
+      // a full push that way would otherwise put it outside its own ring.
+      let px = origin.ox + dx
+      let py = origin.oy + dy
+      const drawn = Math.hypot(px, py)
+      if (drawn > radius) {
+        px = (px / drawn) * radius
+        py = (py / drawn) * radius
+      }
       nub.current?.style.setProperty(
         "transform",
-        `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`,
+        `translate(calc(-50% + ${px}px), calc(-50% + ${py}px))`,
       )
 
       if (analog && axes) {
@@ -432,7 +506,23 @@ const Stick = memo(function Stick({
           moved.current = true
           // Rescale so the stick still reaches 1.0 at the rim rather than
           // starting at 0.25 the moment it leaves the dead zone.
-          const scale = (magnitude - dead) / (1 - dead) / magnitude
+          const linear = (magnitude - dead) / (1 - dead)
+          // Then bend it, because linear travel is the reason a drawn stick
+          // feels twitchy next to a real one.
+          //
+          // A physical stick has a spring whose force rises with travel and a
+          // thumb braced in a cup, so small deflections are easy to hold
+          // steady. A thumb sliding on glass has neither, and the arc it
+          // travels is a couple of centimetres end to end, so half of a walk
+          // speed and half of a sprint are a few millimetres apart. Squaring
+          // part of the response spends more of that arc on the slow half,
+          // which is where aiming and creeping live, and still reaches 1.0 at
+          // the rim so nothing is lost at the top.
+          //
+          // `EXPO` is the share that is curved: 0 would be the old linear
+          // response, 1 a pure square that feels dead near centre.
+          const shaped = linear * (1 - EXPO + EXPO * linear)
+          const scale = shaped / magnitude
           queue(
             Math.max(-1, Math.min(1, nx * scale)),
             Math.max(-1, Math.min(1, ny * scale)),
@@ -472,7 +562,8 @@ const Stick = memo(function Stick({
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
         moved.current = false
-        if (haptics) globalThis.navigator?.vibrate?.(6)
+        if (haptics) tap()
+        grab(event)
         track(event)
       }}
       onPointerMove={(event) => {
