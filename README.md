@@ -9,16 +9,31 @@
 
 <p align="center"><strong>literally work from anywhere</strong></p>
 
-<p align="center">A Wayland compositor with a browser-native shell. The same desktop runs on the
-machine's physical display and in a browser on any other device, and it is
-built to be <em>used</em> from that browser: video, audio, keyboard, mouse,
-touch, and a controller games treat as real hardware.</p>
+<p align="center">A nested Wayland compositor with a browser-native shell. It runs as a window
+inside the compositor you already use, and serves that same session to a
+browser on any other device: video, audio, keyboard, mouse, touch, and a
+controller games treat as real hardware.</p>
+
+<p align="center">
+  <video src="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4" controls muted playsinline width="720"></video>
+</p>
+
+<p align="center"><sub>
+  A session driven from an iPad: windows on the strip, the on-screen keyboard
+  and controller, and a game under Proton.
+  <a href="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4">Download the clip</a>
+  if it does not play here.
+</sub></p>
 
 ---
 
 - **Engine**: Rust, [Smithay](https://smithay.github.io/), running nested in a
   host compositor. Wayland plus XWayland, per-window NVENC encode, PipeWire
   audio capture, a uinput virtual gamepad. Owns mechanism, not policy.
+- **Nested, on purpose**: lwfa is a client of Hyprland, niri, KWin or whatever
+  you run, not a replacement for it and not a session you log into. Starting it
+  cannot take down the session you were working in. It does not drive a display
+  itself; a TTY backend that would is not built.
 - **Shell**: TypeScript, React 19, [shadcn/ui](https://ui.shadcn.com/) on
   Tailwind v4. Owns layout policy and everything the user touches.
 - **Layout**: scrollable tiling, following [niri](https://github.com/niri-wm/niri).
@@ -30,6 +45,9 @@ touch, and a controller games treat as real hardware.</p>
 
 Read [docs/architecture.md](docs/architecture.md) before changing anything
 structural. It records the decisions and, more importantly, why.
+[docs/releasing.md](docs/releasing.md) covers building a release, and
+[docs/macos.md](docs/macos.md) is research on what supporting macOS would
+actually take.
 
 ## Status
 
@@ -57,11 +75,87 @@ What works today:
 - [x] Multi-device: one client drives, the rest watch, control is taken
       explicitly
 - [x] Installs as a PWA, edge to edge on an iPad, with the brand's icons
+- [x] Ships as one self-extracting file with an installer that detects the
+      machine before it writes anything
 
 Deliberately not done yet: built-in TLS (terminate it at a reverse proxy, see
 [Production](#production)), clipboard sync, multi-monitor, DPI awareness, the
 layer-shell chrome path for the native output, and a TTY backend. The engine
 runs nested inside an existing compositor; it does not own a display outright.
+
+## Install
+
+Releases are a single self-extracting file. Download the latest from
+[Releases](https://github.com/ngodn/lwfa/releases), then:
+
+```sh
+chmod +x lwfa-1.0.0.run
+./lwfa-1.0.0.run
+```
+
+It asks about the port, the workspace lwfa should take, TLS and autostart, then
+prints a link with the password already in it. To read the contents before
+running any of it, unpack without installing:
+
+```sh
+./lwfa-1.0.0.run --extract /tmp/lwfa
+```
+
+From a checkout instead:
+
+```sh
+pnpm run build && pnpm run engine:release
+./install.sh
+```
+
+> **Which machines the `.run` works on.** Releases are built in a Debian 11
+> container, so they need glibc 2.31 or newer: Debian 11+, Ubuntu 20.04+,
+> Fedora 32+, RHEL 9+, and every rolling distribution. Building against an old
+> glibc is the only thing that works, because glibc is backward compatible in
+> one direction only, and no amount of bundling changes that.
+>
+> FFmpeg travels with the binary, so the version your distribution ships does
+> not matter. The graphics stack deliberately does not: a bundled libEGL or
+> libdrm cannot talk to your kernel modules, so `libdrm` is the one library you
+> need, and any machine with working graphics already has it.
+>
+> `scripts/package-portable.sh` builds one; `deploy/build/Dockerfile` and
+> `scripts/package.sh` record what is bundled and why.
+
+It looks first and writes second: distribution, host compositor, GPU,
+Xwayland, audio, terminal, `/dev/uinput`, and any controller already plugged
+in. Then it shows what it is about to write and asks.
+
+What it writes is small:
+
+| Path | Holds |
+|---|---|
+| `~/.config/lwfa/config.toml` | only what is specific to this machine |
+| `~/.config/lwfa/env` | the generated password, mode 600 |
+| `~/.config/systemd/user/lwfa.service` | a user service, not a system one |
+| `~/.local/share/lwfa/` | the engine, the shell and the bundled libraries |
+| `/etc/udev/rules.d/60-lwfa-uinput.rules` | access to `/dev/uinput`, only if needed |
+
+Nothing else is touched. The config carries only the machine-specific values,
+so it does not freeze today's defaults: anything it omits follows the built-in
+default and keeps improving across upgrades.
+
+Packages are never installed behind your back. When something is missing it
+says so, prints the exact command for the distribution it found, and asks.
+
+`--yes` takes every default. `--uninstall` undoes it, and asks separately
+before removing the accounts database, since that is the one thing here you
+cannot regenerate.
+
+A user service rather than a system one, deliberately: a system unit has no
+`XDG_RUNTIME_DIR`, starts before any session exists, and cannot express "after
+this user's compositor came up", because the system manager has no
+`graphical-session.target`.
+
+```sh
+systemctl --user start lwfa
+journalctl --user -u lwfa -f
+```
 
 ## Requirements
 
@@ -77,9 +171,11 @@ pnpm install
 
 Hardware and system expectations, all degrading rather than failing:
 
-- **NVIDIA + NVENC** for hardware video. Without it, frames fall back to JPEG,
-  which works but costs bandwidth. Eight concurrent encoder sessions is the
-  consumer-card limit; the ninth window degrades to JPEG.
+- **NVIDIA + NVENC** for hardware video. This is the only hardware encoder
+  supported today; Intel and AMD fall back to JPEG, which works and costs
+  bandwidth. VAAPI would cover both and is the next thing on the list. Eight
+  concurrent NVENC sessions is the consumer-card limit; the ninth window
+  degrades to JPEG.
 - **PipeWire or PulseAudio**, with `parec` on the path, for audio capture.
   No audio without it, nothing else affected.
 - **`/dev/uinput` access** for the virtual controller. Without it the gamepad
@@ -207,7 +303,9 @@ Environment:
 
 ### Using it from another device
 
-Settings live in `.env`, which is gitignored. Start from the template:
+An install done with `install.sh` has already asked this and written the
+answers, so there is nothing to do here. From a checkout, settings live in
+`.env`, which is gitignored:
 
 ```sh
 cp .env.example .env
@@ -215,6 +313,10 @@ sed -i "s|^AUTH_PASS=.*|AUTH_PASS=$(openssl rand -hex 16)|" .env
 sed -i "s|^LWFA_SHELL_ADDR=.*|LWFA_SHELL_ADDR=0.0.0.0:6733|" .env
 chmod 600 .env
 ```
+
+The engine reads the password from `.env` in the working directory first, then
+`~/.config/lwfa/env`, so a checkout you are standing in wins over an install
+and neither has to know about the other.
 
 lwfa listens on **one port**, 6733. A WebSocket upgrade is the protocol,
 everything else is a file from the built shell, so there is one port to open,
@@ -261,57 +363,6 @@ Changing `AUTH_PASS` takes effect within a couple of seconds, no restart
 needed, which matters because restarting the compositor kills every window in
 the session. Existing connections are left alone; only the next one is
 affected.
-
-## Installing
-
-From a release, which is one self-extracting file:
-
-```sh
-./lwfa-1.0.0.run                      # unpack and install
-./lwfa-1.0.0.run --extract /tmp/lwfa  # or unpack and read it first
-```
-
-Or from a checkout:
-
-```sh
-pnpm run build && pnpm run engine:release
-./install.sh
-```
-
-> **Which machines the `.run` works on.** Releases are built in a Debian 11
-> container, so they need glibc 2.31 or newer: Debian 11+, Ubuntu 20.04+,
-> Fedora 32+, RHEL 9+, and every rolling distribution. Building against an old
-> glibc is the only thing that works, because glibc is backward compatible in
-> one direction only, and no amount of bundling changes that.
->
-> FFmpeg travels with the binary, so the version your distribution ships does
-> not matter. The graphics stack deliberately does not: a bundled libEGL or
-> libdrm cannot talk to your kernel modules, so `libdrm` is the one library you
-> need, and any machine with working graphics already has it.
->
-> `scripts/package-portable.sh` builds one; `deploy/build/Dockerfile` and
-> `scripts/package.sh` record what is bundled and why.
-
-It looks first and writes second: distribution, host compositor, GPU,
-Xwayland, audio, terminal, `/dev/uinput`, and any controller already plugged
-in. Then it shows what it is about to write and asks.
-
-What it writes is small: `~/.config/lwfa/config.toml` holding only what is
-specific to this machine, `~/.config/lwfa/env` at mode 600 holding a generated
-password, a systemd **user** service, and one udev rule under `/etc` for the
-virtual controller. Nothing else is touched.
-
-Packages are never installed behind your back. When something is missing it
-says so, prints the exact command for the distribution it found, and asks.
-
-`--yes` takes every default. `--uninstall` undoes it, and asks separately
-before removing the accounts database, since that is the one thing here you
-cannot regenerate.
-
-A user service rather than a system one, deliberately: a system unit has no
-`XDG_RUNTIME_DIR`, starts before any session exists, and cannot express "after
-this user's compositor came up", because the system manager has no
-`graphical-session.target`.
 
 ## Production
 
@@ -517,8 +568,8 @@ enforced by the engine, per account.
 **Windows** has workspaces, per-window actions, pause and resume per stream,
 and **arrange mode**, which edits the desktop on the desktop: drag a window
 along the strip, drop it where it should go, leave. Moves animate on the
-shared spring, so the same gesture looks the same from the physical display
-and from a browser.
+shared spring, so the same gesture looks the same in lwfa's own window and in
+a browser.
 
 Touch also carries a right click: a long press held still for half a second,
 measured in the shell because iOS Safari stopped firing `contextmenu` on long

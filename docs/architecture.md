@@ -2,9 +2,22 @@
 
 **lwfa** = literally work from anywhere.
 
-A Wayland compositor whose shell is written in web technologies, so the same
-desktop is usable on the machine's physical display and from a browser on any
-other device, with layout that responds to the viewport it's being viewed on.
+A Wayland compositor whose shell is written in web technologies, built so one
+desktop can be driven from another device: a tablet, a phone, a laptop in
+another room.
+
+It runs **nested**. lwfa is a Wayland client of the compositor you already use,
+and appears there as a single window. It does not talk to DRM/KMS, does not own
+an output, and is not a session you log into. That is a deliberate boundary and
+not a stage on the way somewhere: it means starting lwfa can never take down
+the session you were working in. A TTY backend that would own a display
+outright is listed in section 6 as not done.
+
+So there are two places the same session is seen. Locally it is lwfa's window
+on the host's screen, usually given a workspace of its own. Remotely it is a
+browser, with layout that responds to the viewport it is being viewed on. The
+remote case is the one the project exists for; the local window is mostly how
+you develop it and how you check what the remote client is being sent.
 
 This document records decisions and the reasoning behind them. It is meant to be
 read before changing anything structural.
@@ -464,13 +477,29 @@ to tell a spinning loop from an idle one from a blocked syscall.
 ## 8. Configuration
 
 `configs/defaults.toml`. Settings that were spread across six modules as `const`
-declarations, in one commented place: ports, terminal, Xwayland, encoder limits,
-render timings, layout defaults, the shared animation spring, audio capture,
-the persistent gamepad, and which workspace lwfa's own window should take in a
-host compositor.
+declarations, in one commented place: the listen address, terminal, Xwayland,
+encoder limits, render timings, layout defaults, the shared animation spring,
+audio capture, the persistent gamepad, and which workspace lwfa's own window
+should take in a host compositor.
 
-Precedence, highest first: environment variables, `.env` (gitignored,
-machine-local, holds `AUTH_PASS`), that file, built-in defaults.
+Precedence, highest first: environment variables, `.env` or
+`~/.config/lwfa/env` (gitignored and mode 600, holds `AUTH_PASS`), a config
+file, built-in defaults.
+
+The config file is looked for in four places, highest first: `$LWFA_CONFIG`,
+`$XDG_CONFIG_HOME/lwfa/config.toml`, `configs/defaults.toml` somewhere above
+the binary, then `/etc/lwfa/config.toml`. The repository copy sits between the
+user's and the system's on purpose: a checkout is an unambiguous signal that
+this is a working tree, and a stray file in `/etc` should not change what a
+developer's tree does.
+
+**Files do not merge.** The first one found is the config, and every key it
+omits falls through to the built-in default rather than to the file below it.
+Layering would mean a second, subtler precedence rule to reason about, and it
+would make a file that looks complete behave differently from one that is. The
+practical consequence is what the installer relies on: write only the values
+specific to this machine, and everything else keeps improving across upgrades
+instead of freezing at install time.
 
 **Loading never fails.** A missing, partial or syntactically broken file falls
 back to defaults with a warning, because a compositor that refuses to start over
@@ -616,6 +645,53 @@ all of it is the same: **treat the network as weather, not as errors.**
 - **Honest liveness**: ten seconds of inbound silence earns a ping, fifteen
   more unanswered means gone. Browsers answer pings below JavaScript, so an
   idle page passes and a terminated one cannot.
+
+### 9.2 One port, and one file to ship
+
+Two things production forced that the numbered list never named.
+
+**The engine serves the shell.** The shell is a static bundle, and in
+development Vite serves it, which is right, because Vite is also doing the hot
+reload. In production that was a second process, and it made a JavaScript
+runtime a dependency of a compositor written in Rust: a second service to
+supervise, a second unit that can fail on its own, and a Node install inside
+any release. The engine already ran an HTTP server, because a WebSocket
+handshake is an HTTP request, so serving a directory beside it removed all of
+that.
+
+It is one port rather than two, because two stopped buying anything once the
+same process served both. They cost a reverse proxy with a path split and a
+priority rule, a second firewall hole, and a question at install time. The
+split is by request instead: an upgrade is the protocol, anything else is a
+file. The shell reaches its socket at the page's own origin, so there is
+nothing cross-origin to configure and one certificate covers everything.
+
+The mechanism is worth knowing before touching `shell.rs`. `tungstenite` reads
+and parses the request itself, so it needs a stream nothing has consumed;
+deciding by reading first would leave the stream mid-request with no way to
+hand it over. `MSG_PEEK` reads without consuming, so the bytes are still there
+afterwards, and the socket type threaded through every connection stays
+`TcpStream`.
+
+**A release is built against an old glibc.** Bundling FFmpeg solves the soname
+problem and not the real one: every bundled library still requires symbols from
+the glibc it was compiled against, and glibc is resolved by the host's loader,
+where symbol versions are a floor rather than a preference. A binary built on a
+rolling distribution simply refuses to start on a stable one.
+
+Nothing packaged alongside can change that, so releases are compiled in a
+Debian 11 container (`deploy/build/Dockerfile`), glibc 2.31, and the packaging
+step runs in there too, because the libraries to bundle have to be that
+container's. FFmpeg is built from source in the image with `--disable-everything`
+plus only what lwfa asks for, which is why the artifact is single-digit
+megabytes rather than eighty: a distribution's FFmpeg links every encoder it
+was configured with, and lwfa calls two of them.
+
+What is deliberately *not* bundled is the graphics stack. A bundled libEGL or
+libdrm cannot talk to the target's kernel modules. That turned out to be almost
+free, because the libraries that most need to be the host's are opened by name
+at run time rather than linked: libwayland-client, libEGL and libcuda never
+appear in the closure at all.
 
 ## 10. Accounts and permissions
 

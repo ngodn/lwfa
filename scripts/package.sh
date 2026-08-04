@@ -225,12 +225,14 @@ if [ -n "$TARGET" ]; then
   exit 0
 fi
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/lwfa-XXXXXX")" || exit 1
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/lwfa-unpack-XXXXXX")" || exit 1
 # Left behind on failure would be a surprise; removed on success is expected.
 trap 'rm -rf "$WORK"' EXIT
 tail -n +"$SKIP" "$0" | tar xz -C "$WORK" || exit 1
 
-DIR="$(find "$WORK" -maxdepth 1 -type d -name 'lwfa-*' | head -1)"
+# -mindepth 1 matters: the temporary directory is itself named lwfa-XXXXXX, so
+# without it find returns the start directory and the payload is never entered.
+DIR="$(find "$WORK" -mindepth 1 -maxdepth 1 -type d -name 'lwfa-*' | head -1)"
 if [ -z "$DIR" ]; then
   echo "this archive is corrupt: no payload directory" >&2
   exit 1

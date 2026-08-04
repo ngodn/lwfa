@@ -108,6 +108,35 @@ ask() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# 128 bits of hex from the kernel. Same shape as the engine's own generator.
+generate_password() { head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+
+# The address a tablet on the same network should type.
+#
+# Deliberately NOT `ip route get 1.1.1.1`. That follows the default route, and
+# on a machine with a VPN the default route is the VPN: it answered with an
+# ExpressVPN tunnel address, which no device on the house network can reach.
+#
+# So: real interfaces only, and RFC1918 only. Virtual interfaces are skipped by
+# name, and 100.64.0.0/10 is skipped outright because that is CGNAT space where
+# both Tailscale and several VPNs live. Bridges from Docker and libvirt are
+# private but belong to the host alone, so they are skipped too.
+#
+# The engine does the same job more thoroughly at startup and prints a link
+# with the token already in it; this is only for the line above that.
+lan_address() {
+  ip -4 -o addr show scope global 2>/dev/null | while read -r _ iface _ cidr _; do
+    case "$iface" in
+      tun*|tap*|wg*|ppp*|docker*|br-*|veth*|virbr*|vmnet*|zt*) continue ;;
+    esac
+    addr="${cidr%%/*}"
+    case "$addr" in
+      100.6[4-9].*|100.[7-9][0-9].*|100.1[0-2][0-7].*) continue ;;
+      192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) printf '%s\n' "$addr"; return ;;
+    esac
+  done | head -1
+}
+
 # ---------------------------------------------------------------------------
 # Uninstall
 # ---------------------------------------------------------------------------
@@ -136,6 +165,11 @@ if [ "$UNINSTALL" = 1 ]; then
       note "kept, so reinstalling keeps your accounts"
     fi
   fi
+  INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/lwfa"
+  if [ -d "$INSTALL_DIR" ]; then
+    rm -rf "$INSTALL_DIR" && ok "removed $INSTALL_DIR"
+  fi
+
   if [ -d "$CONFIG_DIR" ]; then
     if confirm "Delete the config and password at $CONFIG_DIR?" n; then
       rm -rf "$CONFIG_DIR" && ok "removed $CONFIG_DIR"
@@ -189,6 +223,33 @@ else
   exit 1
 fi
 
+# --- is this a release payload, and is it about to disappear? ---------------
+#
+# A .run unpacks to a temporary directory and deletes it on the way out. The
+# systemd unit records an absolute path to the engine, so installing from
+# where the payload happens to be sitting produces a service pointing at
+# nothing the moment the installer exits.
+#
+# So a payload is copied somewhere permanent first. A checkout is not: there
+# the binary already has a home, and copying it would leave a stale duplicate
+# behind every time it was rebuilt.
+#
+# The tell is `libexec/`, which only the packaged layout has.
+PAYLOAD=0
+[ -d "$ROOT/libexec" ] && [ -d "$ROOT/lib" ] && PAYLOAD=1
+INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/lwfa"
+if [ "$PAYLOAD" = 1 ]; then
+  ok "release payload, so it will be copied to $INSTALL_DIR"
+  # Where things will *end up*, decided now rather than after the copy.
+  #
+  # The summary, the config file and the systemd unit all record paths, and if
+  # they are resolved at different moments they disagree: an earlier version
+  # printed the temporary directory in the summary and wrote it into the
+  # config, so the installed session pointed at a directory that no longer
+  # existed. One decision, used everywhere.
+  ENGINE="$INSTALL_DIR/libexec/lwfa-engine"
+fi
+
 # --- the built shell --------------------------------------------------------
 SHELL_DIR=""
 for candidate in "$ROOT/share/lwfa/shell" "$ROOT/packages/shell/dist" "$ROOT/shell"; do
@@ -196,6 +257,8 @@ for candidate in "$ROOT/share/lwfa/shell" "$ROOT/packages/shell/dist" "$ROOT/she
 done
 if [ -n "$SHELL_DIR" ]; then
   ok "shell: $SHELL_DIR"
+  # Same reasoning as ENGINE above: name the destination, not the staging area.
+  [ "$PAYLOAD" = 1 ] && SHELL_DIR="$INSTALL_DIR/share/lwfa/shell"
 else
   bad "no built shell found"
   note "build it with: pnpm run build"
@@ -375,11 +438,20 @@ if [ -f "$ENV_FILE" ] && grep -q '^AUTH_PASS=' "$ENV_FILE" 2>/dev/null; then
 fi
 if [ -z "$AUTH_PASS" ]; then
   if confirm "Generate a random password?" y; then
-    AUTH_PASS="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    AUTH_PASS="$(generate_password)"
   else
-    while [ -z "$AUTH_PASS" ]; do
+    # Bounded, not `while [ -z ... ]`. An unbounded loop here spins forever the
+    # moment stdin runs out, which is what happens under `--yes`, in a script,
+    # or when answers are piped in. Falling back to a generated password beats
+    # both hanging and installing without one.
+    for _ in 1 2 3; do
       AUTH_PASS="$(ask 'Password' '')"
+      [ -n "$AUTH_PASS" ] && break
     done
+    if [ -z "$AUTH_PASS" ]; then
+      AUTH_PASS="$(generate_password)"
+      warn "no password given, so one was generated"
+    fi
   fi
 fi
 
@@ -392,6 +464,8 @@ say "  password  $ENV_FILE ${DIM}(mode 600)${RESET}"
 say "  service   $UNIT_FILE ${DIM}(a user service, not a system one)${RESET}"
 [ "$UINPUT_OK" = 0 ] && say "  udev rule $UDEV_RULE ${DIM}(needs pkexec)${RESET}"
 say ""
+[ "$PAYLOAD" = 1 ] && say "  files     $INSTALL_DIR"
+say ""
 say "  listening on   $BIND"
 say "  shell from     ${SHELL_DIR:-<none built>}"
 say "  terminal       ${TERMINAL:-<none>}"
@@ -403,6 +477,31 @@ if ! confirm "Write these?" y; then
 fi
 
 mkdir -p "$CONFIG_DIR" "$UNIT_DIR" "$STATE_DIR"
+
+# Give the payload a permanent home before anything records where it is.
+if [ "$PAYLOAD" = 1 ]; then
+  rm -rf "$INSTALL_DIR"
+  mkdir -p "$INSTALL_DIR"
+  # -a to keep the symlinks and the executable bits; the RPATH is relative to
+  # the binary, so the tree has to move as a whole to keep resolving.
+  cp -a "$ROOT/libexec" "$ROOT/lib" "$ROOT/share" "$INSTALL_DIR/" 2>/dev/null
+  [ -d "$ROOT/bin" ] && cp -a "$ROOT/bin" "$INSTALL_DIR/"
+  [ -d "$ROOT/deploy" ] && cp -a "$ROOT/deploy" "$INSTALL_DIR/"
+  # The uninstaller has to outlive the temporary directory it ran from.
+  cp -a "$ROOT/install.sh" "$INSTALL_DIR/install.sh"
+  ok "installed to $INSTALL_DIR"
+  # Check the copy resolves its libraries, without running it.
+  #
+  # Never execute the engine to test it. It is a compositor, not a tool: it has
+  # no --help and no --version, so anything that looks like a probe just starts
+  # a session and blocks the installer until it exits. `ldd` answers the only
+  # question worth asking here, which is whether the move broke the RPATH.
+  if ldd "$ENGINE" 2>&1 | grep -q "not found"; then
+    warn "the installed engine has unresolved libraries:"
+    ldd "$ENGINE" 2>&1 | grep "not found" | sed 's/^/    /'
+    note "libdrm is usually the missing one; install your distribution's libdrm"
+  fi
+fi
 
 # Only what is specific to this machine. Everything omitted falls through to
 # the engine's built-in defaults, so this file keeps working across upgrades
@@ -533,24 +632,49 @@ say "             ${DIM}also in $ENV_FILE${RESET}"
 say ""
 say "  start      systemctl --user start lwfa"
 say "  logs       journalctl --user -u lwfa -f"
-say "  remove     $ROOT/install.sh --uninstall"
+if [ "$PAYLOAD" = 1 ]; then
+  say "  remove     $INSTALL_DIR/install.sh --uninstall"
+else
+  say "  remove     $ROOT/install.sh --uninstall"
+fi
 say ""
 if [ "$BIND" = "127.0.0.1:$PORT" ]; then
   say "  open       http://localhost:$PORT/"
 else
-  LAN="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
-  say "  open       http://${LAN:-<this machine>}:$PORT/"
+  say "  open       http://$(lan_address):$PORT/"
 fi
 say ""
 say "  ${DIM}The engine prints a one-tap link with the password in it at startup.${RESET}"
 
+# Only suggest a window rule that is not already there.
+#
+# Printing it unconditionally tells people who set it up months ago to go and
+# do something they have already done, which trains them to skip the last
+# section of the installer.
+# Fixed strings, not a regex. The rule contains ^ ( ) and $, every one of
+# which means something to grep and to the shell, and an earlier version
+# quietly matched nothing because the trailing $ became end-of-line.
+rule_present() {
+  grep -rqsF -e 'class ^(lwfa)$' -e 'app-id="lwfa"' "$@" 2>/dev/null
+}
+
 if [ "$PLACEMENT" = "auto" ] && [ "$COMPOSITOR" = "Hyprland" ]; then
-  say ""
-  say "  Add to ~/.config/hypr/hyprland.conf so lwfa lands on its own workspace:"
-  say "    ${DIM}windowrule = workspace $WORKSPACE silent, match:class ^(lwfa)\$${RESET}"
-  say "    ${DIM}windowrule = fullscreen true, match:class ^(lwfa)\$${RESET}"
+  if rule_present "$HOME/.config/hypr/"; then
+    say ""
+    ok "Hyprland already has a window rule for lwfa; nothing to add"
+  else
+    say ""
+    say "  Add to ~/.config/hypr/hyprland.conf so lwfa lands on its own workspace:"
+    say "    ${DIM}windowrule = workspace $WORKSPACE silent, match:class ^(lwfa)\$${RESET}"
+    say "    ${DIM}windowrule = fullscreen true, match:class ^(lwfa)\$${RESET}"
+  fi
 elif [ "$COMPOSITOR" = "niri" ]; then
-  say ""
-  say "  Add to ~/.config/niri/config.kdl:"
-  say "    ${DIM}window-rule { match app-id=\"lwfa\"; open-on-workspace \"$WORKSPACE\"; open-fullscreen true }${RESET}"
+  if rule_present "$HOME/.config/niri/"; then
+    say ""
+    ok "niri already has a window rule for lwfa; nothing to add"
+  else
+    say ""
+    say "  Add to ~/.config/niri/config.kdl:"
+    say "    ${DIM}window-rule { match app-id=\"lwfa\"; open-on-workspace \"$WORKSPACE\"; open-fullscreen true }${RESET}"
+  fi
 fi
