@@ -38,6 +38,11 @@ node_modules/
 # Vite build output for the shell.
 /packages/shell/dist/
 
+# Deployment configs filled in for one particular machine. The templates in
+# deploy/ are committed and generic; a copy with your real hostname, LAN
+# address and certificate paths belongs here and nowhere else.
+/deploy/local/
+
 # The accounts database. Machine-local, holds password hashes, and belongs to
 # the machine it authenticates for. Its location is XDG_STATE_HOME by default;
 # this covers a stray LWFA_DB pointed at the repo.

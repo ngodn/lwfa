@@ -242,11 +242,16 @@ pnpm run engine:release    # the engine, optimised (fat LTO)
 
 Put a reverse proxy with TLS in front of both ports, on **one hostname**: the
 page and the WebSocket must share it, because a browser refuses a plaintext
-socket from an HTTPS page. [`deploy/traefik-lwfa.yml`](deploy/traefik-lwfa.yml)
-is a working Traefik config: `/engine` routes to the socket at higher priority,
-everything else to the page, and the prefix is deliberately not stripped
-(stripping the whole path leaves an empty request-URI and the upgrade dies with
-a 502). Any proxy that can do the same split works; nginx does.
+socket from an HTTPS page. [`deploy/`](deploy/) has a template for each of the
+two proxies people actually run, [Traefik](deploy/traefik-lwfa.yml) and
+[nginx](deploy/nginx-lwfa.conf): `/engine` routes to the socket at higher
+priority, everything else to the page, and the prefix is deliberately not
+stripped (stripping the whole path leaves an empty request-URI and the upgrade
+dies with a 502). Any proxy that can do the same split works.
+
+Both templates carry placeholder values, `lwfa.example.com` and a TEST-NET-1
+address, so an unedited copy fails visibly instead of routing somewhere real.
+Fill one in and keep it in `deploy/local/`, which is gitignored.
 
 HTTPS is not only transport security here. WebCodecs requires a secure
 context, so the proxy is also what turns the stream from JPEG into hardware
