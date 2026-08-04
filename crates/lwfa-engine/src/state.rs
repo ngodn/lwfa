@@ -30,7 +30,7 @@ use smithay::wayland::shm::ShmState;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::xwayland_shell::XWaylandShellState;
-use smithay::xwayland::X11Wm;
+use smithay::xwayland::{X11Surface, X11Wm};
 
 use crate::capture::SurfaceCapture;
 use crate::encode::EncodeWorker;
@@ -182,6 +182,11 @@ pub struct Lwfa {
     /// A pending focus re-assert, so layout churn coalesces into one. See
     /// [`Self::schedule_reassert`].
     reassert_timer: Option<smithay::reexports::calloop::RegistrationToken>,
+    /// When a menu-shaped override-redirect window last mapped.
+    ///
+    /// See [`Lwfa::x11_popup_open`], which uses it to stop a popup that never
+    /// unmaps from vetoing the focus re-assert for the rest of the session.
+    last_popup_map: Option<std::time::Instant>,
     /// Repairs X input focus when it points at nothing. See `xfocus.rs`.
     pub xfocus: Option<crate::xfocus::Guardian>,
     /// A controller surviving a session flap. See [`Self::begin_session_grace`].
@@ -297,6 +302,7 @@ impl Lwfa {
             loop_signal,
             loop_handle,
             reassert_timer: None,
+            last_popup_map: None,
             xfocus: None,
             parked_pad: None,
             grace_until: None,
@@ -1187,15 +1193,64 @@ impl Lwfa {
         guardian.ensure(expected);
     }
 
-    /// Whether an X11 menu, tooltip or other override-redirect window is up.
+    /// Smaller than this in either direction and it is not a menu.
+    ///
+    /// Override-redirect does not mean "menu", it means "not managed", and
+    /// toolkits use it for invisible machinery as well: input proxies, IME
+    /// anchors, drag sources, focus helpers. Those are 1x1 at the origin or
+    /// just off it, and unlike a menu they are mapped for the entire life of
+    /// the process.
+    ///
+    /// Treating them as menus is what made the re-assert below refuse
+    /// *forever*. Live, with Assassin's Creed Odyssey under Proton:
+    ///
+    ///   OR MAP   0x6e000ae 1x1 at (0,0)     an input proxy, not a menu
+    ///   reassert REFUSED, popups up: ["0x6e000ae 1x1"]
+    ///   reassert REFUSED, popups up: ["0x6e000ae 1x1"]   ... and on, forever
+    ///
+    /// The game never got its X input focus back and ignored the controller
+    /// from that moment on, which presented as the on-screen pad working right
+    /// after launch and being dead by the time the menu appeared.
+    const MENU_MIN: i32 = 16;
+
+    /// How long a mapped popup may hold the re-assert off.
+    ///
+    /// A menu is a thing somebody is looking at right now, so protecting it
+    /// for a few seconds covers the case this exists for. Past that, a window
+    /// still claiming to be a popup is machinery that is not going away, and
+    /// letting it veto focus indefinitely costs a game its controller. The
+    /// re-assert is cheap and idempotent, so erring towards running it is the
+    /// safe direction.
+    const MENU_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Whether an X11 menu or tooltip is up *right now*.
     ///
     /// These are exactly the windows that die when focus moves. See
     /// [`Self::reassert_focus`].
     fn x11_popup_open(&self) -> bool {
+        if self
+            .last_popup_map
+            .is_none_or(|at| at.elapsed() > Self::MENU_GRACE)
+        {
+            return false;
+        }
         self.space
             .elements()
             .filter_map(|w| w.x11_surface())
-            .any(|x| x.is_override_redirect())
+            .any(|x| {
+                x.is_override_redirect() && {
+                    let size = x.geometry().size;
+                    size.w >= Self::MENU_MIN && size.h >= Self::MENU_MIN
+                }
+            })
+    }
+
+    /// Note that something menu-shaped just appeared. See [`Self::x11_popup_open`].
+    pub fn note_popup_mapped(&mut self, surface: &X11Surface) {
+        let size = surface.geometry().size;
+        if size.w >= Self::MENU_MIN && size.h >= Self::MENU_MIN {
+            self.last_popup_map = Some(std::time::Instant::now());
+        }
     }
 
     pub fn reassert_focus(&mut self) {

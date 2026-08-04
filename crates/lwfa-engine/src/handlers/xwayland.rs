@@ -98,6 +98,7 @@ impl XwmHandler for Lwfa {
     /// A menu or tooltip placing itself. See the module comment.
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, surface: X11Surface) {
         let location = surface.geometry().loc;
+        self.note_popup_mapped(&surface);
         self.space
             .map_element(Window::new_x11_window(surface), location, true);
     }
