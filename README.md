@@ -16,14 +16,15 @@ controller games treat as real hardware.</p>
 
 <p align="center">
   <a href="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4">
-    <img src="docs/demo-preview.webp" alt="lwfa driven from an iPad: the navigation rail down the left, the on-screen controller floating over a game running under Proton" width="760">
+    <img src="docs/demo-preview.webp" alt="lwfa driven from an iPad: a terminal, a video in Firefox, the on-screen controller being edited over a running game, and the game itself" width="760">
   </a>
 </p>
 
 <p align="center"><sub>
-  An iPad driving a desktop in another room, playing a game under Proton with
-  the on-screen controller.
-  <a href="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4">Watch the full clip</a>.
+  An iPad driving a desktop in another room: a terminal on the on-screen
+  keyboard, video in Firefox, the controller layout being edited while a game
+  runs behind it, and that game played through the on-screen pad.
+  <a href="https://github.com/ngodn/lwfa/raw/master/docs/demo.mp4">Watch the full clip, with sound</a>.
 </sub></p>
 
 ---
