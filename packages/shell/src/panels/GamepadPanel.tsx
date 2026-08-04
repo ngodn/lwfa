@@ -6,10 +6,19 @@
  * thing it is controlling, and it has to stay there after this panel closes.
  */
 
-import { memo, useState } from "react"
-import { Copy, Gamepad2, Pencil, RotateCcw } from "lucide-react"
+import { memo, useRef, useState } from "react"
+import {
+  ClipboardPaste,
+  Copy,
+  Download,
+  Gamepad2,
+  Pencil,
+  RotateCcw,
+  Upload,
+} from "lucide-react"
 import { patchPrefs, usePrefs, type GamepadSkin } from "@/lib/prefs"
 import { DEFAULT_LAYOUT } from "@/gamepad/model"
+import { backupFilename, makeBackup, readBackup } from "@/gamepad/backup"
 import { setGamepad, useGamepad } from "@/gamepad/store"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -54,7 +63,7 @@ function GamepadPanel() {
             {editing ? "Done" : "Edit"}
           </Button>
         </FieldRow>
-        <CopyLayout />
+        <Backup />
       </PanelSection>
 
       <PanelSection
@@ -133,40 +142,167 @@ function GamepadPanel() {
 }
 
 /**
- * Put this device's arrangement on the clipboard, as JSON.
+ * Backup and restore: the whole controller, not only its arrangement.
  *
- * The layout lives in this browser's storage and nowhere else, so there is
- * otherwise no way to get a carefully tuned arrangement off a tablet: no
- * console to open, no file to reach. One tap here, paste it anywhere. It is
- * also how a layout worth making the default gets sent home.
+ * See `gamepad/backup.ts` for what "whole" means and why a file is offered
+ * alongside the clipboard.
  */
-const CopyLayout = memo(function CopyLayout() {
+const Backup = memo(function Backup() {
   const { pads } = useGamepad()
+  const prefs = usePrefs()
   const [copied, setCopied] = useState(false)
+  const [pasting, setPasting] = useState(false)
+  const [pasted, setPasted] = useState("")
+  const [problem, setProblem] = useState<string | null>(null)
+  const [restored, setRestored] = useState(false)
+  const file = useRef<HTMLInputElement | null>(null)
+
+  const bundle = () => makeBackup(pads, prefs.gamepad)
+
+  const apply = (text: string) => {
+    const result = readBackup(text)
+    if (!result.ok) {
+      setProblem(result.problem)
+      setRestored(false)
+      return
+    }
+    // Pads first: the store persists them, and a failure to write settings
+    // afterwards should still leave the arrangement restored.
+    setGamepad({ pads: result.backup.pads })
+    patchPrefs("gamepad", result.backup.settings)
+    setProblem(null)
+    setRestored(true)
+    setPasting(false)
+    setPasted("")
+    globalThis.setTimeout(() => setRestored(false), 2500)
+  }
+
   return (
-    <FieldRow>
-      <Field
-        label="Copy layout"
-        hint="Puts this arrangement on the clipboard as text."
-      />
-      <Button
-        size="sm"
-        variant="outline"
-        className="gap-1.5"
-        onClick={() => {
-          void navigator.clipboard
-            ?.writeText(JSON.stringify(pads, null, 1))
-            .then(() => {
-              setCopied(true)
-              globalThis.setTimeout(() => setCopied(false), 1500)
-            })
-            .catch(() => {})
-        }}
-      >
-        <Copy className="size-3.5" aria-hidden />
-        {copied ? "Copied" : "Copy"}
-      </Button>
-    </FieldRow>
+    <>
+      <FieldRow>
+        <Field
+          label="Save a backup"
+          hint="Layout, sizes, positions and every setting on this panel."
+        />
+        <div className="flex gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() => {
+              const text = JSON.stringify(bundle(), null, 1)
+              const url = URL.createObjectURL(
+                new Blob([text], { type: "application/json" }),
+              )
+              const link = document.createElement("a")
+              link.href = url
+              link.download = backupFilename()
+              link.click()
+              // Revoked on the next tick rather than immediately: Safari has
+              // not necessarily started reading the blob when `click` returns.
+              globalThis.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+            }}
+          >
+            <Download className="size-3.5" aria-hidden />
+            File
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() => {
+              void navigator.clipboard
+                ?.writeText(JSON.stringify(bundle(), null, 1))
+                .then(() => {
+                  setCopied(true)
+                  globalThis.setTimeout(() => setCopied(false), 1500)
+                })
+                .catch(() => {})
+            }}
+          >
+            <Copy className="size-3.5" aria-hidden />
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
+      </FieldRow>
+
+      <FieldRow>
+        <Field label="Restore" hint="Replaces the controller with a saved one." />
+        <div className="flex gap-1.5">
+          <input
+            ref={file}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(event) => {
+              const chosen = event.target.files?.[0]
+              // Cleared so choosing the same file twice fires again.
+              event.target.value = ""
+              if (!chosen) return
+              void chosen
+                .text()
+                .then(apply)
+                .catch(() => setProblem("That file could not be read."))
+            }}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() => file.current?.click()}
+          >
+            <Upload className="size-3.5" aria-hidden />
+            File
+          </Button>
+          <Button
+            size="sm"
+            variant={pasting ? "default" : "outline"}
+            className="gap-1.5"
+            aria-pressed={pasting}
+            onClick={() => {
+              setPasting((open) => !open)
+              setProblem(null)
+            }}
+          >
+            <ClipboardPaste className="size-3.5" aria-hidden />
+            Paste
+          </Button>
+        </div>
+      </FieldRow>
+
+      {pasting ? (
+        <div className="space-y-2">
+          <textarea
+            value={pasted}
+            onChange={(event) => setPasted(event.target.value)}
+            rows={4}
+            spellCheck={false}
+            placeholder="Paste a backup here"
+            aria-label="Backup text"
+            className="w-full rounded-md border bg-transparent p-2 font-mono text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          />
+          <Button
+            size="sm"
+            className="w-full"
+            disabled={pasted.trim() === ""}
+            onClick={() => apply(pasted)}
+          >
+            Restore from text
+          </Button>
+        </div>
+      ) : null}
+
+      {problem ? (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+          {problem}
+        </p>
+      ) : null}
+      {restored ? (
+        <p className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
+          Controller restored.
+        </p>
+      ) : null}
+    </>
   )
 })
 
