@@ -110,14 +110,14 @@ impl Default for Gamepad {
 #[serde(default, deny_unknown_fields)]
 pub struct Net {
     pub shell_addr: String,
-    pub shell_port: u16,
+    pub shell_dir: String,
 }
 
 impl Default for Net {
     fn default() -> Self {
         Self {
-            shell_addr: "127.0.0.1:6734".to_string(),
-            shell_port: 6733,
+            shell_addr: "127.0.0.1:6733".to_string(),
+            shell_dir: String::new(),
         }
     }
 }
@@ -279,6 +279,58 @@ impl Config {
         crate::auth::setting("LWFA_SHELL_ADDR").unwrap_or_else(|| self.net.shell_addr.clone())
     }
 
+    /// Where the built shell lives, if it can be found.
+    ///
+    /// `LWFA_SHELL_DIR` names it outright, then `[net] shell_dir`, then the
+    /// places it actually ends up: `packages/shell/dist` somewhere above the
+    /// binary or the working directory, which covers `cargo run` from anywhere
+    /// in the tree, and `share/lwfa/shell` beside an installed binary or under
+    /// the usual prefixes.
+    ///
+    /// `None` is not an error. The engine serves the protocol either way, and a
+    /// developer running Vite for hot reload has no `dist/` and does not want
+    /// one. It is logged once at startup so a *production* run missing its
+    /// page says so plainly rather than answering 404 forever.
+    pub fn shell_dir(&self) -> Option<PathBuf> {
+        if let Some(named) = crate::auth::setting("LWFA_SHELL_DIR").or_else(|| {
+            Some(self.net.shell_dir.clone()).filter(|configured| !configured.is_empty())
+        }) {
+            let path = PathBuf::from(named);
+            if path.join("index.html").is_file() {
+                return Some(path);
+            }
+            tracing::warn!(
+                "the configured shell directory {} has no index.html in it",
+                path.display()
+            );
+            return None;
+        }
+
+        let starts = [
+            std::env::current_dir().ok(),
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(Path::to_path_buf)),
+        ];
+        for start in starts.into_iter().flatten() {
+            for dir in start.ancestors() {
+                for relative in ["packages/shell/dist", "share/lwfa/shell", "shell"] {
+                    let candidate = dir.join(relative);
+                    if candidate.join("index.html").is_file() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+        for prefix in ["/usr/share/lwfa/shell", "/usr/local/share/lwfa/shell"] {
+            let candidate = PathBuf::from(prefix);
+            if candidate.join("index.html").is_file() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
     /// Which terminal to spawn. `LWFA_TERMINAL` wins, as it always did.
     pub fn terminal(&self) -> String {
         crate::auth::setting("LWFA_TERMINAL").unwrap_or_else(|| self.session.terminal.clone())
@@ -338,7 +390,7 @@ mod tests {
     #[test]
     fn an_empty_file_is_all_defaults() {
         let parsed: Config = toml::from_str("").expect("an empty file is valid");
-        assert_eq!(parsed.net.shell_port, Net::default().shell_port);
+        assert_eq!(parsed.net.shell_addr, Net::default().shell_addr);
         assert_eq!(parsed.host.workspace, Host::default().workspace);
         assert_eq!(parsed.stream.gop, Stream::default().gop);
     }
@@ -351,7 +403,8 @@ mod tests {
         assert_eq!(parsed.host.workspace, 4);
         assert!(parsed.host.fullscreen, "unset keys keep their default");
         assert_eq!(
-            parsed.net.shell_port, 6733,
+            parsed.net.shell_addr,
+            "127.0.0.1:6733",
             "untouched sections are default"
         );
     }
@@ -376,7 +429,7 @@ mod tests {
         std::fs::write(&path, "this is not toml = = =").expect("write");
 
         let config = Config::load_from(&path);
-        assert_eq!(config.net.shell_port, 6733);
+        assert_eq!(config.net.shell_addr, "127.0.0.1:6733");
         let _ = std::fs::remove_file(&path);
     }
 

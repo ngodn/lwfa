@@ -91,13 +91,19 @@ lwfa runs nested inside whatever compositor you are already using, as an
 ordinary window. Your session is never at risk.
 
 ```sh
-cargo run -p lwfa-engine
+pnpm run build                # the shell, once
+cargo run -p lwfa-engine      # serves it, and the protocol, on 6733
 ```
 
-Then start the shell, which is what actually lays windows out:
+For development you want Vite instead, for hot reload. It takes 6733 and
+proxies `/engine` back to the engine, so the engine moves up one:
 
 ```sh
-pnpm --filter @lwfa/shell dev     # http://localhost:6733
+scripts/dev-nested.sh                              # sets this up for you
+pnpm --filter @lwfa/shell dev                      # http://localhost:6733
+
+# or by hand:
+LWFA_SHELL_ADDR=127.0.0.1:6734 cargo run -p lwfa-engine
 ```
 
 Until a shell connects the engine runs in **safe mode**: focused window
@@ -162,9 +168,14 @@ Environment:
   when the window is parked on a hidden workspace and the session is only used
   remotely; presenting to a window the host never shows can block the engine
   (see `[window] preview` in the config for the full story)
-- `LWFA_SHELL_ADDR`: where the engine listens (default `127.0.0.1:6734`;
-  use `0.0.0.0:6734` to reach it from other devices)
-- `SHELL_PORT`: port for the shell page (default `6733`)
+- `LWFA_SHELL_ADDR`: where the engine listens, for both the page and the
+  protocol (default `127.0.0.1:6733`; use `0.0.0.0:6733` to reach it from
+  other devices). During development Vite serves the page on 6733, so the
+  engine moves to `127.0.0.1:6734` and Vite proxies `/engine` back to it
+- `LWFA_SHELL_DIR`: where the built shell is, when it is not in one of the
+  usual places (`packages/shell/dist` above the binary, `share/lwfa/shell`
+  beside it, or the system prefixes)
+- `SHELL_PORT`: port for Vite's dev server (default `6733`)
 - `AUTH_PASS`: the shared password. Read from `.env` if not in the environment.
   A temporary one is generated if neither is set, which breaks bookmarked URLs
 - `LWFA_PROFILE`: log per-window capture timings
@@ -181,22 +192,24 @@ Settings live in `.env`, which is gitignored. Start from the template:
 ```sh
 cp .env.example .env
 sed -i "s|^AUTH_PASS=.*|AUTH_PASS=$(openssl rand -hex 16)|" .env
-sed -i "s|^LWFA_SHELL_ADDR=.*|LWFA_SHELL_ADDR=0.0.0.0:6734|" .env
+sed -i "s|^LWFA_SHELL_ADDR=.*|LWFA_SHELL_ADDR=0.0.0.0:6733|" .env
 chmod 600 .env
 ```
 
-lwfa uses the **6733+** port block:
+lwfa listens on **one port**, 6733. A WebSocket upgrade is the protocol,
+everything else is a file from the built shell, so there is one port to open,
+one to type, and nothing for the page to find.
 
-| Port | What | Typed by hand? |
-|---|---|---|
-| 6733 | shell page | **yes**, this is the one you open |
-| 6734 | engine protocol | no, the page finds it |
+During development that port belongs to Vite, which serves the page with hot
+reload and proxies `/engine` back to the engine on 6734. The shell always
+reaches its socket at the page's own origin, so it behaves identically either
+way.
 
-Then run both halves and open the link the engine prints:
+Build the shell once, then run the engine and open the link it prints:
 
 ```sh
+pnpm run build
 cargo run -p lwfa-engine
-pnpm --filter @lwfa/shell dev    # binds 0.0.0.0 on SHELL_PORT
 ```
 
 ```
@@ -235,9 +248,8 @@ The dev servers work, but the production pieces are built and committed:
 
 ```sh
 pnpm run build             # the shell, built to packages/shell/dist
-pnpm run start             # serve it, same host and port rules as dev
 pnpm run engine:release    # the engine, optimised (fat LTO)
-./target/release/lwfa-engine
+./target/release/lwfa-engine   # serves both, on one port
 ```
 
 Put a reverse proxy with TLS in front of both ports, on **one hostname**: the

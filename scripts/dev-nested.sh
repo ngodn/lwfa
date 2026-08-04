@@ -43,6 +43,13 @@ if [ -z "${LWFA_SHELL_TOKEN:-}" ]; then
   echo "      and any bookmarked shell URL will stop working. Export one to pin it."
 fi
 
+# Vite owns 6733 during development, which is the port the engine serves the
+# page on in production, so the engine moves up one and Vite proxies /engine
+# back to it. See the `proxy` block in packages/shell/vite.config.ts.
+# An explicit LWFA_SHELL_ADDR still wins, for pointing a second engine somewhere
+# else while the first keeps running.
+export LWFA_SHELL_ADDR="${LWFA_SHELL_ADDR:-127.0.0.1:6734}"
+
 "$BIN" "$@" &
 PID=$!
 trap 'kill $PID 2>/dev/null' EXIT

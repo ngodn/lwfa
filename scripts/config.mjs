@@ -9,7 +9,7 @@
  * Also usable from a shell script, which is why there is a CLI mode:
  *
  *   node scripts/config.mjs host.workspace     # -> 10
- *   node scripts/config.mjs net.shell_port     # -> 6733
+ *   node scripts/config.mjs net.shell_addr     # -> 127.0.0.1:6733
  *
  * Missing keys print nothing and exit non-zero, so `$(... || echo fallback)`
  * behaves the way a shell script author would expect.

@@ -10,10 +10,12 @@ import { describe, expect, it } from "vitest"
 import { ENGINE_PATH, engineFor, engineOverride } from "../src/lib/engineUrl"
 
 describe("engineFor", () => {
-  it("goes straight to the engine's port over plain HTTP", () => {
+  it("uses the page's own origin over plain HTTP", () => {
+    // One port serves the page and the socket, so the port the page came from
+    // is the port the socket is on. There is no second one to guess.
     expect(
       engineFor({ protocol: "http:", hostname: "192.168.1.51", host: "192.168.1.51:6733" }),
-    ).toBe("ws://192.168.1.51:6734")
+    ).toBe(`ws://192.168.1.51:6733${ENGINE_PATH}`)
   })
 
   it("uses the page's own origin over TLS", () => {
@@ -45,7 +47,7 @@ describe("engineFor", () => {
   it("falls back to localhost when there is no hostname", () => {
     // `file://` and some embedded webviews report an empty hostname.
     expect(engineFor({ protocol: "file:", hostname: "", host: "" })).toBe(
-      "ws://localhost:6734",
+      `ws://localhost${ENGINE_PATH}`,
     )
   })
 })
@@ -74,8 +76,8 @@ describe("pointing the page at another engine", () => {
   })
 
   it("falls back when there is no override", () => {
-    expect(engineFor(page, "?other=1")).toBe("ws://localhost:6734")
-    expect(engineFor(page, undefined)).toBe("ws://localhost:6734")
+    expect(engineFor(page, "?other=1")).toBe(`ws://localhost:6733${ENGINE_PATH}`)
+    expect(engineFor(page, undefined)).toBe(`ws://localhost:6733${ENGINE_PATH}`)
   })
 
   it("ignores anything that is not a websocket url", () => {

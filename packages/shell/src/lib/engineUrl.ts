@@ -12,6 +12,17 @@
  * decoding nor the low-latency audio path, and both fall back. Serving the
  * shell over HTTPS is how those turn on, so the socket has to follow.
  *
+ * # Why the origin is always the page's own
+ *
+ * The engine serves this page and its own socket on one port, so the socket is
+ * always reachable at the origin the page came from. There is no second port
+ * to guess, nothing cross-origin to configure, and one certificate covers
+ * both.
+ *
+ * In development Vite serves the page instead and proxies `/engine` back to
+ * the engine, so the same rule holds there and this code has one shape rather
+ * than a production one and a development one.
+ *
  * # Pointing the page at a different engine
  *
  * `?engine=ws://host:port` overrides all of it, for when the page and the
@@ -31,9 +42,6 @@
  */
 export const ENGINE_PATH = "/engine"
 
-/** The engine's default port, when the page is plain HTTP and unproxied. */
-export const ENGINE_PORT = 6734
-
 /** Just enough of `Location` to decide, so this is testable without a DOM. */
 export interface PageOrigin {
   protocol: string
@@ -45,19 +53,19 @@ export interface PageOrigin {
 /**
  * Where to reach the engine.
  *
- * Three shapes, in order:
+ * Two shapes:
  *
- * - **Overridden**, whatever `?engine=` names. See the header.
- * - **Same origin**, `wss://host/engine`, when the page is served over TLS. The
- *   proxy in front forwards that path to the engine.
- * - **Direct**, `ws://host:6734`, when the page is plain HTTP. The development
- *   case: the page on one port, the engine on the next.
+ * - **Overridden**, whatever `?engine=` names. See the header. This is how the
+ *   page talks to an engine on another machine, or to a second one.
+ * - **Same origin**, `/engine` on the host and port the page came from, with
+ *   the scheme following the page's own so an HTTPS page never opens a
+ *   plaintext socket.
  */
 export function engineFor(page: PageOrigin, search?: string): string {
   const override = engineOverride(search)
   if (override) return override
-  if (page.protocol === "https:") return `wss://${page.host}${ENGINE_PATH}`
-  return `ws://${page.hostname || "localhost"}:${ENGINE_PORT}`
+  const scheme = page.protocol === "https:" ? "wss:" : "ws:"
+  return `${scheme}//${page.host || page.hostname || "localhost"}${ENGINE_PATH}`
 }
 
 /**

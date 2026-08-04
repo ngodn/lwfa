@@ -27,6 +27,7 @@ mod bitrate;
 mod gamepad;
 mod outside;
 mod handlers;
+mod http;
 mod icons;
 mod input;
 mod layout;
@@ -184,12 +185,25 @@ fn init_shell_link(
     };
     data.accounts = accounts.clone();
 
+    // Resolved once here rather than per request, so a production run missing
+    // its page says so at startup instead of answering 503 forever with nobody
+    // watching the log.
+    let shell_dir = data.config.shell_dir();
+    match &shell_dir {
+        Some(dir) => tracing::info!("serving the shell from {}", dir.display()),
+        None => tracing::warn!(
+            "no built shell found, so the engine serves the protocol only. Run \
+             `pnpm run build`, or use the dev server for the page."
+        ),
+    }
+
     let (link, bound, shared_token) = match ShellLink::bind(
         &addr,
         token.clone(),
         accounts,
         events_tx,
         data.config.stream.max_frames_in_flight,
+        shell_dir,
     ) {
         Ok(bound) => bound,
         Err(err) => {
@@ -305,10 +319,9 @@ fn announce(bound: std::net::SocketAddr, token: &str) {
     } else {
         Some(bound.ip().to_string())
     };
-    let shell_port = auth::setting("SHELL_PORT").unwrap_or_else(|| "6733".to_string());
-
+    // One port, so the printed URL is the port the engine actually bound.
     if let Some(host) = host {
-        tracing::info!("open the shell at:  http://{host}:{shell_port}/?token={token}");
+        tracing::info!("open the shell at:  http://{host}:{}/?token={token}", bound.port());
     } else {
         tracing::info!("shell password: {token}");
     }

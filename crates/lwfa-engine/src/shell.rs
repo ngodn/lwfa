@@ -441,6 +441,7 @@ impl ShellLink {
         accounts: Option<Arc<Mutex<crate::accounts::Accounts>>>,
         events: LoopSender<ShellEvent>,
         max_in_flight: usize,
+        shell_dir: Option<std::path::PathBuf>,
     ) -> std::io::Result<(Self, std::net::SocketAddr, SharedToken)> {
         let listener = TcpListener::bind(addr)?;
         let local = listener.local_addr()?;
@@ -459,7 +460,16 @@ impl ShellLink {
 
         thread::Builder::new()
             .name("lwfa-shell".into())
-            .spawn(move || accept_loop(listener, thread_token, accounts, events, thread_clients))?;
+            .spawn(move || {
+                accept_loop(
+                    listener,
+                    thread_token,
+                    accounts,
+                    events,
+                    thread_clients,
+                    shell_dir,
+                )
+            })?;
 
         Ok((Self { clients }, local, token))
     }
@@ -586,6 +596,7 @@ fn accept_loop(
     accounts: Option<Arc<Mutex<crate::accounts::Accounts>>>,
     events: LoopSender<ShellEvent>,
     clients: Arc<Clients>,
+    shell_dir: Option<std::path::PathBuf>,
 ) {
     if listener.set_nonblocking(true).is_err() {
         tracing::error!("could not set the shell listener non-blocking; no shell can connect");
@@ -598,6 +609,36 @@ fn accept_loop(
         loop {
             match listener.accept() {
                 Ok((stream, peer)) => {
+                    // One port, split by request rather than by number: an
+                    // upgrade is the protocol, anything else is the page. See
+                    // `crate::http`.
+                    //
+                    // The file is served on a thread of its own because this
+                    // loop must not block. A tablet pulling a megabyte of
+                    // JavaScript over wifi would otherwise stall every other
+                    // connection, including live sessions, for as long as the
+                    // download takes.
+                    if !crate::http::wants_websocket(&stream) {
+                        match shell_dir.as_deref() {
+                            Some(root) => {
+                                let root = root.to_path_buf();
+                                let _ = thread::Builder::new()
+                                    .name("lwfa-http".into())
+                                    .spawn(move || crate::http::serve(stream, &root));
+                            }
+                            None => {
+                                // No built shell to serve. Almost always a
+                                // development run with Vite on another port, so
+                                // this is a debug line rather than a warning;
+                                // the one-time warning at startup is where a
+                                // production run missing its page is reported.
+                                tracing::debug!("HTTP request from {peer} but no shell directory");
+                                crate::http::refuse(stream);
+                            }
+                        }
+                        continue;
+                    }
+
                     let Some((socket, permissions, account, device, client)) =
                         handshake(stream, &token.lock().unwrap().clone(), accounts.as_deref())
                     else {

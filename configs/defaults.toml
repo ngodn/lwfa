@@ -22,19 +22,29 @@
 # Network
 # ---------------------------------------------------------------------------
 [net]
-# Where the engine listens for a shell to connect.
+# Where the engine listens. One port serves both the page and the protocol.
+#
+# A WebSocket upgrade is the protocol; every other request is a file from the
+# built shell. They were two ports while two different programs served them,
+# and once the engine served both that cost a reverse proxy with a path split,
+# a second firewall hole and an extra question at install time, for nothing.
 #
 # Loopback by default, because this socket injects keystrokes and spawns
 # processes, so opening it to the network is a decision to make on purpose.
-# Use "0.0.0.0:6734" to reach it from a tablet, and read the security note in
+# Use "0.0.0.0:6733" to reach it from a tablet, and read the security note in
 # the README first: there is no TLS yet.
-shell_addr = "127.0.0.1:6734"
+shell_addr = "127.0.0.1:6733"
 
-# Where the shell page is served. This is the port you actually type.
+# Where the built shell lives. Empty means look in the usual places:
+# packages/shell/dist above the binary or the working directory, then
+# share/lwfa/shell beside an installed binary, then the system prefixes.
 #
-# lwfa uses the 6733+ block, lowest port first, so 6733 is the page and 6734 is
-# the protocol behind it.
-shell_port = 6733
+# Leave it empty. This exists for an installation that puts the page somewhere
+# unusual, not for everyday use.
+#
+# Nothing breaks if it is not found: the engine still serves the protocol, and
+# during development Vite serves the page and proxies the socket back here.
+shell_dir = ""
 
 # ---------------------------------------------------------------------------
 # How lwfa's own window is placed in a host compositor
