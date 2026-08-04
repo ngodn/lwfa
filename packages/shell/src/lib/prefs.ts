@@ -59,6 +59,9 @@ export function resolveEdge(pref: NavEdgePref | string, portrait: boolean): NavE
 export type ThemeMode = "light" | "dark" | "system"
 export type GamepadSkin = "playstation" | "xbox" | "neutral"
 
+/** Where an input surface sits relative to the desktop. See `Prefs.gamepad`. */
+export type SurfacePlacement = "overlay" | "stacked"
+
 /** Every button the nav can hold. Order here is only the factory default. */
 export const NAV_ITEM_IDS = [
   "info",
@@ -120,11 +123,33 @@ export interface Prefs {
      * fallback when the machine will not allow a virtual device.
      */
     mode: "controller" | "keyboard"
+    /**
+     * Whether this surface floats over the desktop or displaces it.
+     *
+     * `overlay` draws it on top: the desktop keeps every pixel and the surface
+     * sits over the corners of it. `stacked` gives it a row of its own and the
+     * desktop shrinks to what is left, so nothing is ever covered.
+     *
+     * Neither is right for both orientations, which is why it is a setting
+     * rather than a rule. Held in landscape there is width to spare and height
+     * is precious, so a controller wants to float over the game. Held upright
+     * there is height to spare and the game is a letterbox in the middle
+     * anyway, so a controller below it costs nothing and stops thumbs sitting
+     * on the picture.
+     *
+     * The defaults are what each surface used to do unconditionally: a
+     * keyboard displaced the desktop, because typing means watching the line
+     * you are editing, and a controller floated, because a game wants every
+     * pixel. Both are now available to both.
+     */
+    placement: SurfacePlacement
   }
   keyboard: {
     /** Keep modifiers latched until tapped again, for one-finger combos. */
     stickyModifiers: boolean
     haptics: boolean
+    /** See `gamepad.placement`. */
+    placement: SurfacePlacement
   }
   stream: {
     /**
@@ -247,10 +272,12 @@ export const DEFAULT_PREFS: Prefs = {
     opacity: 0.85,
     haptics: true,
     mode: "controller",
+    placement: "overlay",
   },
   keyboard: {
     stickyModifiers: true,
     haptics: true,
+    placement: "stacked",
   },
   stream: {
     enabled: true,

@@ -13,6 +13,7 @@ import { setDock, useDock } from "@/lib/dock"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
+import { PlacementChoice, hapticHintProp } from "@/panels/placement"
 
 function KeyboardPanel() {
   const prefs = usePrefs()
@@ -75,10 +76,22 @@ function KeyboardPanel() {
         </FieldRow>
       </PanelSection>
 
+      <PanelSection
+        title="Placement"
+        description="Overlay floats over the desktop. Stacked gives the keyboard its own space and the desktop shrinks to fit."
+      >
+        <PlacementChoice
+          value={prefs.keyboard.placement}
+          onChange={(placement) => patchPrefs("keyboard", { placement })}
+          label="Keyboard placement"
+        />
+      </PanelSection>
+
       <PanelSection title="Feedback">
         <FieldRow>
           <Field
             label="Vibrate on press"
+            {...hapticHintProp()}
           />
           <Switch
             checked={prefs.keyboard.haptics}

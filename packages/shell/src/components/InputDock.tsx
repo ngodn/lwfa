@@ -58,6 +58,7 @@ export interface InputDockProps {
 export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockProps) {
   const dock = useDock()
   const gamepadPrefs = usePrefSection("gamepad")
+  const keyboardPrefs = usePrefSection("keyboard")
   const gamepad = useGamepad()
   const setPads = useSetPads()
   const actions = useSessionActions()
@@ -135,6 +136,16 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
 
   const isGamepad = dock === "gamepad"
 
+  // Overlay or stacked, per surface. See `Prefs.gamepad.placement`.
+  //
+  // This used to be `isGamepad`: the controller always floated and the
+  // keyboard always displaced, which are the right defaults and the wrong
+  // rules. Held upright there is height to spare and a controller below the
+  // game beats thumbs on top of it; held in landscape a keyboard that takes
+  // 42% of the height leaves a letterbox to read.
+  const floating =
+    (isGamepad ? gamepadPrefs.placement : keyboardPrefs.placement) === "overlay"
+
   return (
     <div
       ref={root}
@@ -143,14 +154,23 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         // edge to edge under the home indicator, but a docked keyboard's
         // bottom row must sit above it or the space bar is half swipe-bar.
         "z-20 flex flex-col pb-safe",
-        isGamepad
-          // Floats: `pointer-events-none` so taps between the pads still reach
-          // the window behind, and each pad turns them back on for itself.
-          ? "pointer-events-none absolute inset-0"
-          : "relative shrink-0 border-t border-border bg-card/95 backdrop-blur-xl",
+        // Stacked: a row of its own, in flow, and the desktop shrinks.
+        !floating && "relative shrink-0 border-t border-border bg-card/95 backdrop-blur-xl",
+        // A floating controller covers the whole area, because its pads are
+        // scattered to the corners rather than gathered into a strip.
+        // `pointer-events-none` so taps between them still reach the window
+        // behind, and each pad turns them back on for itself.
+        floating && isGamepad && "pointer-events-none absolute inset-0",
+        // A floating keyboard is still a strip along the bottom; it just sits
+        // over the desktop instead of pushing it up. It keeps its pointer
+        // events, since a key with none would do nothing.
+        floating &&
+          !isGamepad &&
+          "absolute inset-x-0 bottom-0 border-t border-border bg-card/85 backdrop-blur-xl",
       )}
       style={
-        isGamepad
+        // A floating controller is the one case with no height of its own.
+        floating && isGamepad
           ? undefined
           : ({ "--dock": DEFAULT_FRACTION, height: "calc(var(--dock) * 100%)" } as React.CSSProperties)
       }

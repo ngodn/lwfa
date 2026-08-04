@@ -25,6 +25,7 @@ import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
+import { PlacementChoice, hapticHintProp } from "@/panels/placement"
 
 const SKINS: { value: GamepadSkin; label: string; sample: string }[] = [
   { value: "playstation", label: "PlayStation", sample: "△ ✕ ○ □" },
@@ -105,9 +106,20 @@ function GamepadPanel() {
         </div>
       </PanelSection>
 
+      <PanelSection
+        title="Placement"
+        description="Overlay floats over the game. Stacked gives the pad its own space and the desktop shrinks to fit."
+      >
+        <PlacementChoice
+          value={prefs.gamepad.placement}
+          onChange={(placement) => patchPrefs("gamepad", { placement })}
+          label="Gamepad placement"
+        />
+      </PanelSection>
+
       <PanelSection title="Feedback">
         <FieldRow>
-          <Field label="Vibrate on press" />
+          <Field label="Vibrate on press" {...hapticHintProp()} />
           <Switch
             checked={prefs.gamepad.haptics}
             onCheckedChange={(haptics) => patchPrefs("gamepad", { haptics })}
