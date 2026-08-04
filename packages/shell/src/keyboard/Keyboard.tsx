@@ -22,6 +22,7 @@
  * physical keys and lets the far end decide what they mean.
  */
 
+import { tap as haptic } from "@/lib/haptics"
 import { memo, useCallback, useMemo, useState } from "react"
 import { CornerDownLeft, Zap } from "lucide-react"
 import { useSessionActions } from "@/session"
@@ -49,7 +50,7 @@ export const Keyboard = memo(function Keyboard() {
   const [extras, setExtras] = useState(false)
 
   const buzz = useCallback(() => {
-    if (keyboardPrefs.haptics) globalThis.navigator?.vibrate?.(8)
+    if (keyboardPrefs.haptics) haptic(8)
   }, [keyboardPrefs.haptics])
 
   /** Press and release one key, wrapped in whatever modifiers are held. */

@@ -14,6 +14,7 @@
  * what makes this split actually work rather than merely look tidy.
  */
 
+import { tap } from "@/lib/haptics"
 import { memo, useCallback, useEffect, useLayoutEffect, useState } from "react"
 import { getPrefs, resolveEdge, usePrefSection } from "@/lib/prefs"
 import { NavRail, shellDirection, usePortrait, type NavTarget } from "@/components/NavRail"
@@ -59,7 +60,7 @@ export const ShellChrome = memo(function ShellChrome({
         // a repeat.
         actions.send({ type: "key", key: ESCAPE, pressed: true })
         actions.send({ type: "key", key: ESCAPE, pressed: false })
-        if (getPrefs().keyboard.haptics) globalThis.navigator?.vibrate?.(8)
+        if (getPrefs().keyboard.haptics) tap(8)
         // A flash, because nothing else on screen changes and a button that
         // looks inert is a button people press twice.
         setFired(target.id)

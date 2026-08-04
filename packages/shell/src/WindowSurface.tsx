@@ -16,6 +16,7 @@
  * good one on screen instead of flashing empty.
  */
 
+import { tap } from "@/lib/haptics"
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import type { Rect, WindowId } from "@lwfa/proto"
 import { evdevFromButton, wheelDelta, windowPoint } from "./input.js"
@@ -236,7 +237,7 @@ export const WindowSurface = memo(function WindowSurface({
             // The only feedback there is. Nothing on screen says the gesture
             // took, and without this people hold longer and longer wondering
             // whether it is working.
-            if (getPrefs().keyboard.haptics) globalThis.navigator?.vibrate?.(12)
+            if (getPrefs().keyboard.haptics) tap(12)
           })
           return
         }
