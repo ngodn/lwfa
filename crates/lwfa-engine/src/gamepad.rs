@@ -48,6 +48,7 @@
 //! playable.
 
 use std::fs::File;
+use std::cell::Cell;
 use std::io;
 
 use input_linux::sys::{input_event, timeval};
@@ -74,6 +75,35 @@ const TRIGGER_RANGE: i32 = 1023;
 /// uses to decide a value is rest, and without it a game can see a stick that
 /// never quite centres.
 const STICK_FLAT: i32 = 512;
+
+/// The D-pad is a *hat*, not four buttons, and that is not cosmetic.
+///
+/// This device claims to be an Xbox One pad so that SDL finds a layout for it
+/// without per-game setup (see the header). The consequence is that SDL uses
+/// its built-in mapping for `045e:02ea`, and that mapping reads the D-pad from
+/// hat 0: `dpup:h0.1`, `dpdown:h0.4`, and so on. It never looks at
+/// `BTN_DPAD_UP`.
+///
+/// So a device that advertises the Xbox ids and reports its D-pad as buttons
+/// has a D-pad that no SDL game can see, while every face button works
+/// perfectly, which is exactly how it presented: A started Assassin's Creed
+/// Odyssey from its title screen and no direction ever moved its menu.
+///
+/// `BTN_DPAD_*` are still emitted alongside, for anything reading evdev
+/// directly rather than through a mapping. SDL ignores them here, because the
+/// built-in mapping names the hat.
+const HAT_RANGE: i32 = 1;
+
+/// Which bit of [`VirtualPad::dpad`] a direction owns.
+fn dpad_bit(button: GamepadButton) -> Option<u8> {
+    match button {
+        GamepadButton::DpadUp => Some(1),
+        GamepadButton::DpadDown => Some(2),
+        GamepadButton::DpadLeft => Some(4),
+        GamepadButton::DpadRight => Some(8),
+        _ => None,
+    }
+}
 
 /// The buttons this device advertises, in W3C mapping order.
 ///
@@ -137,6 +167,12 @@ fn axis_for(axis: GamepadAxis) -> AbsoluteAxis {
 /// A live virtual controller. Dropping it removes the device.
 pub struct VirtualPad {
     handle: UInputHandle<File>,
+    /// Which D-pad directions are currently held, as [`dpad_bit`] flags.
+    ///
+    /// A hat is one value per axis, so "left released" cannot be sent on its
+    /// own: the axis has to be recomputed from everything still held, or
+    /// releasing one direction while another is down would centre both.
+    dpad: Cell<u8>,
 }
 
 impl VirtualPad {
@@ -192,6 +228,24 @@ impl VirtualPad {
             });
         }
 
+        // The D-pad, as a hat. See [`HAT_RANGE`].
+        for hat in [AbsoluteAxis::Hat0X, AbsoluteAxis::Hat0Y] {
+            handle.set_absbit(hat)?;
+            axes.push(AbsoluteInfoSetup {
+                axis: hat,
+                info: AbsoluteInfo {
+                    value: 0,
+                    minimum: -HAT_RANGE,
+                    maximum: HAT_RANGE,
+                    fuzz: 0,
+                    // A hat is already discrete; a dead zone here would eat
+                    // the only three values it has.
+                    flat: 0,
+                    resolution: 0,
+                },
+            });
+        }
+
         handle.create(
             &InputId {
                 bustype: BUS_USB,
@@ -211,7 +265,10 @@ impl VirtualPad {
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| "an unknown device".into())
         );
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            dpad: Cell::new(0),
+        })
     }
 
     /// Release every button and centre every axis.
@@ -241,10 +298,31 @@ impl VirtualPad {
     /// Press or release a button.
     pub fn button(&self, button: GamepadButton, pressed: bool) {
         let key = key_for(button);
-        self.emit(&[
-            event(EventKind::Key, key as u16, i32::from(pressed)),
-            SYNC,
-        ]);
+        let mut events = vec![event(EventKind::Key, key as u16, i32::from(pressed))];
+
+        // A direction is also a hat movement, which is the only form of it
+        // an SDL game will see. See [`HAT_RANGE`].
+        if let Some(bit) = dpad_bit(button) {
+            let held = if pressed {
+                self.dpad.get() | bit
+            } else {
+                self.dpad.get() & !bit
+            };
+            self.dpad.set(held);
+            events.push(event(
+                EventKind::Absolute,
+                AbsoluteAxis::Hat0X as u16,
+                i32::from(held & 8 != 0) - i32::from(held & 4 != 0),
+            ));
+            events.push(event(
+                EventKind::Absolute,
+                AbsoluteAxis::Hat0Y as u16,
+                i32::from(held & 2 != 0) - i32::from(held & 1 != 0),
+            ));
+        }
+
+        events.push(SYNC);
+        self.emit(&events);
     }
 
     /// Move an axis. Sticks take -1 to 1, triggers 0 to 1.
@@ -281,6 +359,11 @@ impl VirtualPad {
         ] {
             events.push(event(EventKind::Absolute, axis_for(axis) as u16, 0));
         }
+        // The hat centres with everything else, or a game keeps walking in
+        // the direction the browser tab was closed in.
+        self.dpad.set(0);
+        events.push(event(EventKind::Absolute, AbsoluteAxis::Hat0X as u16, 0));
+        events.push(event(EventKind::Absolute, AbsoluteAxis::Hat0Y as u16, 0));
         events.push(SYNC);
         self.emit(&events);
     }
