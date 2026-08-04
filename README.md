@@ -252,18 +252,60 @@ pnpm run engine:release    # the engine, optimised (fat LTO)
 ./target/release/lwfa-engine   # serves both, on one port
 ```
 
-Put a reverse proxy with TLS in front of both ports, on **one hostname**: the
-page and the WebSocket must share it, because a browser refuses a plaintext
-socket from an HTTPS page. [`deploy/`](deploy/) has a template for each of the
-two proxies people actually run, [Traefik](deploy/traefik-lwfa.yml) and
-[nginx](deploy/nginx-lwfa.conf): `/engine` routes to the socket at higher
-priority, everything else to the page, and the prefix is deliberately not
-stripped (stripping the whole path leaves an empty request-URI and the upgrade
-dies with a 502). Any proxy that can do the same split works.
+### TLS
 
-Both templates carry placeholder values, `lwfa.example.com` and a TEST-NET-1
-address, so an unedited copy fails visibly instead of routing somewhere real.
-Fill one in and keep it in `deploy/local/`, which is gitignored.
+Not optional beyond the machine itself. `VideoDecoder` and `AudioWorklet` are
+secure-context APIs, so a plain-HTTP page silently loses hardware decode and
+the low-latency audio path. That shows up as "it works but looks worse than
+the README promised", which is a confusing way to find out you needed a
+certificate.
+
+Locally you need nothing: `localhost` is already a secure context.
+
+For everything else, three options, cheapest first.
+
+**Tailscale, if you have it.** One command, and it is the only option with
+nothing to install on the tablet:
+
+```sh
+tailscale serve 6733
+```
+
+Tailscale gets a real Let's Encrypt certificate for the machine's `*.ts.net`
+name through a DNS-01 challenge it completes itself. Every device already
+trusts that chain, so there is no CA to distribute, no profile to install and
+no trust setting to find. It works away from home as a side effect.
+
+**A container, if you would rather not install a proxy.** Everything lives in
+[`deploy/docker/`](deploy/docker/) and `docker compose down` removes all of
+it:
+
+```sh
+cd deploy/docker
+./make-cert.sh 192.168.1.51      # your machine's LAN address
+docker compose up -d
+```
+
+Host networking, because nginx has to reach the engine on the host's own
+loopback and because bridged networking puts NAT in front of every video
+frame. The certificate is self-signed, so each device has to be told to trust
+it once, and the container serves the public half over plain HTTP on 8880 for
+exactly that (a device cannot fetch a certificate over the HTTPS that
+certificate is for). On iOS that is two steps, and the second is the one
+people miss: install the profile, **then** enable it under Settings > General
+> About > Certificate Trust Settings.
+
+**Your own proxy.** [`deploy/`](deploy/) has a template for
+[Traefik](deploy/traefik-lwfa.yml) and one for [nginx](deploy/nginx-lwfa.conf).
+One hostname, one backend: the engine splits page from socket by request, so
+there is nothing for the proxy to route. Both carry placeholder values,
+`lwfa.example.com` and a TEST-NET-1 address, so an unedited copy fails visibly
+instead of routing somewhere real. Fill one in and keep it in `deploy/local/`,
+which is gitignored.
+
+None of the three enables HTTP/2, deliberately. Safari on iPadOS 26.x sends
+CONNECT instead of GET for a WebSocket upgrade over h2, so the socket fails on
+the device this project is for.
 
 HTTPS is not only transport security here. WebCodecs requires a secure
 context, so the proxy is also what turns the stream from JPEG into hardware

@@ -1,0 +1,103 @@
+# The server block for the containerised proxy. See compose.yaml.
+#
+# A template, not a config. The nginx image runs envsubst over anything in
+# /etc/nginx/templates/ at startup and writes the result into conf.d/, so the
+# port and the backend are set in compose.yaml rather than edited here.
+#
+# Only names present in the environment are substituted, which is why nginx's
+# own $http_upgrade and $connection_upgrade survive untouched.
+#
+# It runs inside the image's own nginx.conf, which already opened `http {}`,
+# which is why there is no `http` wrapper here and why `map` is legal at this
+# level.
+
+# WebSocket upgrades: pass Connection through only when the client asked for
+# one, so ordinary page requests still get a keep-alive connection.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen ${LWFA_TLS_PORT} ssl;
+    listen [::]:${LWFA_TLS_PORT} ssl;
+
+    # Deliberately HTTP/1.1, and deliberately not http2.
+    #
+    # Safari on iPadOS 26.x mishandles WebSocket upgrades on an h2 connection:
+    # it sends CONNECT where it should send GET, and the upgrade fails. The
+    # engine's socket rides this same server block, and an iPad is the device
+    # this project exists for. On a LAN h2 buys nothing worth that.
+
+    server_name _;
+
+    ssl_certificate     /etc/nginx/certs/lwfa.crt;
+    ssl_certificate_key /etc/nginx/certs/lwfa.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL:2m;
+
+    # Video frames, not documents. A cap here truncates a stream mid-flight.
+    client_max_body_size 0;
+
+    # One backend: the engine serves the page and its own socket on one port,
+    # splitting by request rather than by number. `/engine` is passed through
+    # unchanged, because stripping the whole path would leave an empty
+    # request-URI and kill the upgrade with a 502.
+    location / {
+        # 127.0.0.1 and not `localhost`: with host networking this resolves in
+        # the host's namespace, and `localhost` can pick ::1 where the engine
+        # may not be listening.
+        proxy_pass http://${LWFA_BACKEND};
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host       $host;
+        proxy_set_header X-Real-IP  $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # Buffering is the enemy of a live stream: it adds latency and hides
+        # the socket backpressure the engine's adaptive bitrate reads as the
+        # network's own voice. Off in both directions.
+        proxy_buffering off;
+        proxy_request_buffering off;
+
+        # A session outlives any sensible request timeout. The engine pings
+        # idle sockets itself and reaps the ones that stop answering, so a
+        # long timeout here costs nothing and a short one drops live sessions.
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+    }
+}
+
+# --- Certificate hand-out, plain HTTP ---------------------------------------
+#
+# A device cannot fetch the certificate over the HTTPS that the certificate is
+# for: it does not trust it yet, so the download is exactly the connection the
+# browser refuses. So the public half is served over plain HTTP, on its own
+# port, and nothing else is.
+#
+# Safe: lwfa.crt is the public certificate. The private key is lwfa.key, is
+# not under this root, and is never served.
+server {
+    listen ${LWFA_CERT_PORT};
+    listen [::]:${LWFA_CERT_PORT};
+    server_name _;
+
+    # A bare address in a browser should land on the thing you came for.
+    location = / { return 302 /lwfa.crt; }
+
+    location = /lwfa.crt {
+        alias /etc/nginx/certs/lwfa.crt;
+        # iOS only offers to install a downloaded file as a profile when it
+        # arrives as a certificate type. Served as text/plain it is displayed
+        # rather than installed, which looks like the link being broken.
+        types { } default_type application/x-x509-ca-cert;
+        add_header Content-Disposition 'attachment; filename="lwfa.crt"';
+    }
+
+    # Nothing else. The key lives beside the certificate on disk and must
+    # never be reachable.
+    location / { return 404; }
+}

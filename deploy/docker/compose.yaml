@@ -1,0 +1,66 @@
+# TLS for lwfa, in a container, so nothing is installed on the host.
+#
+# Why this exists alongside deploy/nginx-lwfa.conf: that file assumes you
+# already run nginx. This is for the far more common case of someone who does
+# not, and who would rather not start. Everything lives in this directory and
+# `docker compose down` removes all of it.
+#
+#   ./make-cert.sh 192.168.1.51      # once, names the machine's LAN address
+#   docker compose up -d
+#   https://192.168.1.51:8443/
+#
+# # Why host networking
+#
+# Two reasons, and both are load-bearing.
+#
+# nginx has to reach the engine at 127.0.0.1:6733. From a bridged container
+# that address is the *container*, so it needs `host.docker.internal` and an
+# `--add-host` mapping, which is another moving part that behaves differently
+# on Docker Desktop, rootless Docker and Podman.
+#
+# The other is throughput. A session is a continuous video stream, and bridged
+# networking puts NAT and an extra copy in front of every frame. Host mode has
+# neither: the container shares the host's network namespace and nginx binds
+# the LAN port directly.
+#
+# The cost is that `ports:` does nothing here. The listen port is set in
+# lwfa.conf, not in this file.
+#
+# # Why not Traefik or Caddy
+#
+# Caddy would get a real certificate on its own, which is genuinely better,
+# and it cannot help here: a LAN address has no public DNS, so ACME has
+# nothing to validate against. If you have a real hostname pointing at this
+# machine, use Caddy or the Traefik template instead and skip the self-signed
+# certificate entirely. Better still, if you have Tailscale, use
+# `tailscale serve` and get a publicly trusted certificate with nothing to
+# install on any device.
+
+services:
+  lwfa-tls:
+    image: nginx:1.29-alpine
+    container_name: lwfa-tls
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      # Substituted into lwfa.conf.template at container start. Change the
+      # port here rather than in the template.
+      LWFA_TLS_PORT: "${LWFA_TLS_PORT:-8443}"
+      # Where the engine is. With host networking this is the host's own
+      # loopback, so it is the engine's LWFA_SHELL_ADDR port.
+      LWFA_BACKEND: "${LWFA_BACKEND:-127.0.0.1:6733}"
+      # Plain HTTP, for handing the certificate to a device that does not
+      # trust it yet. See the second server block in the template.
+      LWFA_CERT_PORT: "${LWFA_CERT_PORT:-8880}"
+    volumes:
+      # The image renders templates/*.template into conf.d/ at start, which
+      # also replaces its default server block listening on 80.
+      - ./lwfa.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./certs:/etc/nginx/certs:ro
+    healthcheck:
+      # Proves nginx is answering, not merely that the process exists.
+      test: ["CMD-SHELL", "wget -q --spider --no-check-certificate https://127.0.0.1:${LWFA_TLS_PORT}/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
