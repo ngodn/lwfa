@@ -26,6 +26,7 @@ import { Slider } from "@/components/ui/slider"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelSection } from "@/panels/parts"
 import { PlacementChoice, hapticHintProp } from "@/panels/placement"
+import { CustomKeys } from "@/panels/CustomKeys"
 
 const SKINS: { value: GamepadSkin; label: string; sample: string }[] = [
   { value: "playstation", label: "PlayStation", sample: "△ ✕ ○ □" },
@@ -125,6 +126,13 @@ function GamepadPanel() {
             onCheckedChange={(haptics) => patchPrefs("gamepad", { haptics })}
           />
         </FieldRow>
+      </PanelSection>
+
+      <PanelSection
+        title="Keyboard buttons"
+        description="A key or a chord as a button on the pad, for the things a controller has no button for."
+      >
+        <CustomKeys />
       </PanelSection>
 
       <PanelSection title="Layout">

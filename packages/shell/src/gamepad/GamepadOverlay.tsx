@@ -32,6 +32,7 @@ import {
   FACE_TO_BUTTON,
   SKIN_LABELS,
   STICK_AXES,
+  chordLabel,
   TRIGGER_AXES,
   clampPad,
   type Pad,
@@ -53,6 +54,17 @@ interface Binding {
   button?: number | undefined
   /** Analog axis to drive alongside the button. Triggers only. */
   axis?: number | undefined
+  /**
+   * A whole keyboard chord, key last. See `Pad.chord`.
+   *
+   * Unlike every other binding this one fires on the press and does nothing on
+   * the release, because it is a shortcut rather than a control: Alt+H means
+   * "do the thing", not "hold H while Alt is down". Holding it therefore does
+   * not repeat and cannot leave a modifier stuck down, which on a touchscreen
+   * matters more than it sounds: a thumb that slides off a button never sends
+   * the release at all.
+   */
+  chord?: number[] | undefined
 }
 
 export interface GamepadOverlayProps {
@@ -169,6 +181,18 @@ const PlayPad = memo(function PlayPad({
    */
   const emit = useCallback(
     (binding: Binding, pressed: boolean) => {
+      if (binding.chord !== undefined) {
+        // Whole thing on the press, nothing on the release. See `Binding`.
+        if (!pressed) return
+        const chord = binding.chord
+        // Modifiers down in order, the key, then up in reverse. A client
+        // watching modifier state then sees a sequence it could have got from
+        // real hardware, which is the same ordering `keyboard/Keyboard.tsx`
+        // uses for the same reason.
+        for (const code of chord) onKey(code, true)
+        for (const code of [...chord].reverse()) onKey(code, false)
+        return
+      }
       if (onButton && binding.button !== undefined) {
         onButton(binding.button, pressed)
         // A trigger also moves its axis. See `TRIGGER_AXES`.
@@ -239,7 +263,10 @@ const PlayPad = memo(function PlayPad({
     )
   }
 
-  const label = SKIN_LABELS[skin]?.[pad.face] ?? pad.face
+  const label =
+    pad.kind === "key"
+      ? (pad.label ?? (pad.chord ? chordLabel(pad.chord) : "key"))
+      : (SKIN_LABELS[skin]?.[pad.face] ?? pad.face)
   return (
     <button
       // Square, and deliberately unstyled: see the note on `PlayPad`. The
@@ -247,11 +274,16 @@ const PlayPad = memo(function PlayPad({
       className="group absolute grid place-items-center"
       style={style}
       onPointerDown={(event) =>
-        down(event, {
-          key: pad.code,
-          button: FACE_TO_BUTTON[pad.face],
-          axis: TRIGGER_AXES[pad.face],
-        })
+        down(
+          event,
+          pad.kind === "key"
+            ? { chord: pad.chord ?? [] }
+            : {
+                key: pad.code,
+                button: FACE_TO_BUTTON[pad.face],
+                axis: TRIGGER_AXES[pad.face],
+              },
+        )
       }
       onPointerUp={up}
       onPointerCancel={up}
@@ -270,6 +302,9 @@ const PlayPad = memo(function PlayPad({
           "border border-white/20 bg-black/50 text-white/90",
           "transition-transform group-active:scale-95 group-active:bg-white/25",
           pad.kind === "trigger" ? "rounded-lg text-xs" : "rounded-full text-base",
+          // A chord's name is several characters, not one glyph, so it needs
+          // room to be legible at thumb size.
+          pad.kind === "key" && "rounded-lg px-1 text-[0.6rem] leading-tight break-all",
           skin === "playstation" && pad.kind === "button" && "text-lg",
         )}
       >
@@ -856,7 +891,14 @@ const ResizeBar = memo(function ResizeBar({
  */
 const PadNodeView = memo(function PadNodeView({ data }: NodeProps<PadNode>) {
   const { pad, skin, px } = data
-  const label = pad.kind === "dpad" ? "\u271b" : pad.kind === "stick" ? "\u25c9" : (SKIN_LABELS[skin]?.[pad.face] ?? pad.face)
+  const label =
+    pad.kind === "dpad"
+      ? "\u271b"
+      : pad.kind === "stick"
+        ? "\u25c9"
+        : pad.kind === "key"
+          ? (pad.label ?? (pad.chord ? chordLabel(pad.chord) : "key"))
+          : (SKIN_LABELS[skin]?.[pad.face] ?? pad.face)
   return (
     <div
       className={cn(

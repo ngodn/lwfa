@@ -86,7 +86,7 @@ export type RestoreResult =
 
 const SKINS = new Set(["playstation", "xbox", "neutral"])
 const MODES = new Set(["controller", "keyboard"])
-const KINDS = new Set(["button", "dpad", "stick", "trigger"])
+const KINDS = new Set(["button", "dpad", "stick", "trigger", "key"])
 
 /**
  * Parse and validate text that claims to be a backup.

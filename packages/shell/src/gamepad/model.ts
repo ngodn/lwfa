@@ -27,7 +27,7 @@
  */
 
 
-export type PadKind = "button" | "dpad" | "stick" | "trigger"
+export type PadKind = "button" | "dpad" | "stick" | "trigger" | "key"
 
 /**
  * The controls a controller actually has.
@@ -74,6 +74,23 @@ export interface Pad {
    * control sitting under it where no thumb could reach.
    */
   clickCode?: number
+  /**
+   * For `kind: "key"`: a whole keyboard chord, **the key last**.
+   *
+   * `[56, 35]` is Alt+H: everything before the last entry is held around it.
+   * Flat rather than `{ modifiers, code }` because the order it is sent in is
+   * the order it is written in, and the reverse of that is the order it is
+   * released in.
+   *
+   * These exist because a controller has seventeen controls and a game may
+   * want an eighteenth thing that is not on one: a quicksave, a console, a
+   * screenshot, a mod menu. None of them are in `DEFAULT_LAYOUT`, on purpose.
+   * A default controller should be a controller; these are what somebody adds
+   * when their particular game wants one.
+   */
+  chord?: number[]
+  /** For `kind: "key"`: what to draw on it. Falls back to the chord's name. */
+  label?: string
 }
 
 export type PadFace =
@@ -93,6 +110,7 @@ export type PadFace =
   | "dpad"
   | "lstick"
   | "rstick"
+  | "key"
 
 /** What each face is called, per skin. Purely visual; bindings do not change. */
 export const SKIN_LABELS: Record<string, Partial<Record<PadFace, string>>> = {
@@ -215,6 +233,36 @@ export const TRIGGER_AXES: Partial<Record<PadFace, number>> = {
 export const STICK_AXES: Partial<Record<PadFace, readonly [number, number]>> = {
   lstick: [0, 1],
   rstick: [2, 3],
+}
+
+/** Human-readable name for a chord, for a key pad with no label of its own. */
+export function chordLabel(chord: readonly number[]): string {
+  return chord.map((code) => KEY_NAMES[code] ?? `#${code}`).join("+")
+}
+
+/**
+ * Names for the codes a chord is likely to contain.
+ *
+ * Deliberately not the whole evdev table: this is for drawing on a button the
+ * size of a thumb, so it covers the modifiers, the letters and digits, the
+ * function row and the keys people actually bind. Anything else shows its
+ * number, which is still better than nothing and still editable.
+ */
+export const KEY_NAMES: Record<number, string> = {
+  1: "Esc", 14: "Bksp", 15: "Tab", 28: "Enter", 29: "Ctrl", 42: "Shift",
+  54: "RShift", 56: "Alt", 57: "Space", 97: "RCtrl", 100: "RAlt", 125: "Super",
+  59: "F1", 60: "F2", 61: "F3", 62: "F4", 63: "F5", 64: "F6", 65: "F7",
+  66: "F8", 67: "F9", 68: "F10", 87: "F11", 88: "F12",
+  103: "Up", 105: "Left", 106: "Right", 108: "Down",
+  102: "Home", 107: "End", 104: "PgUp", 109: "PgDn", 110: "Ins", 111: "Del",
+  99: "PrtSc", 119: "Pause", 127: "Menu",
+  2: "1", 3: "2", 4: "3", 5: "4", 6: "5", 7: "6", 8: "7", 9: "8", 10: "9", 11: "0",
+  12: "-", 13: "=", 26: "[", 27: "]", 39: ";", 40: "'", 41: "`", 43: "\\",
+  51: ",", 52: ".", 53: "/",
+  16: "Q", 17: "W", 18: "E", 19: "R", 20: "T", 21: "Y", 22: "U", 23: "I",
+  24: "O", 25: "P", 30: "A", 31: "S", 32: "D", 33: "F", 34: "G", 35: "H",
+  36: "J", 37: "K", 38: "L", 44: "Z", 45: "X", 46: "C", 47: "V", 48: "B",
+  49: "N", 50: "M",
 }
 
 /** Clamp a pad to the play area, so a drag cannot lose it off an edge. */
