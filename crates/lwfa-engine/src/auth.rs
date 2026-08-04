@@ -135,14 +135,59 @@ pub fn dotenv_file() -> Option<std::path::PathBuf> {
 /// then the repo root relative to the binary for an installed layout.
 fn dotenv_path() -> Option<std::path::PathBuf> {
     let candidates = [
-        std::path::PathBuf::from(".env"),
+        // A checkout you are standing in. First, so `cd repo && lwfa-engine`
+        // uses that tree's settings whatever else is installed.
+        Some(std::path::PathBuf::from(".env")),
+        // Where an installed copy keeps it, and where the installer writes it.
+        //
+        // Without this an installed engine has nowhere to read the secret
+        // from: the working directory of a systemd unit is `/`, and the
+        // candidate below is a path on whatever machine built the binary.
+        user_env_path(),
+        // The checkout this binary was built from. Convenient during
+        // development, when the engine is often run from `target/debug`
+        // rather than the repository root, and meaningless anywhere else.
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(|p| p.parent())
-            .map(|root| root.join(".env"))
-            .unwrap_or_default(),
+            .map(|root| root.join(".env")),
     ];
-    candidates.into_iter().find(|p| p.is_file())
+    candidates.into_iter().flatten().find(|p| p.is_file())
+}
+
+/// `$XDG_CONFIG_HOME/lwfa/env`, or the `~/.config` fallback.
+///
+/// Beside `config.toml` rather than inside it, because this file holds the
+/// shared password and wants mode 600 while the config is ordinarily
+/// readable. Not named `.env`: in a config directory there is nothing to hide
+/// it from, and a dotfile there is just harder to find.
+///
+/// Returns the path whether or not it exists, so an installer and the engine
+/// agree on where the file goes.
+pub fn user_env_path() -> Option<std::path::PathBuf> {
+    user_env_path_for(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+/// The decision behind [`user_env_path`], with the environment passed in, so
+/// it is testable without mutating it. See `config::user_config_path_for`.
+fn user_env_path_for(
+    xdg: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    if let Some(dir) = xdg
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        return Some(dir.join("lwfa/env"));
+    }
+    home.filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .map(|home| home.join(".config/lwfa/env"))
 }
 
 /// A secret readable by every user on the machine is not much of a secret.
@@ -345,6 +390,31 @@ fn fallback_address() -> Option<(String, std::net::IpAddr)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_secret_file_follows_xdg_when_it_is_set() {
+        assert_eq!(
+            user_env_path_for(Some("/xdg".into()), Some("/home/someone".into())).unwrap(),
+            std::path::PathBuf::from("/xdg/lwfa/env")
+        );
+    }
+
+    #[test]
+    fn the_secret_file_falls_back_to_dot_config() {
+        assert_eq!(
+            user_env_path_for(None, Some("/home/someone".into())).unwrap(),
+            std::path::PathBuf::from("/home/someone/.config/lwfa/env")
+        );
+    }
+
+    #[test]
+    fn a_relative_or_missing_environment_yields_no_secret_path() {
+        // Rather than a path built from an empty string, which would land at
+        // the filesystem root and be read by anything running as this user.
+        assert!(user_env_path_for(Some("relative".into()), None).is_none());
+        assert!(user_env_path_for(None, Some("".into())).is_none());
+        assert!(user_env_path_for(None, None).is_none());
+    }
 
     #[test]
     fn generated_tokens_are_long_and_different() {

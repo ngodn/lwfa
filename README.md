@@ -262,6 +262,34 @@ needed, which matters because restarting the compositor kills every window in
 the session. Existing connections are left alone; only the next one is
 affected.
 
+## Installing
+
+```sh
+pnpm run build && pnpm run engine:release
+./install.sh
+```
+
+It looks first and writes second: distribution, host compositor, GPU,
+Xwayland, audio, terminal, `/dev/uinput`, and any controller already plugged
+in. Then it shows what it is about to write and asks.
+
+What it writes is small: `~/.config/lwfa/config.toml` holding only what is
+specific to this machine, `~/.config/lwfa/env` at mode 600 holding a generated
+password, a systemd **user** service, and one udev rule under `/etc` for the
+virtual controller. Nothing else is touched.
+
+Packages are never installed behind your back. When something is missing it
+says so, prints the exact command for the distribution it found, and asks.
+
+`--yes` takes every default. `--uninstall` undoes it, and asks separately
+before removing the accounts database, since that is the one thing here you
+cannot regenerate.
+
+A user service rather than a system one, deliberately: a system unit has no
+`XDG_RUNTIME_DIR`, starts before any session exists, and cannot express "after
+this user's compositor came up", because the system manager has no
+`graphical-session.target`.
+
 ## Production
 
 The dev servers work, but the production pieces are built and committed:
