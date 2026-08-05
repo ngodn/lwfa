@@ -1575,7 +1575,16 @@ impl Lwfa {
         // With nobody connected there is no link, so there is nothing to learn
         // about one. See `ShellLink::has_clients`.
         let listening = shell.has_clients();
-        let congested = listening && !shell.can_accept_frame();
+        // Two congestion signals, and delay is the earlier one. Backpressure
+        // (`can_accept_frame`) only fires once the send path is actually
+        // full; the probe RTT rises as soon as a queue starts to form, the
+        // way WebRTC's congestion control reads the network. Reacting to the
+        // gradient keeps the queue, and therefore the glass-to-glass delay,
+        // from building in the first place.
+        let delayed = shell
+            .queue_delay()
+            .is_some_and(|excess| excess >= crate::bitrate::QUEUE_DELAY_LIMIT);
+        let congested = listening && (delayed || !shell.can_accept_frame());
         let skip = !listening || congested || !worker.has_capacity();
         let now = std::time::Instant::now();
         // Not observed at all rather than observed as clear: an absent client
@@ -1604,7 +1613,13 @@ impl Lwfa {
             tracing::info!(
                 "stream budget is now {} kbit/s ({})",
                 self.bitrate.bitrate() / 1000,
-                if congested { "link congested" } else { "link clear" },
+                match (delayed, congested) {
+                    // Which signal moved the budget, so a log alone can tell
+                    // "the path is queueing" from "the socket is full".
+                    (true, _) => "delay rising",
+                    (false, true) => "socket backpressure",
+                    (false, false) => "link clear",
+                },
             );
             // Auto-quality audio follows the same budget.
             self.sync_audio_bitrate();

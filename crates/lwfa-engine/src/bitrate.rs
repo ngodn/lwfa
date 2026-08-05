@@ -91,6 +91,15 @@ const MAX_CLIMB_WAIT: Duration = Duration::from_secs(120);
 /// evening cautious.
 const BACKOFF_RESET: Duration = Duration::from_secs(300);
 
+/// Probe delay above a connection's baseline that counts as congestion.
+///
+/// The probes ride the same stream as the frames, so this is time a byte
+/// sent now would spend waiting behind ones already queued. 75ms is far
+/// above jitter on any usable link and well below what a viewer feels as
+/// lag; queueing that persists at this level only happens when the send
+/// rate exceeds the path.
+pub const QUEUE_DELAY_LIMIT: Duration = Duration::from_millis(75);
+
 /// How long to wait after any change before considering another.
 ///
 /// Both directions. A change costs a keyframe, and a keyframe is itself a

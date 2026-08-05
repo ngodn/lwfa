@@ -186,6 +186,14 @@ struct Slot {
     /// Read on the capture thread, written on the compositor thread, same as
     /// `streams`.
     audio: AtomicBool,
+    /// How far this client's RTT currently sits above its own baseline, in
+    /// microseconds, or [`RTT_UNMEASURED`] before the first pong.
+    ///
+    /// Written by the connection thread from ping/pong timing, read by the
+    /// compositor as the congestion signal. Excess over baseline rather than
+    /// the raw RTT, so a client on a naturally slow path (a relay, another
+    /// continent) is not read as permanently congested.
+    rtt_excess: Arc<AtomicU64>,
     /// Whether the eviction is this client reconnecting rather than a kick.
     superseded: Arc<AtomicBool>,
     /// Set when the owner has asked for this connection to go away.
@@ -359,6 +367,23 @@ impl FrameSink {
             .any(|slot| slot.has_room(self.clients.max_in_flight))
     }
 
+    /// The healthiest connected client's queueing delay.
+    ///
+    /// Excess RTT over each connection's own baseline, minimised across
+    /// clients, to match the "any" in [`Self::can_accept_frame`]: the budget
+    /// follows the best link, and the fan-out already skips whoever is
+    /// behind. `None` until some client has answered a probe.
+    pub fn queue_delay(&self) -> Option<Duration> {
+        let slots = self.clients.slots.lock().ok()?;
+        slots
+            .iter()
+            .filter(|slot| slot.alive())
+            .map(|slot| slot.rtt_excess.load(Ordering::Relaxed))
+            .filter(|&micros| micros != RTT_UNMEASURED)
+            .min()
+            .map(Duration::from_micros)
+    }
+
     /// Is anyone actually connected?
     ///
     /// Distinct from [`Self::can_accept_frame`], which answers false both when
@@ -528,6 +553,11 @@ impl ShellLink {
     pub fn has_clients(&self) -> bool {
         self.sink().has_clients()
     }
+
+    /// See [`FrameSink::queue_delay`].
+    pub fn queue_delay(&self) -> Option<Duration> {
+        self.sink().queue_delay()
+    }
 }
 
 /// A connection the accept thread is serving.
@@ -556,16 +586,19 @@ struct Live {
     unacked_audio: usize,
     /// When anything last arrived from the far end. See `heartbeat`.
     last_read: std::time::Instant,
+    /// When the last probe ping was sent, matched against its pong for RTT.
+    /// Distinct from `ping_sent`: liveness is satisfied by any inbound
+    /// traffic, the measurement only by the pong itself.
+    probe_sent: Option<std::time::Instant>,
+    /// When a probe was last transmitted, for the cadence.
+    last_probe: std::time::Instant,
+    /// The least RTT seen, creeping per [`advance_baseline`].
+    min_rtt: Option<Duration>,
+    /// Where the measured excess is published for the compositor.
+    rtt_excess: Arc<AtomicU64>,
     /// An unanswered ping, when one is out. See `heartbeat`.
     ping_sent: Option<std::time::Instant>,
 }
-
-/// Inbound silence that earns a connection a ping.
-///
-/// Nothing here assumes the shell talks constantly: an untouched viewer
-/// legitimately sends nothing for minutes. The ping is what makes silence
-/// distinguishable from death.
-const IDLE_BEFORE_PING: Duration = Duration::from_secs(10);
 
 /// An unanswered ping older than this is a dead connection.
 ///
@@ -578,20 +611,63 @@ const IDLE_BEFORE_PING: Duration = Duration::from_secs(10);
 /// suspended or dead one cannot.
 const PONG_GRACE: Duration = Duration::from_secs(15);
 
-/// Ping when quiet, reap when a ping goes unanswered. True to keep.
+/// How often each client is pinged.
+///
+/// The pong doubles as a network probe. A ping rides the same TCP stream as
+/// the frames, so one queued behind buffered video measures exactly how far
+/// behind that client is, and browsers answer pongs in the network stack,
+/// below JavaScript, so page jank cannot pollute the number. This is the
+/// delay signal congestion controllers like WebRTC's GCC are built on:
+/// delay rises as queues form, long before anything blocks or drops.
+const PROBE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How much the RTT baseline may rise per probe.
+///
+/// The baseline is the least RTT seen, which is the path with empty queues.
+/// A strict minimum never recovers if the route genuinely changes (wifi to
+/// DERP relay, say), so it is allowed to creep upward slowly: about a
+/// millisecond a second. During congestion the creep is dwarfed by the
+/// excess it is measuring, and after a route change the baseline re-learns
+/// in under a minute.
+const BASELINE_CREEP: Duration = Duration::from_millis(1);
+
+/// The delay baseline for one connection, fed by the probes above.
+fn advance_baseline(baseline: Option<Duration>, rtt: Duration) -> Duration {
+    match baseline {
+        None => rtt,
+        Some(base) => rtt.min(base + BASELINE_CREEP),
+    }
+}
+
+/// Marker for "no probe has completed yet" in [`Slot::rtt_excess`].
+const RTT_UNMEASURED: u64 = u64::MAX;
+
+/// Ping on a cadence, reap when one goes unanswered too long. True to keep.
+///
+/// This used to ping only after ten seconds of inbound silence, because its
+/// only job was liveness. The pong now also carries the delay measurement
+/// (see [`PROBE_INTERVAL`]), and a signal sampled once per idle spell cannot
+/// steer a bitrate, so the ping is periodic. One small frame a second against
+/// megabits of video is noise.
 fn heartbeat(client: &mut Live) -> bool {
     let now = std::time::Instant::now();
-    if let Some(sent) = client.ping_sent {
-        return now.duration_since(sent) <= PONG_GRACE;
+    if let Some(sent) = client.ping_sent
+        && now.duration_since(sent) > PONG_GRACE
+    {
+        return false;
     }
-    if now.duration_since(client.last_read) >= IDLE_BEFORE_PING {
+    if now.duration_since(client.last_probe) >= PROBE_INTERVAL {
         // Failures are left to the read path, which already knows how to
         // declare a socket dead; this only asks the question.
         let _ = client
             .socket
             .send(tungstenite::Message::Ping(tungstenite::Bytes::new()));
         let _ = client.socket.flush();
-        client.ping_sent = Some(now);
+        client.last_probe = now;
+        client.probe_sent = Some(now);
+        if client.ping_sent.is_none() {
+            client.ping_sent = Some(now);
+        }
     }
     true
 }
@@ -689,6 +765,7 @@ fn accept_loop(
                     let connected = Arc::new(AtomicBool::new(true));
                     let evict = Arc::new(AtomicBool::new(false));
                     let superseded = Arc::new(AtomicBool::new(false));
+                    let rtt_excess = Arc::new(AtomicU64::new(RTT_UNMEASURED));
                     clients.add(Arc::new(Slot {
                         id,
                         outgoing: outgoing_tx,
@@ -697,6 +774,7 @@ fn accept_loop(
                         connected: Arc::clone(&connected),
                         streams: Mutex::new(HashSet::new()),
                         audio: AtomicBool::new(false),
+                        rtt_excess: Arc::clone(&rtt_excess),
                         superseded: Arc::clone(&superseded),
                         evict: Arc::clone(&evict),
                     }));
@@ -710,6 +788,10 @@ fn accept_loop(
                         evict,
                         superseded: Arc::clone(&superseded),
                         write_blocked: false,
+                        probe_sent: None,
+                        last_probe: std::time::Instant::now(),
+                        min_rtt: None,
+                        rtt_excess,
                         unacked_video: 0,
                         unacked_audio: 0,
                         last_read: std::time::Instant::now(),
@@ -838,6 +920,19 @@ fn handshake(
     // Nagle would add up to 40ms to a small layout message, which is a visible
     // hitch on something the user just triggered.
     let _ = stream.set_nodelay(true);
+    // A small kernel send buffer, because that buffer is an invisible queue.
+    //
+    // Left to auto-tuning, Linux grows it to megabytes, and `in_flight`
+    // counts a frame only until `flush` hands it to the kernel. So the
+    // 4-frame cap was being measured against a queue that could hold seconds
+    // of video: congestion was only visible after all of it filled, and the
+    // client then had to play through it, which is what a "laggy but not
+    // adapting" session was. Sized to sustain the 32 Mbit/s ceiling out to
+    // ~130ms of RTT (the kernel doubles the requested value), while capping
+    // the hidden queue at fractions of a second instead of several.
+    if let Err(err) = rustix::net::sockopt::set_socket_send_buffer_size(&stream, 256 * 1024) {
+        tracing::debug!("could not shrink the socket send buffer: {err}");
+    }
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
 
@@ -1059,6 +1154,20 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
             // network path that broke (read error below), and a client that
             // silently vanished (heartbeat), and those point at different
             // culprits when a session is flapping.
+            Ok(tungstenite::Message::Pong(_)) => {
+                // The other half of the probe in `heartbeat`. RTT against the
+                // connection's own floor is the queue: how long a byte sent
+                // now would wait behind everything already in flight.
+                if let Some(sent) = client.probe_sent.take() {
+                    let rtt = std::time::Instant::now().duration_since(sent);
+                    let baseline = advance_baseline(client.min_rtt, rtt);
+                    client.min_rtt = Some(baseline);
+                    let excess = rtt.saturating_sub(baseline);
+                    client
+                        .rtt_excess
+                        .store(excess.as_micros().min(u64::MAX as u128) as u64, Ordering::Relaxed);
+                }
+            }
             Ok(tungstenite::Message::Close(frame)) => {
                 match frame {
                     Some(f) => tracing::info!(
@@ -1145,5 +1254,49 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
             tracing::warn!("shell socket flush failed: {err}");
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_probe_sets_the_baseline() {
+        let rtt = Duration::from_millis(12);
+        assert_eq!(advance_baseline(None, rtt), rtt);
+    }
+
+    #[test]
+    fn a_faster_probe_lowers_it_immediately() {
+        let base = Some(Duration::from_millis(30));
+        assert_eq!(
+            advance_baseline(base, Duration::from_millis(9)),
+            Duration::from_millis(9)
+        );
+    }
+
+    #[test]
+    fn a_slow_probe_only_creeps_it() {
+        // Congestion is exactly "RTT far above baseline", and a baseline that
+        // jumped to meet it would erase the signal being measured.
+        let base = Some(Duration::from_millis(10));
+        assert_eq!(
+            advance_baseline(base, Duration::from_millis(400)),
+            Duration::from_millis(10) + BASELINE_CREEP
+        );
+    }
+
+    #[test]
+    fn a_route_change_is_relearned_rather_than_permanent() {
+        // The path genuinely got slower (wifi roamed, tailscale fell back to
+        // a relay). The floor climbs one creep per probe until the excess it
+        // reports is honest again.
+        let mut base = Some(Duration::from_millis(5));
+        let new_path = Duration::from_millis(60);
+        for _ in 0..60 {
+            base = Some(advance_baseline(base, new_path));
+        }
+        assert_eq!(base.unwrap(), new_path);
     }
 }

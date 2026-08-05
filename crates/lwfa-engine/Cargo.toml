@@ -49,7 +49,7 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 argon2 = { version = "0.5.3", features = ["std", "password-hash"] }
 input-linux = "0.7.1"
 libc = "0.2.189"
-rustix = { version = "1.1", features = ["process", "event"] }
+rustix = { version = "1.1", features = ["process", "event", "net"] }
 opus = "0.3.1"
 x11rb = "0.13"
 
