@@ -405,7 +405,37 @@ fi
 # ---------------------------------------------------------------------------
 head2 "Settings"
 
-PORT="$(ask 'Port for the page and the socket' "$DEFAULT_PORT")"
+# Validated, and re-asked rather than accepted.
+#
+# An unchecked answer here is written straight into shell_addr, and the engine
+# then fails at bind with "invalid port value" and falls back to safe mode: a
+# session that starts, serves nothing, and gives no hint that the cause was a
+# typo at install time. Ports are also the one answer where a stray keystroke
+# is plausible, since it is the first question asked.
+PORT=""
+for _ in 1 2 3; do
+  PORT="$(ask 'Port for the page and the socket' "$DEFAULT_PORT")"
+  if [ "$PORT" -eq "$PORT" ] 2>/dev/null && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
+    break
+  fi
+  warn "$PORT is not a port number between 1 and 65535"
+  PORT=""
+done
+if [ -z "$PORT" ]; then
+  PORT="$DEFAULT_PORT"
+  warn "using $DEFAULT_PORT"
+fi
+
+# Ports below 1024 need privileges a user service does not have.
+if [ "$PORT" -lt 1024 ]; then
+  warn "$PORT is privileged; a user service cannot bind it without extra capabilities"
+fi
+
+# Say so now rather than letting the engine fail at bind.
+if ss -ltn 2>/dev/null | grep -q ":$PORT "; then
+  warn "something is already listening on $PORT"
+  note "if that is an older lwfa, stop it with: systemctl --user stop lwfa"
+fi
 
 say ""
 say "  ${DIM}Loopback keeps lwfa on this machine. Opening it to the network is${RESET}"
@@ -423,6 +453,10 @@ if [ "$PLACEMENT" != "none" ]; then
   say "  ${DIM}lwfa's window is a whole desktop, not an app: it runs full-screen${RESET}"
   say "  ${DIM}and takes the keyboard, so it wants a workspace of its own.${RESET}"
   WORKSPACE="$(ask 'Which workspace should lwfa take?' "$DEFAULT_WORKSPACE")"
+  if ! { [ "$WORKSPACE" -eq "$WORKSPACE" ] 2>/dev/null && [ "$WORKSPACE" -ge 1 ]; }; then
+    warn "$WORKSPACE is not a workspace number; using $DEFAULT_WORKSPACE"
+    WORKSPACE="$DEFAULT_WORKSPACE"
+  fi
 fi
 
 # --- password ---------------------------------------------------------------
