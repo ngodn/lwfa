@@ -79,7 +79,7 @@ pub struct Config {
 }
 
 /// Capturing what the machine is playing. See `audio.rs`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Audio {
     /// Which PulseAudio/PipeWire source to record.
@@ -91,7 +91,7 @@ pub struct Audio {
     pub device: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Gamepad {
     /// Create the virtual controller at startup and keep it forever.
@@ -108,11 +108,17 @@ pub struct Gamepad {
 
 impl Default for Gamepad {
     fn default() -> Self {
-        Self { persistent: false }
+        // True, matching configs/defaults.toml. These two must agree: the
+        // installer writes a minimal config and omitted keys fall to *this*
+        // default, not to the repository file. When they disagreed, installed
+        // engines silently ran with a non-persistent pad, and every toggle of
+        // the on-screen controller destroyed and recreated a real uinput
+        // device, whose hotplug storm made the running game hitch.
+        Self { persistent: true }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Net {
     pub shell_addr: String,
@@ -128,7 +134,7 @@ impl Default for Net {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Host {
     pub workspace: u32,
@@ -146,7 +152,7 @@ impl Default for Host {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Window {
     pub app_id: String,
@@ -164,13 +170,13 @@ impl Default for Window {
             title: WINDOW_TITLE.to_string(),
             width: 1280.0,
             height: 800.0,
-            backdrop: [0.06, 0.06, 0.08, 1.0],
+            backdrop: [0.047, 0.051, 0.063, 1.0],
             preview: true,
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Session {
     pub terminal: String,
@@ -188,7 +194,7 @@ impl Default for Session {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Stream {
     pub max_h264_sessions: usize,
@@ -212,7 +218,7 @@ impl Default for Stream {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Render {
     pub tick_ms: u64,
@@ -618,6 +624,33 @@ mod tests {
             "127.0.0.1:6733",
             "untouched sections are default"
         );
+    }
+
+    #[test]
+    fn the_shipped_defaults_file_matches_the_built_in_defaults() {
+        // Two sources of truth exist on purpose: the file documents, the code
+        // falls back. They must say the same thing, because the installer
+        // writes a minimal config and every omitted key falls to the *code's*
+        // default. When they disagreed on [gamepad] persistent, installed
+        // engines silently ran with a non-persistent pad and every toggle of
+        // the on-screen controller hitched the running game with a hotplug
+        // storm.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/defaults.toml");
+        let text = std::fs::read_to_string(path).expect("read configs/defaults.toml");
+        let parsed: Config = toml::from_str(&text).expect("defaults.toml parses");
+        let built_in = Config::default();
+        assert_eq!(parsed.net, built_in.net);
+        assert_eq!(parsed.host, built_in.host);
+        assert_eq!(parsed.window, built_in.window);
+        assert_eq!(parsed.session, built_in.session);
+        assert_eq!(parsed.stream, built_in.stream);
+        assert_eq!(parsed.render, built_in.render);
+        assert_eq!(parsed.audio, built_in.audio);
+        assert_eq!(parsed.gamepad, built_in.gamepad);
+        // [layout] and [animation] are deliberately absent: the shell owns
+        // them, and the engine parses them only to keep deny_unknown_fields
+        // from rejecting a good file.
     }
 
     #[test]
