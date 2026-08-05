@@ -375,8 +375,14 @@ if [ "$EXISTING_PADS" -gt 0 ]; then
 fi
 
 # --- existing install -------------------------------------------------------
+WAS_ACTIVE=0
+if systemctl --user is-active --quiet lwfa 2>/dev/null; then
+  WAS_ACTIVE=1
+  ok "lwfa is running; it will be stopped, updated and started again"
+fi
 if [ -f "$CONFIG_FILE" ]; then
   warn "an existing config is at $CONFIG_FILE and will be replaced"
+  note "a copy is kept as ${CONFIG_FILE##*/}.bak"
 fi
 if [ -e "$STATE_DIR/accounts.db" ]; then
   ACCOUNTS="$(sqlite3 "$STATE_DIR/accounts.db" 'select count(*) from users;' 2>/dev/null || echo '?')"
@@ -499,6 +505,7 @@ say "  service   $UNIT_FILE ${DIM}(a user service, not a system one)${RESET}"
 [ "$UINPUT_OK" = 0 ] && say "  udev rule $UDEV_RULE ${DIM}(needs pkexec)${RESET}"
 say ""
 [ "$PAYLOAD" = 1 ] && say "  files     $INSTALL_DIR"
+[ "$WAS_ACTIVE" = 1 ] && say "  restart   lwfa is running and will be restarted"
 say ""
 say "  listening on   $BIND"
 say "  shell from     ${SHELL_DIR:-<none built>}"
@@ -510,7 +517,14 @@ if ! confirm "Write these?" y; then
   exit 0
 fi
 
+# Stop before replacing anything it is running from. Linux tolerates deleting
+# a running binary, but the point of an upgrade is to be running the new one.
+if [ "$WAS_ACTIVE" = 1 ]; then
+  systemctl --user stop lwfa 2>/dev/null && ok "stopped lwfa"
+fi
+
 mkdir -p "$CONFIG_DIR" "$UNIT_DIR" "$STATE_DIR"
+[ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
 
 # Give the payload a permanent home before anything records where it is.
 if [ "$PAYLOAD" = 1 ]; then
@@ -660,6 +674,14 @@ fi
 # ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
+if [ "$WAS_ACTIVE" = 1 ]; then
+  if systemctl --user start lwfa 2>/dev/null; then
+    ok "restarted lwfa on the new version"
+  else
+    warn "could not restart lwfa; check: journalctl --user -u lwfa -n 50"
+  fi
+fi
+
 head2 "Done"
 say "  password   ${BOLD}$AUTH_PASS${RESET}"
 say "             ${DIM}also in $ENV_FILE${RESET}"
