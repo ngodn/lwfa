@@ -359,6 +359,25 @@ impl FrameSink {
             .any(|slot| slot.has_room(self.clients.max_in_flight))
     }
 
+    /// Is anyone actually connected?
+    ///
+    /// Distinct from [`Self::can_accept_frame`], which answers false both when
+    /// every client is behind and when there are no clients at all. Those look
+    /// the same to a caller and mean opposite things: the first is the link
+    /// struggling, the second is nothing to struggle with.
+    ///
+    /// The difference matters during the reconnect grace. A disconnect removes
+    /// the slot immediately while the session is held for 45 seconds, so for
+    /// that whole window `can_accept_frame` is false with no link involved.
+    /// Read as congestion it walked the budget to the floor, and the client
+    /// that came back found a session throttled by its own absence.
+    pub fn has_clients(&self) -> bool {
+        self.clients
+            .slots
+            .lock()
+            .is_ok_and(|slots| slots.iter().any(|slot| slot.alive()))
+    }
+
     /// Hand a chunk of audio to everyone listening.
     ///
     /// Shares the video queue and its bound deliberately. Audio and pixels
@@ -503,6 +522,11 @@ impl ShellLink {
 
     pub fn can_accept_frame(&self) -> bool {
         self.sink().can_accept_frame()
+    }
+
+    /// Is anyone actually connected? See [`FrameSink::has_clients`].
+    pub fn has_clients(&self) -> bool {
+        self.sink().has_clients()
     }
 }
 

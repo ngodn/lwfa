@@ -103,7 +103,8 @@ pub struct Controller {
     step: usize,
     changed_at: Instant,
     clear_since: Instant,
-    /// How long to stay clear before climbing. Doubles on every drop.
+    /// How long to stay clear before climbing. Doubles once per episode of
+    /// congestion.
     ///
     /// Without this the controller oscillates. It climbs a step, the extra
     /// bits congest the link, it drops back, waits the fixed period, and climbs
@@ -115,7 +116,32 @@ pub struct Controller {
     /// Backing off is what TCP does after a loss for the same reason. A level
     /// that has just failed is evidence about the link, and trying it again
     /// immediately throws that evidence away.
+    ///
+    /// **Per episode, not per drop.** It used to double on every drop, which
+    /// counted one event as many. Something else on the machine starting a
+    /// download, Steam checking for updates, a backup, a game shader cache,
+    /// congests the link for as long as it runs and walks the budget down
+    /// several steps on the way. Doubling each time turned a ten-second
+    /// download into a wait of two minutes per step, so recovering the seven
+    /// steps it had just lost took a quarter of an hour on a link that was
+    /// already fine. The stream stayed soft long after the cause had gone, and
+    /// nothing in the logs said why.
+    ///
+    /// Halving it again on every climb was tried and is wrong: doubling on the
+    /// way down and halving on the way up cancel out, and a link that fails
+    /// repeatedly at the same level goes back to oscillating across it. Per
+    /// episode is the whole fix. Confidence returns through `BACKOFF_RESET`,
+    /// which is about the link being quiet rather than about the controller
+    /// having got away with something.
     climb_wait: Duration,
+    /// Whether the previous observation was congested, so the doubling above
+    /// can fire on the edge rather than the whole episode.
+    was_congested: bool,
+    /// When congestion was last seen at all, as opposed to when the controller
+    /// last acted. A climb resets `clear_since`, so that field can never
+    /// measure a stretch longer than `climb_wait` and cannot answer "has this
+    /// link been quiet for a long time".
+    congested_at: Instant,
 }
 
 impl Controller {
@@ -125,6 +151,8 @@ impl Controller {
             changed_at: now,
             clear_since: now,
             climb_wait: EAGER_CLIMB,
+            was_congested: false,
+            congested_at: now,
         }
     }
 
@@ -139,8 +167,20 @@ impl Controller {
     /// Returns `Some` only on a change, so the caller can rebuild the encoder
     /// exactly when it has to.
     pub fn observe(&mut self, congested: bool, now: Instant) -> Option<u32> {
+        // The start of an episode, not every observation inside one. See
+        // `climb_wait`.
+        let episode_started = congested && !self.was_congested;
+        self.was_congested = congested;
         if congested {
             self.clear_since = now;
+            self.congested_at = now;
+        }
+
+        if episode_started {
+            // Wait longer before trying that level again, and never less than
+            // the patient schedule: the first congestion is also what ends the
+            // eager climb of a fresh connection.
+            self.climb_wait = (self.climb_wait * 2).clamp(CLIMB_AFTER, MAX_CLIMB_WAIT);
         }
 
         // Nothing changes during the settling period, in either direction.
@@ -151,21 +191,22 @@ impl Controller {
         if congested && self.step > 0 {
             self.step -= 1;
             self.changed_at = now;
-            // Wait longer before trying that level again, and never less than
-            // the patient schedule: the first drop is also what ends the
-            // eager climb of a fresh connection. See `climb_wait`.
-            self.climb_wait = (self.climb_wait * 2).clamp(CLIMB_AFTER, MAX_CLIMB_WAIT);
             return Some(self.bitrate());
         }
 
-        let clear_for = now.duration_since(self.clear_since);
-
         // A long stretch with no trouble at all means the link is not the one
         // that was struggling earlier, so start being optimistic again.
-        if clear_for >= BACKOFF_RESET {
+        //
+        // Measured from the last congestion rather than from the last climb.
+        // Against `clear_since` this could never fire: a climb resets it, and
+        // the wait between climbs is capped below this threshold, so the
+        // condition was unreachable in exactly the situation it was written
+        // for.
+        if now.duration_since(self.congested_at) >= BACKOFF_RESET {
             self.climb_wait = EAGER_CLIMB;
         }
 
+        let clear_for = now.duration_since(self.clear_since);
         if !congested && self.step + 1 < STEPS.len() && clear_for >= self.climb_wait {
             self.step += 1;
             self.changed_at = now;
@@ -371,6 +412,122 @@ mod tests {
         assert!(
             waits[1] > waits[0] && waits[2] > waits[1],
             "waits did not grow: {waits:?}"
+        );
+    }
+
+    #[test]
+    fn one_download_is_one_episode_not_seven() {
+        // The case that prompted this: Steam checks for an update mid-session,
+        // the link is busy for a few seconds, and the budget walks down several
+        // steps on the way. Counting each step as its own failure made the
+        // recovery take a quarter of an hour on a link that was already fine.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+
+        // Up to the ceiling on a clean link first.
+        let mut clock = 0u64;
+        while controller.bitrate() < STEPS[STEPS.len() - 1] {
+            clock += 3;
+            controller.observe(false, at(base, clock));
+            assert!(clock < 200, "never reached the ceiling");
+        }
+
+        // Something else on the machine takes the link for twenty seconds.
+        let download_start = clock;
+        while clock < download_start + 20 {
+            clock += 1;
+            controller.observe(true, at(base, clock));
+        }
+        assert!(
+            controller.bitrate() < STEPS[STEPS.len() - 1],
+            "should have backed off during the download"
+        );
+
+        // It finishes. Time to climb all the way back.
+        let recovery_start = clock;
+        while controller.bitrate() < STEPS[STEPS.len() - 1] {
+            clock += 1;
+            controller.observe(false, at(base, clock));
+            assert!(clock - recovery_start < 3600, "never recovered");
+        }
+        let recovery = clock - recovery_start;
+
+        assert!(
+            recovery < 180,
+            "took {recovery}s to recover from one download; before the \
+             per-episode fix this was about 840s"
+        );
+    }
+
+    #[test]
+    fn a_quiet_link_becomes_optimistic_even_while_climbing() {
+        // `BACKOFF_RESET` used to be measured from the last climb, and a climb
+        // resets that clock, so on a link that was climbing it could never be
+        // reached: the wait between climbs is capped below the threshold.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        let mut clock = 0u64;
+
+        // Give it a bad enough time to reach the patient schedule.
+        for _ in 0..4 {
+            for _ in 0..8 {
+                clock += 3;
+                controller.observe(true, at(base, clock));
+            }
+            for _ in 0..40 {
+                clock += 3;
+                controller.observe(false, at(base, clock));
+            }
+        }
+
+        // Then a long quiet stretch, with climbs happening throughout.
+        let quiet_start = clock;
+        while clock - quiet_start < BACKOFF_RESET.as_secs() + 60 {
+            clock += 3;
+            controller.observe(false, at(base, clock));
+        }
+
+        // Optimism restored means the next climb comes quickly rather than
+        // after two minutes.
+        let before = controller.bitrate();
+        if before < STEPS[STEPS.len() - 1] {
+            let waiting_from = clock;
+            while controller.observe(false, at(base, clock)).is_none() {
+                clock += 1;
+                assert!(clock - waiting_from < 60, "still on the patient schedule");
+            }
+        }
+    }
+
+    #[test]
+    fn a_gap_with_nobody_connected_does_not_throttle_the_session() {
+        // A disconnect removes the client slot immediately while the session is
+        // held for 45 seconds, so for that whole window there is nothing to
+        // send to. Counting that as congestion drove the budget to the floor
+        // and handed the returning client a session throttled by its own
+        // absence. The engine now does not observe at all while nobody is
+        // connected; this pins the consequence.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        let mut clock = 0u64;
+
+        while controller.bitrate() < STEPS[STEPS.len() - 1] {
+            clock += 3;
+            controller.observe(false, at(base, clock));
+            assert!(clock < 200, "never reached the ceiling");
+        }
+        let before = controller.bitrate();
+
+        // 45 seconds of grace with no client. The engine skips observing, so
+        // the controller simply does not hear from anyone.
+        clock += 45;
+
+        // The client comes back and the link is fine.
+        controller.observe(false, at(base, clock));
+        assert_eq!(
+            controller.bitrate(),
+            before,
+            "an absence should not have cost the session its budget"
         );
     }
 

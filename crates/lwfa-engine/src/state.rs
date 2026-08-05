@@ -1572,10 +1572,16 @@ impl Lwfa {
         // cause, and reading it as congestion made every climb refute itself.
         // A busy encoder still skips capture below; it just is not evidence
         // about the link.
-        let congested = !shell.can_accept_frame();
-        let skip = congested || !worker.has_capacity();
+        // With nobody connected there is no link, so there is nothing to learn
+        // about one. See `ShellLink::has_clients`.
+        let listening = shell.has_clients();
+        let congested = listening && !shell.can_accept_frame();
+        let skip = !listening || congested || !worker.has_capacity();
         let now = std::time::Instant::now();
-        let budget_changed = self.bitrate.observe(congested, now).is_some();
+        // Not observed at all rather than observed as clear: an absent client
+        // is not evidence the link is good either, and a stretch of invented
+        // calm would let the budget climb into a level nothing has tested.
+        let budget_changed = listening && self.bitrate.observe(congested, now).is_some();
 
         // Divide the budget between the windows actually being streamed, giving
         // the focused one the larger share.
