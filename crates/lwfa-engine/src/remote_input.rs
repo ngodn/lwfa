@@ -151,7 +151,45 @@ impl Lwfa {
         pointer.frame(self);
     }
 
-    pub fn remote_key(&mut self, key: KeyCode, pressed: bool) {
+    /// Inject a key from a remote shell, remembering that this session holds it.
+    ///
+    /// The bookkeeping exists for one reason: a key held when the connection
+    /// dies stays down forever. The seat has no idea a socket vanished, so a
+    /// thumb on a held control at the moment the wifi drops leaves a character
+    /// walking into a wall, or a modifier latched so every later keystroke is
+    /// wrong. See [`Lwfa::release_keys_for`].
+    pub fn remote_key(&mut self, session: lwfa_proto::SessionId, key: KeyCode, pressed: bool) {
+        if pressed {
+            self.held_keys.entry(session).or_default().insert(key);
+        } else if let Some(held) = self.held_keys.get_mut(&session) {
+            held.remove(&key);
+        }
+        self.send_key(key, pressed);
+    }
+
+    /// Let go of everything a session was holding.
+    ///
+    /// Called when its socket goes, for any reason: a clean close, a dropped
+    /// network, an eviction. Releases are sent through the same path a real
+    /// release takes, so applications see an ordinary key-up rather than a key
+    /// that simply stops existing.
+    pub fn release_keys_for(&mut self, session: lwfa_proto::SessionId) {
+        let Some(held) = self.held_keys.remove(&session) else {
+            return;
+        };
+        if held.is_empty() {
+            return;
+        }
+        tracing::info!(
+            "session {session} left holding {} key(s); releasing them",
+            held.len()
+        );
+        for key in held {
+            self.send_key(key, false);
+        }
+    }
+
+    fn send_key(&mut self, key: KeyCode, pressed: bool) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };

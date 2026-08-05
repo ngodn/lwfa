@@ -57,12 +57,18 @@ interface Binding {
   /**
    * A whole keyboard chord, key last. See `Pad.chord`.
    *
-   * Unlike every other binding this one fires on the press and does nothing on
-   * the release, because it is a shortcut rather than a control: Alt+H means
-   * "do the thing", not "hold H while Alt is down". Holding it therefore does
-   * not repeat and cannot leave a modifier stuck down, which on a touchscreen
-   * matters more than it sounds: a thumb that slides off a button never sends
-   * the release at all.
+   * Held for as long as the button is, exactly like every other control here.
+   *
+   * It used to fire the whole thing on the press, pressing and releasing each
+   * key in one synchronous block. That looked reasonable and did nothing at
+   * all: the key was down for effectively zero milliseconds, and a game
+   * sampling input once a frame never saw it. It also made holding
+   * impossible, which games ask for constantly (crouch, sprint, aim).
+   *
+   * The worry that stopped this the first time was a stuck modifier when a
+   * thumb slides off a button without a release. That is already handled for
+   * every control by pointer capture plus `pointercancel`, both of which land
+   * in `up`, so a chord is no more exposed than a face button.
    */
   chord?: number[] | undefined
 }
@@ -182,15 +188,19 @@ const PlayPad = memo(function PlayPad({
   const emit = useCallback(
     (binding: Binding, pressed: boolean) => {
       if (binding.chord !== undefined) {
-        // Whole thing on the press, nothing on the release. See `Binding`.
-        if (!pressed) return
         const chord = binding.chord
-        // Modifiers down in order, the key, then up in reverse. A client
-        // watching modifier state then sees a sequence it could have got from
-        // real hardware, which is the same ordering `keyboard/Keyboard.tsx`
-        // uses for the same reason.
-        for (const code of chord) onKey(code, true)
-        for (const code of [...chord].reverse()) onKey(code, false)
+        // Modifiers down in order then the key, and on release the key first
+        // then the modifiers in reverse. Anything watching modifier state sees
+        // a sequence it could have got from real hardware, which is the same
+        // ordering `keyboard/Keyboard.tsx` uses for the same reason.
+        //
+        // Held rather than fired, so a tap is a short press and a hold is a
+        // hold. See `Binding.chord`.
+        if (pressed) {
+          for (const code of chord) onKey(code, true)
+        } else {
+          for (const code of [...chord].reverse()) onKey(code, false)
+        }
         return
       }
       if (onButton && binding.button !== undefined) {

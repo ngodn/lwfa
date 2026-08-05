@@ -446,6 +446,9 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                         );
                     }
                     state.sessions.remove(&old);
+                    // Same reason as the disconnect path: the superseded
+                    // socket may have gone while a key was down.
+                    state.release_keys_for(old);
                     if state.primary == Some(old) {
                         // Hand the wheel straight to the reconnection rather
                         // than letting it fall to some other device for the
@@ -519,6 +522,10 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 .map(|s| s.client.clone())
                 .unwrap_or_default();
             state.sessions.remove(&session);
+            // Anything it was holding is let go first. A held key outlives its
+            // socket otherwise, because the seat never hears that a connection
+            // died. See `Lwfa::release_keys_for`.
+            state.release_keys_for(session);
             // Parked, not unplugged: a network flap must not cost the game
             // its controller device. Inputs are released on the way into the
             // parking spot, so a tab closed mid-press does not leave a
@@ -1024,7 +1031,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             vertical,
         } => state.remote_pointer_axis(horizontal, vertical),
         ToEngine::PointerLeave => state.remote_pointer_leave(),
-        ToEngine::Key { key, pressed } => state.remote_key(key, pressed),
+        ToEngine::Key { key, pressed } => state.remote_key(session, key, pressed),
         ToEngine::TouchDown { window, id, x, y } => state.remote_touch_down(window, id, x, y),
         ToEngine::TouchMotion { window, id, x, y } => state.remote_touch_motion(window, id, x, y),
         ToEngine::TouchUp { id } => state.remote_touch_up(id),

@@ -113,8 +113,26 @@ fn key_for(button: GamepadButton) -> Key {
     match button {
         GamepadButton::South => Key::ButtonSouth,
         GamepadButton::East => Key::ButtonEast,
-        GamepadButton::West => Key::ButtonWest,
-        GamepadButton::North => Key::ButtonNorth,
+        // North and West are crossed on purpose, and this is not a typo.
+        //
+        // The kernel's directional names describe a *Nintendo* face layout,
+        // not an Xbox one. `input-event-codes.h` defines them as aliases:
+        //
+        //     #define BTN_NORTH 0x133
+        //     #define BTN_X     BTN_NORTH
+        //     #define BTN_WEST  0x134
+        //     #define BTN_Y     BTN_WEST
+        //
+        // On an Xbox pad X is the left button and Y is the top one, so the
+        // code called "north" is physically the left face and "west" is the
+        // top. SDL follows the aliases, so a device claiming Xbox ids (which
+        // this one does, see the module comment) must send 0x133 for X and
+        // 0x134 for Y.
+        //
+        // Sending them uncrossed put X where the shell drew Y and Y where it
+        // drew X, in every game.
+        GamepadButton::West => Key::ButtonNorth,
+        GamepadButton::North => Key::ButtonWest,
         GamepadButton::LeftShoulder => Key::ButtonTL,
         GamepadButton::RightShoulder => Key::ButtonTR,
         // The triggers are analog axes as well; the button is what a game

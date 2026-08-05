@@ -190,6 +190,9 @@ pub struct Lwfa {
     /// Repairs X input focus when it points at nothing. See `xfocus.rs`.
     pub xfocus: Option<crate::xfocus::Guardian>,
     /// A controller surviving a session flap. See [`Self::begin_session_grace`].
+    /// Keys each session currently holds, so they can be let go if it dies.
+    /// See `Lwfa::remote_key`.
+    pub held_keys: std::collections::HashMap<lwfa_proto::SessionId, std::collections::HashSet<u32>>,
     parked_pad: Option<crate::gamepad::VirtualPad>,
     /// The browser that was holding the parked controller, if any.
     ///
@@ -314,6 +317,7 @@ impl Lwfa {
             reassert_timer: None,
             last_popup_map: None,
             xfocus: None,
+            held_keys: std::collections::HashMap::new(),
             parked_pad: None,
             parked_pad_client: None,
             grace_until: None,
