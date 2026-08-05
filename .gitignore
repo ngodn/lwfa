@@ -38,6 +38,9 @@ node_modules/
 # Vite build output for the shell.
 /packages/shell/dist/
 
+# Business notes. Private thinking, not part of the open-source project.
+/business/
+
 # Deployment configs filled in for one particular machine. The templates in
 # deploy/ are committed and generic; a copy with your real hostname, LAN
 # address and certificate paths belongs here and nowhere else.
