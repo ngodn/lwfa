@@ -91,8 +91,8 @@ Releases are a single self-extracting file. Download the latest from
 [Releases](https://github.com/ngodn/lwfa/releases), then:
 
 ```sh
-chmod +x lwfa-1.0.5.run
-./lwfa-1.0.5.run
+chmod +x lwfa-1.0.6.run
+./lwfa-1.0.6.run
 ```
 
 It asks about the port, the workspace lwfa should take, TLS and autostart, then
@@ -100,7 +100,7 @@ prints a link with the password already in it. To read the contents before
 running any of it, unpack without installing:
 
 ```sh
-./lwfa-1.0.5.run --extract /tmp/lwfa
+./lwfa-1.0.6.run --extract /tmp/lwfa
 ```
 
 From a checkout instead:

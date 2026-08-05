@@ -1,6 +1,6 @@
 {
   "name": "@lwfa/proto",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "type": "module",
   "description": "The lwfa shell protocol: wire types and a strict decoder, mirroring crates/lwfa-proto",
