@@ -30,6 +30,7 @@ import { useDock } from "@/lib/dock"
 import {
   NAV_GROUPS,
   TIER_COUNT,
+  expandGroups,
   slotsForTier,
   zoneOf,
   type NavGroupId,
@@ -89,10 +90,13 @@ export const NavRail = memo(function NavRail({ active, fired, onSelect }: NavRai
     return () => observer.disconnect()
   }, [vertical])
 
-  // The first tier whose buttons fit. Recomputed only when something that can
-  // change the answer changes.
-  const tier = pickTier(available, metrics, order, hidden)
-  const slots = slotsForTier(tier, order, hidden)
+  // The first tier whose buttons fit, then any groups the leftover space can
+  // afford to lay out in full. The tiers are coarse, and without the second
+  // step a rail with room for seven buttons draws five and merges the keyboard
+  // and gamepad for no reason.
+  const fits = fitsIn(available, metrics)
+  const tier = pickTier(fits, order, hidden)
+  const slots = slotsForTier(tier, order, hidden, expandGroups(tier, order, hidden, fits))
 
   // Three clusters with the slack shared between them, which is the whole point
   // of the layout. The buttons reached for constantly while working sit hard
@@ -290,27 +294,33 @@ const RailButton = memo(function RailButton({
 })
 
 /**
- * The roomiest tier that fits in `available` pixels.
+ * Whether the rail can draw `count` buttons in the space it measured.
  *
- * Returns tier 0 until the first measurement lands. That is the right guess:
+ * Everything true until the first measurement lands. That is the right guess:
  * the overwhelmingly common case is a display with room to spare, and starting
  * collapsed would make every desktop load flash a compact rail.
  */
-function pickTier(
+function fitsIn(
   available: number | null,
   metrics: (typeof SIZES)[keyof typeof SIZES],
+): (count: number) => boolean {
+  if (available === null) return () => true
+  const usable = available - metrics.pad * 2
+  return (count) => {
+    if (count === 0) return true
+    // One separator's worth of slack, plus the gaps between buttons.
+    return count * metrics.button + (count - 1) * metrics.gap + 12 <= usable
+  }
+}
+
+/** The roomiest tier that fits. */
+function pickTier(
+  fits: (count: number) => boolean,
   order: NavItemId[],
   hidden: NavItemId[],
 ): number {
-  if (available === null) return 0
-
-  const usable = available - metrics.pad * 2
   for (let tier = 0; tier < TIER_COUNT; tier++) {
-    const count = slotsForTier(tier, order, hidden).length
-    if (count === 0) return tier
-    // One separator's worth of slack, plus the gaps between buttons.
-    const needed = count * metrics.button + (count - 1) * metrics.gap + 12
-    if (needed <= usable) return tier
+    if (fits(slotsForTier(tier, order, hidden).length)) return tier
   }
   return TIER_COUNT - 1
 }

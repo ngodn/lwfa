@@ -109,15 +109,7 @@ const PlaySurface = memo(function PlaySurface({
   onAxis,
 }: GamepadOverlayProps) {
   return (
-    <div
-      className="pointer-events-none absolute inset-0 z-10 select-none"
-      // A size container, so pads can be sized in `cqmin`: a percentage of the
-      // play area's *smaller* side. Sizing off the width alone makes every pad
-      // enormous on a landscape tablet and unusably small in portrait, which is
-      // the same layout looking wrong on both.
-      style={{ opacity, containerType: "size" }}
-      aria-label="On-screen gamepad"
-    >
+    <PlayArea style={{ opacity }} aria-label="On-screen gamepad">
       {pads.map((pad) => (
         <PlayPad
           key={pad.id}
@@ -129,6 +121,62 @@ const PlaySurface = memo(function PlaySurface({
           onAxis={onAxis}
         />
       ))}
+    </PlayArea>
+  )
+})
+
+/**
+ * The box the layout is arranged in, which is not always the whole screen.
+ *
+ * A pad's position is a percentage of each axis and its size a percentage of
+ * the shorter one, so the two only agree while the box stays roughly the shape
+ * the layout was arranged in. Hand the same arrangement a portrait phone and
+ * the gaps between controls shrink with the width while the controls themselves
+ * do not: the face cluster piles into the stick, Select lands on Start, and the
+ * rightmost buttons hang off the edge. That is what "the pad is broken on a
+ * phone" turned out to be.
+ *
+ * Making the box no taller than `MIN_ASPECT` fixes it without touching anyone's
+ * saved layout. A landscape tablet, a desktop and an iPad in landscape are all
+ * wider than that already and are unaffected; a phone in portrait gets a
+ * controller-shaped band across the bottom, where the thumbs are, holding the
+ * arrangement it had in landscape.
+ *
+ * Bottom, not centred: in portrait the top of the screen is the part of the
+ * desktop you are actually looking at, and it is out of thumb reach anyway.
+ */
+const MIN_ASPECT = 16 / 9
+
+const PlayArea = memo(function PlayArea({
+  children,
+  style,
+  areaRef,
+  interactive,
+  ...rest
+}: {
+  children: React.ReactNode
+  style?: React.CSSProperties
+  /** The play area itself, for the editor, which measures it in pixels. */
+  areaRef?: React.Ref<HTMLDivElement>
+  interactive?: boolean
+} & React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    // The outer element is a size container so the inner one can be measured
+    // against the screen; the inner one is the play area and is a size
+    // container in turn, so `cqmin` on a pad means "of the box the layout was
+    // arranged in" rather than "of the screen".
+    <div
+      className={cn("absolute inset-0 z-10 select-none", !interactive && "pointer-events-none")}
+      style={{ ...style, containerType: "size" }}
+    >
+      <div
+        ref={areaRef}
+        className="absolute inset-x-0 bottom-0"
+        style={{ height: `min(100cqh, ${100 / MIN_ASPECT}cqw)`, containerType: "size" }}
+        {...rest}
+      >
+        {children}
+      </div>
     </div>
   )
 })
@@ -301,8 +349,14 @@ const PlayPad = memo(function PlayPad({
       aria-label={String(label)}
     >
       <span
+        // The type scales with the pad, because the pads scale with the
+        // screen. At a fixed size "SELECT" is wider than the button holding it
+        // on anything smaller than a tablet, and the centre cluster reads as
+        // one smeared word. `overflow-hidden` is the guarantee: a label can no
+        // longer paint outside the control it belongs to whatever it says.
+        style={{ fontSize: `${labelSize(pad, String(label))}cqmin` }}
         className={cn(
-          "pointer-events-none grid size-full place-items-center",
+          "pointer-events-none grid size-full place-items-center overflow-hidden",
           // No backdrop blur, and not for looks: a backdrop filter re-samples
           // whatever is behind it every time the backdrop changes, and behind
           // every pad is a live game pushing new frames continuously. With a
@@ -311,11 +365,10 @@ const PlayPad = memo(function PlayPad({
           // turned on. A slightly darker flat fill keeps the pads legible.
           "border border-white/20 bg-black/50 text-white/90",
           "transition-transform group-active:scale-95 group-active:bg-white/25",
-          pad.kind === "trigger" ? "rounded-lg text-xs" : "rounded-full text-base",
+          pad.kind === "trigger" ? "rounded-lg" : "rounded-full",
           // A chord's name is several characters, not one glyph, so it needs
           // room to be legible at thumb size.
-          pad.kind === "key" && "rounded-lg px-1 text-[0.6rem] leading-tight break-all",
-          skin === "playstation" && pad.kind === "button" && "text-lg",
+          pad.kind === "key" && "rounded-lg px-1 leading-tight break-all",
         )}
       >
         {label}
@@ -324,6 +377,23 @@ const PlayPad = memo(function PlayPad({
   )
 })
 
+
+/**
+ * Type size for a pad's label, in `cqmin`, so it scales with the pad.
+ *
+ * A fixed size only ever suits one screen. The face buttons carry a single
+ * glyph and want to be as large as the control allows; `SELECT`, `OPTIONS` and
+ * a chord's name are words, and a word set at glyph size is wider than the
+ * circle around it, which is why the centre cluster used to read as one smeared
+ * label. Long labels get proportionally less, from the width the word needs.
+ */
+function labelSize(pad: Pad, label: string): string {
+  const base = pad.kind === "trigger" || pad.kind === "key" ? 0.3 : 0.34
+  // 0.68em is about the width of an upper-case character in this face, which
+  // is what these labels are; leave a little of the circle either side.
+  const forWidth = 0.9 / (0.68 * Math.max(label.length, 1))
+  return (pad.size * Math.min(base, forWidth)).toFixed(2)
+}
 
 /**
  * An analog thumbstick.
@@ -803,7 +873,8 @@ const EditCanvas = memo(function EditCanvas({ pads, skin, onChange }: GamepadOve
   )
 
   return (
-    <div ref={box} className="absolute inset-0 z-10">
+    // The same box play uses, so what you arrange is what you get.
+    <PlayArea areaRef={box} interactive>
       <ReactFlow
         nodes={nodes}
         edges={[]}
@@ -836,7 +907,7 @@ const EditCanvas = memo(function EditCanvas({ pads, skin, onChange }: GamepadOve
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} className="opacity-60" />
       </ReactFlow>
       <ResizeBar selected={selected} pads={pads} onResize={resize} />
-    </div>
+    </PlayArea>
   )
 })
 

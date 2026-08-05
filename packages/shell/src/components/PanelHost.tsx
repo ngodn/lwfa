@@ -162,7 +162,13 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
                 ))}
               </TabsList>
               {view.members.map((id) => (
-                <TabsContent key={id} value={id} className="mt-0 min-h-0 flex-1">
+                // `flex flex-col`, not just `flex-1`: the tab panel is a block
+                // by default, so the scroll area inside it had nothing to be
+                // flexible against, grew to its content, and spilled out of the
+                // sheet. On a phone that put the bottom of every panel under
+                // the rail, where it both hid the content and swallowed taps
+                // meant for the buttons.
+                <TabsContent key={id} value={id} className="mt-0 flex min-h-0 flex-1 flex-col">
                   <PanelBody id={id} />
                 </TabsContent>
               ))}
@@ -175,7 +181,10 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
 })
 
 function cnPanel(vertical: boolean): string {
-  return ["flex flex-col gap-4 p-0 pt-4", vertical ? "h-full" : "w-full"].join(" ")
+  // `overflow-hidden` is the backstop. A panel whose content outgrows the sheet
+  // should scroll inside it; if some future panel finds a way to escape anyway,
+  // it gets clipped rather than laid over the rail.
+  return ["flex flex-col gap-4 overflow-hidden p-0 pt-4", vertical ? "h-full" : "w-full"].join(" ")
 }
 
 const PanelBody = memo(function PanelBody({ id }: { id: NavItemId }) {

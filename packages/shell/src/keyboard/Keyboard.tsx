@@ -186,7 +186,12 @@ const KeyRow = memo(function KeyRow({
   onPress: (key: KeyDef) => void
 }) {
   return (
-    <div className="flex min-h-0 flex-1 gap-1">
+    // A size container, so a key's legend can be sized from the key rather than
+    // from a fixed number of pixels. The rows share the dock's height between
+    // them, which means a key is a different size on a phone, on a tablet, and
+    // on a dock the user has dragged taller, while `text-xs` was the same 12px
+    // in all three: shrunken on the tablet, cramped on the phone.
+    <div className="flex min-h-0 flex-1 gap-1" style={{ containerType: "size" }}>
       {keys.map((key) => (
         <Key key={`${key.code}-${key.legend}`} def={key} held={held} onPress={onPress} />
       ))}
@@ -216,27 +221,60 @@ const Key = memo(function Key({
         event.preventDefault()
         onPress(def)
       }}
-      style={{ flexGrow: def.width ?? 1, flexBasis: 0 }}
+      style={{ flexGrow: def.width ?? 1, flexBasis: 0, containerType: "size" }}
       aria-label={def.legend}
       aria-pressed={def.modifier ? latched : undefined}
       className={cn(
-        "min-h-0 min-w-0 rounded-md border bg-background text-xs font-medium select-none",
+        // `tabular-nums` so the number row's digits are all the same width and
+        // the row does not look hand-set; `tracking-tight` because a legend is
+        // one word on a small surface, not running text.
+        "min-h-0 min-w-0 rounded-md border bg-background font-medium tracking-tight tabular-nums select-none",
         "transition-colors active:bg-accent active:scale-95",
         // Guarded, because a `hover:` style on a touch surface sticks after a
         // tap and leaves a trail of keys looking pressed.
         "[@media(hover:hover)]:hover:bg-accent",
         latched && "border-primary bg-primary/15 text-primary",
-        def.legend.length > 2 && "text-[10px]",
       )}
     >
-      {def.legend === "Enter" ? (
-        <CornerDownLeft className="mx-auto size-3.5" aria-hidden />
-      ) : (
-        legend
-      )}
+      <span
+        className="grid size-full place-items-center overflow-hidden"
+        style={{ fontSize: legendSize(legend) }}
+      >
+        {def.legend === "Enter" ? (
+          <CornerDownLeft className="size-[1.3em]" aria-hidden />
+        ) : (
+          legend
+        )}
+      </span>
     </button>
   )
 })
+
+/**
+ * How big a key's legend is, measured against the key it sits on.
+ *
+ * A physical keycap's letter is roughly half the height of the cap, and every
+ * software keyboard worth copying follows it: the letter *is* the key, and the
+ * words on the modifiers are labels for it. A fixed 12px was neither, being
+ * cramped on a phone and lost on a tablet, where the same 12px sits on a key
+ * three times the width.
+ *
+ * Two limits, whichever is smaller. Height gives a letter its share of the cap.
+ * Width is what a word needs: `Shift` has to fit across its key, and its key is
+ * wide, so on a tablet it is the height that binds and on a phone the width.
+ * Each key is its own container, so both are the real key rather than the row.
+ *
+ * Clamped at both ends rather than left purely proportional: below about 9px a
+ * legend stops being readable at arm's length whatever the key is doing, and
+ * above about 22px a letter starts to look like a headline.
+ */
+function legendSize(legend: string): string {
+  const chars = Math.max(legend.length, 1)
+  // 0.55em per character, with a little of the key left either side.
+  const forWidth = (95 / (0.55 * chars)).toFixed(1)
+  const forHeight = chars <= 1 ? 48 : 40
+  return `clamp(9px, min(${forHeight}cqh, ${forWidth}cqw), 22px)`
+}
 
 function labelOf(id: ModifierId): string {
   return id === "ctrl" ? "Ctrl" : id === "alt" ? "Alt" : id === "shift" ? "Shift" : "Super"

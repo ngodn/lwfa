@@ -214,3 +214,66 @@ describe("a layout saved by an older version", () => {
     expect(pads).toEqual(DEFAULT_LAYOUT)
   })
 })
+
+/**
+ * The default arrangement, checked as geometry rather than by eye.
+ *
+ * A pad's position is a percentage of each axis while its size is a percentage
+ * of the shorter one, so the same numbers describe a different arrangement on
+ * every aspect ratio. The overlay pins the bottom of that range: the play area
+ * is never taller than 16:9, so a screen can be wider than the shape the layout
+ * was arranged in but never narrower. Wider only ever spreads the controls
+ * further apart horizontally, which means a layout that does not collide at
+ * exactly 16:9 does not collide anywhere.
+ *
+ * That makes 16:9 the one case worth testing, and it is worth testing because
+ * the numbers are hand-tuned and nothing else notices when a new control is
+ * dropped on top of an old one.
+ */
+describe("the default layout", () => {
+  // One unit of the play area's shorter side, at the tightest aspect allowed.
+  const H = 100
+  const W = (H * 16) / 9
+
+  interface Box { id: string; cx: number; cy: number; r: number; round: boolean }
+
+  const boxes: Box[] = DEFAULT_LAYOUT.map((pad) => ({
+    id: pad.id,
+    cx: (pad.x / 100) * W,
+    cy: (pad.y / 100) * H,
+    r: (pad.size / 100) * H / 2,
+    // Face buttons and stick clicks are drawn as circles; triggers, the d-pad
+    // and the sticks' outer ring are square-ish, so they get the harsher test.
+    round: pad.kind === "button",
+  }))
+
+  it("keeps every control clear of every other", () => {
+    const touching: string[] = []
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i]!
+        const b = boxes[j]!
+        const dx = Math.abs(a.cx - b.cx)
+        const dy = Math.abs(a.cy - b.cy)
+        const hit =
+          a.round && b.round
+            ? Math.hypot(dx, dy) < a.r + b.r
+            : dx < a.r + b.r && dy < a.r + b.r
+        if (hit) touching.push(`${a.id} overlaps ${b.id}`)
+      }
+    }
+    expect(touching).toEqual([])
+  })
+
+  it("keeps every control on screen", () => {
+    // The overlay clamps a pad to half its own width from each edge, so a
+    // control placed outside that moves when it is drawn and the arrangement
+    // stops being the one that was written down.
+    for (const box of boxes) {
+      expect(box.cx - box.r).toBeGreaterThanOrEqual(-0.001)
+      expect(box.cx + box.r).toBeLessThanOrEqual(W + 0.001)
+      expect(box.cy - box.r).toBeGreaterThanOrEqual(-0.001)
+      expect(box.cy + box.r).toBeLessThanOrEqual(H + 0.001)
+    }
+  })
+})

@@ -46,6 +46,16 @@ const GamepadOverlay = lazy(() =>
 )
 
 /** Fractions of the content area's height. */
+/**
+ * A 44px touch target on a button that does not look 44px.
+ *
+ * These sit in the corner of a running game, so they are drawn small on
+ * purpose. Small drawn is fine; small to hit is not, and 44px is the floor
+ * every touch guideline agrees on. The pseudo-element grows the hit area
+ * without growing the furniture.
+ */
+const HIT_AREA = "relative after:absolute after:-inset-1.5 after:content-['']"
+
 const MIN_FRACTION = 0.2
 const MAX_FRACTION = 0.75
 const DEFAULT_FRACTION = 0.42
@@ -203,7 +213,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
           <Button
             size="sm"
             variant={gamepad.editing ? "default" : "ghost"}
-            className={cn("text-xs", isGamepad ? "h-6 px-2 text-white/90" : "h-7")}
+            className={cn("text-xs", HIT_AREA, isGamepad ? "h-8 px-2.5 text-white/90" : "h-8")}
             aria-pressed={gamepad.editing}
             onClick={() => setGamepad({ editing: !gamepad.editing })}
           >
@@ -213,20 +223,20 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         <Button
           size="icon"
           variant="ghost"
-          className={cn(isGamepad ? "size-6 text-white/90" : "size-7")}
+          className={cn(HIT_AREA, isGamepad ? "size-8 text-white/90" : "size-8")}
           aria-label="Settings"
           onClick={() => onOpenSettings(dock)}
         >
-          <Settings2 className={cn(isGamepad ? "size-3.5" : "size-4")} aria-hidden />
+          <Settings2 className="size-4" aria-hidden />
         </Button>
         <Button
           size="icon"
           variant="ghost"
-          className={cn(isGamepad ? "size-6 text-white/90" : "size-7")}
+          className={cn(HIT_AREA, isGamepad ? "size-8 text-white/90" : "size-8")}
           aria-label="Hide"
           onClick={() => setDock("none")}
         >
-          <X className={cn(isGamepad ? "size-3.5" : "size-4")} aria-hidden />
+          <X className="size-4" aria-hidden />
         </Button>
       </header>
 

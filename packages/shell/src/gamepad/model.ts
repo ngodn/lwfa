@@ -142,9 +142,9 @@ export const DEFAULT_LAYOUT: Pad[] = [
   // Shoulders and triggers, stacked in the top corners where index fingers
   // rest when a tablet is held in two hands.
   { id: "l2", kind: "trigger", face: "l2", x: 8, y: 9, size: 13, code: 42 }, // Shift
-  { id: "l1", kind: "trigger", face: "l1", x: 8, y: 25, size: 13, code: 29 }, // Ctrl
+  { id: "l1", kind: "trigger", face: "l1", x: 8, y: 23, size: 13, code: 29 }, // Ctrl
   { id: "r2", kind: "trigger", face: "r2", x: 92, y: 9, size: 13, code: 18 }, // E
-  { id: "r1", kind: "trigger", face: "r1", x: 92, y: 25, size: 13, code: 33 }, // F
+  { id: "r1", kind: "trigger", face: "r1", x: 92, y: 23, size: 13, code: 33 }, // F
 
   // D-pad above the left stick, as on a DualShock.
   { id: "dpad", kind: "dpad", face: "dpad", x: 15, y: 44, size: 22, directions: [103, 106, 108, 105] },
@@ -180,8 +180,12 @@ export const DEFAULT_LAYOUT: Pad[] = [
   // here, so a stick-click binding either fires when you meant to aim or never
   // fires at all. Every shooter binds these to sprint and melee, so they get
   // real buttons, next to the shoulders where a spare finger already is.
-  { id: "l3", kind: "button", face: "l3", x: 8, y: 41, size: 11, code: 46 }, // C, crouch
-  { id: "r3", kind: "button", face: "r3", x: 92, y: 41, size: 11, code: 50 }, // M
+  //
+  // Hard against the edges and above the face cluster rather than beside it:
+  // at 8/41 they sat on the d-pad and on the east face button on any screen
+  // near 16:9, which is a control you cannot press without pressing another.
+  { id: "l3", kind: "button", face: "l3", x: 5, y: 36, size: 11, code: 46 }, // C, crouch
+  { id: "r3", kind: "button", face: "r3", x: 95, y: 36, size: 11, code: 50 }, // M
 
   // Centre cluster.
   { id: "select", kind: "button", face: "select", x: 42, y: 12, size: 9, code: 15 }, // Tab

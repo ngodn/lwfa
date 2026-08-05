@@ -223,6 +223,47 @@ const TIERS: ReadonlyArray<ReadonlyArray<NavItemId | NavGroupId>> = [
 
 export const TIER_COUNT = TIERS.length
 
+const EMPTY_EXPANDED: ReadonlySet<NavGroupId> = new Set<NavGroupId>()
+
+/**
+ * Groups worth un-merging again when the chosen tier left room to spare.
+ *
+ * The tiers are coarse by design, so the rail routinely lands on one that fits
+ * with a hundred pixels going begging: a phone in portrait has room for seven
+ * buttons and tier 2 draws five. Merging a control nobody asked to merge is not
+ * free either. `keyboard` and `gamepad` put their surface on screen with one
+ * tap, and folding them into `input` turns that tap into "open a settings panel
+ * and find the switch" — the cost is much higher than it is for `more`, whose
+ * members open panels regardless.
+ *
+ * So: hardest-to-lose first, and the rail expands while the buttons still fit.
+ */
+const EXPAND_ORDER: ReadonlyArray<NavGroupId> = ["input", "more"]
+
+/**
+ * Which groups to lay out in full, given how many buttons the rail can hold.
+ *
+ * `fits` answers "can the rail draw this many buttons", which only the
+ * component measuring pixels can know.
+ */
+export function expandGroups(
+  tier: number,
+  order: NavItemId[],
+  hidden: NavItemId[],
+  fits: (count: number) => boolean,
+): ReadonlySet<NavGroupId> {
+  if (tier <= 0) return EMPTY_EXPANDED
+
+  const expanded = new Set<NavGroupId>()
+  for (const group of EXPAND_ORDER) {
+    const candidate = new Set(expanded).add(group)
+    if (fits(slotsForTier(tier, order, hidden, candidate).length)) {
+      expanded.add(group)
+    }
+  }
+  return expanded
+}
+
 function isGroup(id: NavItemId | NavGroupId): id is NavGroupId {
   return id === "input" || id === "more"
 }
@@ -238,6 +279,7 @@ export function slotsForTier(
   tier: number,
   order: NavItemId[],
   hidden: NavItemId[],
+  expanded: ReadonlySet<NavGroupId> = EMPTY_EXPANDED,
 ): NavSlot[] {
   const isHidden = new Set(hidden)
   const visible = order.filter((id) => !isHidden.has(id))
@@ -263,10 +305,14 @@ export function slotsForTier(
     if (isGroup(owner)) {
       const members = NAV_GROUPS[owner].members.filter((m) => !isHidden.has(m))
       if (members.length === 0) continue
-      // One surviving member does not need a menu wrapped round it.
-      if (members.length === 1) {
-        const only = members[0]!
-        slots.push({ kind: "item", id: only, item: NAV_ITEMS[only] })
+      // One surviving member does not need a menu wrapped round it, and neither
+      // does a group the rail found room to lay out in full.
+      if (members.length === 1 || expanded.has(owner)) {
+        // The user's order, not the group's: the group's is a panel tab order.
+        const set = new Set(members)
+        for (const m of visible) {
+          if (set.has(m)) slots.push({ kind: "item", id: m, item: NAV_ITEMS[m] })
+        }
         continue
       }
       slots.push({ kind: "group", id: owner, group: NAV_GROUPS[owner], members })
