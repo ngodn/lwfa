@@ -8,7 +8,7 @@ templates and the installer.
 
 ```sh
 scripts/package-portable.sh          # build and package, in a container
-gh release create v1.0.2 releases/lwfa-1.0.2.run
+gh release create v1.0.3 releases/lwfa-1.0.3.run
 ```
 
 Version numbers come from the manifests, so bump those first. There are seven:
@@ -68,13 +68,13 @@ The failure modes here are not caught by the test suite, because they are about
 the artifact rather than the code. Worth running:
 
 ```sh
-releases/lwfa-1.0.2.run --extract /tmp/check
+releases/lwfa-1.0.3.run --extract /tmp/check
 
 # The glibc floor. Should be well under the oldest target.
 objdump -T /tmp/check/lwfa-*/libexec/lwfa-engine | grep -oP 'GLIBC_\K[0-9.]+' | sort -V | tail -1
 
 # Nothing unresolved but libdrm, on a distribution that is not this one.
-docker run --rm -v /tmp/check/lwfa-1.0.2:/lwfa:ro debian:13 \
+docker run --rm -v /tmp/check/lwfa-1.0.3:/lwfa:ro debian:13 \
   sh -c 'ldd /lwfa/libexec/lwfa-engine | grep "not found"'
 ```
 
@@ -87,8 +87,8 @@ Annotated, so the tag carries a date, an author and a message, and
 `git describe` prefers it:
 
 ```sh
-git tag -a v1.0.2
-git push origin v1.0.2
+git tag -a v1.0.3
+git push origin v1.0.3
 ```
 
 Build the artifact from the tagged tree rather than from whatever is in the

@@ -1,6 +1,6 @@
 {
   "name": "@lwfa/spring",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "type": "module",
   "description": "Motion-compatible spring integrator, the TypeScript half of the lwfa parity contract",
