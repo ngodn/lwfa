@@ -191,6 +191,16 @@ pub struct Lwfa {
     pub xfocus: Option<crate::xfocus::Guardian>,
     /// A controller surviving a session flap. See [`Self::begin_session_grace`].
     parked_pad: Option<crate::gamepad::VirtualPad>,
+    /// The browser that was holding the parked controller, if any.
+    ///
+    /// Kept so a reconnecting client gets its pad back without having to ask.
+    /// The client does ask, by re-sending `SetGamepad` when the session id
+    /// changes, and that is the normal path. It is not sufficient: the ask
+    /// only happens if the pad is still on screen in the returning page, and
+    /// a client whose interface state was reset comes back with the dock
+    /// closed and never says anything. Observed as a controller dead for 37
+    /// seconds mid-game after a reconnect that itself took 200ms.
+    parked_pad_client: Option<String>,
     /// While set, the last session is presumed to be coming back.
     grace_until: Option<std::time::Instant>,
     grace_timer: Option<smithay::reexports::calloop::RegistrationToken>,
@@ -305,6 +315,7 @@ impl Lwfa {
             last_popup_map: None,
             xfocus: None,
             parked_pad: None,
+            parked_pad_client: None,
             grace_until: None,
             grace_timer: None,
             focused: None,
@@ -1106,16 +1117,40 @@ impl Lwfa {
     /// across the flap; the inputs are released first, so a disconnect
     /// mid-press does not leave a character running into a wall. A new
     /// session adopts it in the `SetGamepad` handler.
-    pub fn park_gamepad(&mut self, session: lwfa_proto::SessionId) {
+    /// `client` is the browser id of the leaving session, passed in rather
+    /// than looked up: the disconnect path removes the session from the map
+    /// before parking, so by here there is nothing left to look up.
+    pub fn park_gamepad(&mut self, session: lwfa_proto::SessionId, client: &str) {
         if let Some(pad) = self.gamepads.remove(&session) {
             pad.neutral();
             self.parked_pad = Some(pad);
+            // Remembered so the same browser gets it back on reconnect without
+            // having to ask. See `parked_pad_client`.
+            self.parked_pad_client = Some(client.to_string()).filter(|c| !c.is_empty());
             tracing::info!("session {session} left; its controller is parked");
         }
     }
 
+    /// Give a reconnecting browser its parked controller straight back.
+    ///
+    /// Only for the browser that was holding it, matched on the stable id the
+    /// handshake carries, and only when that id is known: an empty one would
+    /// match every anonymous client and hand a stranger the pad.
+    pub fn restore_gamepad_for(&mut self, session: lwfa_proto::SessionId, client: &str) {
+        if !is_the_browser_that_parked_it(self.parked_pad_client.as_deref(), client) {
+            return;
+        }
+        let Some(pad) = self.parked_pad.take() else {
+            return;
+        };
+        self.parked_pad_client = None;
+        self.gamepads.insert(session, pad);
+        tracing::info!("session {session} is the browser that parked the controller; gave it back");
+    }
+
     /// A parked controller for a new session to adopt, if one is waiting.
     pub fn adopt_parked_gamepad(&mut self) -> Option<crate::gamepad::VirtualPad> {
+        self.parked_pad_client = None;
         self.parked_pad.take()
     }
 
@@ -1137,7 +1172,10 @@ impl Lwfa {
             Entry::Occupied(bound) => Some(&*bound.into_mut()),
             Entry::Vacant(slot) => {
                 let pad = match self.parked_pad.take() {
-                    Some(parked) => parked,
+                    Some(parked) => {
+                        self.parked_pad_client = None;
+                        parked
+                    }
                     None => match crate::gamepad::VirtualPad::open() {
                         Ok(fresh) => fresh,
                         Err(err) => {
@@ -1743,4 +1781,46 @@ pub struct ClientState {
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+}
+
+/// Is this connection the browser that parked the controller?
+///
+/// Split out from [`Lwfa::restore_gamepad_for`] so the rule can be tested
+/// without standing up a compositor, the same way `input::spawn_dir_for` is.
+fn is_the_browser_that_parked_it(parked_by: Option<&str>, client: &str) -> bool {
+    // An empty id means "this browser did not say who it is", which every
+    // anonymous client sends. Matching on it would hand the next stranger
+    // somebody else's controller mid-game.
+    !client.is_empty() && parked_by == Some(client)
+}
+
+#[cfg(test)]
+mod gamepad_restore_tests {
+    use super::is_the_browser_that_parked_it;
+
+    #[test]
+    fn the_same_browser_gets_its_controller_back() {
+        assert!(is_the_browser_that_parked_it(Some("abc"), "abc"));
+    }
+
+    #[test]
+    fn a_different_browser_does_not() {
+        // Somebody else's tablet joining must not take the pad out of the
+        // hands of the person who was playing.
+        assert!(!is_the_browser_that_parked_it(Some("abc"), "xyz"));
+    }
+
+    #[test]
+    fn an_anonymous_client_never_matches() {
+        // Empty is what a client that sent no id looks like, so matching it
+        // would give the pad to whoever connected next.
+        assert!(!is_the_browser_that_parked_it(Some(""), ""));
+        assert!(!is_the_browser_that_parked_it(None, ""));
+        assert!(!is_the_browser_that_parked_it(Some("abc"), ""));
+    }
+
+    #[test]
+    fn nothing_parked_means_nothing_to_give_back() {
+        assert!(!is_the_browser_that_parked_it(None, "abc"));
+    }
 }

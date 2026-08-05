@@ -461,8 +461,14 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             }
             state.sessions.insert(
                 session,
-                new_session(permissions, account, device, client),
+                new_session(permissions, account, device, client.clone()),
             );
+            // Hand the controller back before the client has to ask. The shell
+            // does ask, but only while its pad is on screen, so a page that
+            // came back with the dock closed left the pad parked and the game
+            // unplayable until something happened to re-announce it. See
+            // `Lwfa::restore_gamepad_for`.
+            state.restore_gamepad_for(session, &client);
             state.layout.set_mode(Mode::Shell);
 
             // The first connection that can actually drive takes the wheel. A
@@ -504,12 +510,20 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
         }
 
         ShellEvent::Disconnected(session) => {
+            // Read before the session is removed: it is what identifies the
+            // browser, and `park_gamepad` needs it to give the controller back
+            // when that browser returns.
+            let client = state
+                .sessions
+                .get(&session)
+                .map(|s| s.client.clone())
+                .unwrap_or_default();
             state.sessions.remove(&session);
             // Parked, not unplugged: a network flap must not cost the game
             // its controller device. Inputs are released on the way into the
             // parking spot, so a tab closed mid-press does not leave a
             // character running into a wall. See `park_gamepad`.
-            state.park_gamepad(session);
+            state.park_gamepad(session, &client);
             // The grace must begin *before* the audio sync below looks at
             // the session list, or the sync sees "empty, no grace" and
             // tears the capture down in the same breath the grace was
@@ -877,7 +891,17 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                     // The device must outlive the session: games only see
                     // controllers that existed before they launched. Parked,
                     // inputs released; see `Gamepad::persistent`.
-                    state.park_gamepad(session);
+                    //
+                    // The session is still live here, so its browser id is
+                    // still there to be read. Unlike the disconnect path, this
+                    // is a deliberate put-down rather than a flap, but the same
+                    // browser coming back should still get its pad.
+                    let client = state
+                        .sessions
+                        .get(&session)
+                        .map(|s| s.client.clone())
+                        .unwrap_or_default();
+                    state.park_gamepad(session, &client);
                 } else {
                     // Dropping it releases every button first; see `VirtualPad`.
                     state.gamepads.remove(&session);
