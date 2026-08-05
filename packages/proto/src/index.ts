@@ -261,6 +261,7 @@ export type ToEngine =
   | { type: "setLayout"; windows: WindowLayout[]; animate: Animation | null }
   | { type: "focusWindow"; id: WindowId }
   | { type: "closeWindow"; id: WindowId }
+  | { type: "quitApp"; id: WindowId }
   /**
    * Launch a command line.
    *
@@ -848,7 +849,8 @@ export function decodeToEngine(text: string): ToEngine {
       }
     }
     case "focusWindow":
-    case "closeWindow": {
+    case "closeWindow":
+    case "quitApp": {
       const where = `${at}.${t}`
       noExtraKeys(o, ["type", "id"], where)
       return { type: t, id: int(o, "id", where) }

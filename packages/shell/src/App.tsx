@@ -1012,6 +1012,7 @@ export function App(): React.ReactElement {
       focusWindow: (id) =>
         update((st, o) => focusWindow(st, id, o, configRef.current)),
       closeWindow: (id) => send({ type: "closeWindow", id }),
+      quitApp: (id) => send({ type: "quitApp", id }),
       spawn: (command, terminal = false) => send({ type: "spawn", command, terminal }),
       closeAndSpawn: (command, terminal, pid, force) =>
         send({ type: "closeAndSpawn", command, terminal, pid, force }),

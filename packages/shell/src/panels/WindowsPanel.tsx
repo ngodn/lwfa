@@ -34,6 +34,7 @@ import {
   Maximize2,
   Minimize2,
   Plus,
+  Power,
   X,
 } from "lucide-react"
 import type { WindowId } from "@lwfa/proto"
@@ -356,6 +357,13 @@ const WindowItem = memo(function WindowItem({
             </IconAction>
             <IconAction label="Close" danger onClick={() => actions.closeWindow(row.id)}>
               <X aria-hidden />
+            </IconAction>
+            <IconAction
+              label="Quit the application"
+              danger
+              onClick={() => actions.quitApp(row.id)}
+            >
+              <Power aria-hidden />
             </IconAction>
 
             <span aria-hidden className="mx-0.5 h-6 w-px shrink-0 bg-border" />

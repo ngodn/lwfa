@@ -22,6 +22,9 @@ use smithay::backend::input::{
     KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
 };
 use smithay::input::keyboard::{FilterResult, keysyms};
+// For `WlSurface::client`, used to find the process behind a window in
+// `quit_app`.
+use smithay::reexports::wayland_server::Resource;
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::utils::SERIAL_COUNTER;
 
@@ -215,6 +218,71 @@ impl Lwfa {
                 if let Err(err) = x11.close() {
                     tracing::warn!("failed to close an X11 window: {err}");
                 }
+            }
+        }
+    }
+
+    /// End the process behind a window.
+    ///
+    /// `request_close` asks and the application decides, which is what a close
+    /// button should do. This is the other thing: for applications that stay
+    /// resident with no windows open, it is the only way to give the host its
+    /// single instance back without stopping the whole session. See
+    /// `ToEngine::QuitApp`.
+    ///
+    /// SIGTERM, never SIGKILL. A resident application still gets to run its
+    /// shutdown path and save what it has; the point is to end it, not to
+    /// destroy it. An application that ignores SIGTERM is one the user can
+    /// deal with by hand, which is better than lwfa deciding for them.
+    pub fn quit_app(&self, id: lwfa_proto::WindowId, session: lwfa_proto::SessionId) {
+        let Some(window) = self.layout.window(id) else {
+            return;
+        };
+        let pid = match window.underlying_surface() {
+            smithay::desktop::WindowSurface::Wayland(toplevel) => toplevel
+                .wl_surface()
+                .client()
+                .and_then(|client| client.get_credentials(&self.display_handle).ok())
+                .map(|creds| creds.pid),
+            // X11 clients report it themselves through _NET_WM_PID, so it is a
+            // claim rather than a kernel fact. Good enough here: the worst case
+            // is a signal that does not land, not one that lands elsewhere,
+            // because Xwayland only reports pids for its own clients.
+            smithay::desktop::WindowSurface::X11(x11) => x11.pid().map(|pid| pid as i32),
+        };
+
+        let Some(pid) = pid else {
+            tracing::warn!("no pid for window {id:?}; cannot quit it");
+            self.send_to_session(
+                session,
+                lwfa_proto::ToShell::Error {
+                    request: "quitApp".into(),
+                    message: "could not find the process behind that window".into(),
+                },
+            );
+            return;
+        };
+
+        // Through `rustix` for the same reason as `close_and_spawn`: this crate
+        // denies unsafe code and one syscall is no reason for an exception.
+        let sent = rustix::process::Pid::from_raw(pid)
+            .ok_or_else(|| std::io::Error::other("not a valid pid"))
+            .and_then(|pid| {
+                rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+                    .map_err(Into::into)
+            });
+
+        match sent {
+            Ok(()) => tracing::info!("sent SIGTERM to {pid}, the process behind window {id:?}"),
+            Err(err) => {
+                tracing::warn!("could not quit the process behind window {id:?}: {err}");
+                self.send_to_session(
+                    session,
+                    lwfa_proto::ToShell::Error {
+                        request: "quitApp".into(),
+                        message: format!("could not quit that application: {err}"),
+                    },
+                );
             }
         }
     }

@@ -72,6 +72,8 @@ export interface SessionActions {
 
   focusWindow: (id: WindowId) => void
   closeWindow: (id: WindowId) => void
+  /// Ends the process, not just the window. See `ToEngine::QuitApp`.
+  quitApp: (id: WindowId) => void
   spawn: (command: string, terminal?: boolean) => void
   /**
    * Close a program running on the desktop, then launch it here.

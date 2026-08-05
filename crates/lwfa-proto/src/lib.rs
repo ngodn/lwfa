@@ -633,6 +633,21 @@ pub enum ToEngine {
     FocusWindow { id: WindowId },
     #[serde(rename_all = "camelCase")]
     CloseWindow { id: WindowId },
+    /// End the process behind a window, not just the window.
+    ///
+    /// `CloseWindow` asks politely and the application decides, which is
+    /// correct and is what a close button should do. It is not enough for
+    /// applications that keep running with no windows open: anything built on
+    /// GApplication, and Chromium-derived browsers, stay resident and keep
+    /// their name on the session bus. lwfa shares that bus with the host, so a
+    /// resident copy inside lwfa answers the host's next launch and opens the
+    /// window in here, where the person at the desk cannot reach it.
+    ///
+    /// Separate from `CloseWindow` rather than a flag on it, because the two
+    /// are different promises: one asks, one ends the process and whatever was
+    /// unsaved in it.
+    #[serde(rename_all = "camelCase")]
+    QuitApp { id: WindowId },
     /// Launch a command line. The engine sets `WAYLAND_DISPLAY` to its own
     /// socket, splits the line into argv, and runs it.
     ///

@@ -64,6 +64,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The focus guardian's tick: once a second, repair the X server's input
     // focus if it has fallen on nothing. See `xfocus.rs` for the story.
+    //
+    // The same tick reaps exited children. Everything the engine launches is
+    // its child, and a child that exits stays a zombie until someone waits on
+    // it. Nothing did, so every application the user ever quit left an entry
+    // holding a pid. Doing it here rather than with a SIGCHLD handler keeps
+    // the crate free of unsafe code, and once a second is far more often than
+    // applications exit.
     {
         use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
         event_loop
@@ -72,6 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Timer::from_duration(std::time::Duration::from_secs(1)),
                 |_, _, data| {
                     data.guard_x_focus();
+                    reap_children();
                     TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
                 },
             )
@@ -101,6 +109,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     event_loop.run(None, &mut data, |_| {})?;
 
     Ok(())
+}
+
+/// Collect any children that have exited, without blocking.
+///
+/// Loops because several may have gone since the last tick, and stops on the
+/// first "nothing waiting" so a tick never spins. `ECHILD` simply means there
+/// are no children at all, which is the ordinary state of an idle session.
+fn reap_children() {
+    use rustix::process::{WaitOptions, waitpid};
+    loop {
+        match waitpid(None, WaitOptions::NOHANG) {
+            Ok(Some((pid, _status))) => tracing::debug!("reaped child {pid:?}"),
+            Ok(None) | Err(_) => break,
+        }
+    }
 }
 
 /// Start Xwayland so X11 clients have somewhere to connect.
@@ -658,6 +681,7 @@ fn kind_of(message: &ToEngine) -> &'static str {
         ToEngine::Spawn { .. } => "spawn",
         ToEngine::CloseAndSpawn { .. } => "closeAndSpawn",
         ToEngine::CloseWindow { .. } => "closeWindow",
+        ToEngine::QuitApp { .. } => "quitApp",
         ToEngine::Key { .. } => "key",
         ToEngine::PointerButton { .. } | ToEngine::PointerMotion { .. } => "pointer",
         ToEngine::TouchDown { .. } | ToEngine::TouchMotion { .. } | ToEngine::TouchUp { .. } => {
@@ -695,6 +719,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             state.set_focus(Some(id), false);
         }
         ToEngine::CloseWindow { id } => state.request_close(id),
+        ToEngine::QuitApp { id } => state.quit_app(id, session),
         ToEngine::SetViewport {
             width,
             height,
