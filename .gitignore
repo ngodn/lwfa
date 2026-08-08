@@ -63,6 +63,16 @@ node_modules/
 # the certificate names one particular machine, so neither belongs here.
 /deploy/docker/certs/
 
+# Stray files dropped at the repo root: screenshots from testing sessions and
+# archives like the deck zip. One of those slipped into a commit once. Anything
+# image- or archive-shaped at the top level is scratch, not project material.
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+/*.zip
+/*.tar.gz
+
 # The accounts database. Machine-local, holds password hashes, and belongs to
 # the machine it authenticates for. Its location is XDG_STATE_HOME by default;
 # this covers a stray LWFA_DB pointed at the repo.
