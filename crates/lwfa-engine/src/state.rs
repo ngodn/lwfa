@@ -217,6 +217,13 @@ pub struct Lwfa {
     grace_timer: Option<smithay::reexports::calloop::RegistrationToken>,
 
     focused: Option<WindowId>,
+    /// The window the last remote pointer motion was aimed at.
+    ///
+    /// A button arrives without a window of its own, so click-to-focus has to
+    /// know what the pointer was last over. It used to ask the space, which
+    /// re-derived an answer the shell had already given and got it wrong
+    /// whenever a window's committed size was stale. See `Lwfa::surface_in`.
+    pub pointer_window: Option<WindowId>,
     next_window_id: u64,
     /// Last `WindowInfo` reported to the shell, per window.
     ///
@@ -337,6 +344,7 @@ impl Lwfa {
             grace_until: None,
             grace_timer: None,
             focused: None,
+            pointer_window: None,
             next_window_id: 1,
             reported: std::collections::HashMap::new(),
             socket_name,
@@ -1780,6 +1788,75 @@ impl Lwfa {
                     .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
                     .map(|(s, p)| (s, (p + location).to_f64()))
             })
+    }
+
+    /// What is under this point *inside one named window*, popups included.
+    ///
+    /// # Why input cannot use the whole-space version above
+    ///
+    /// [`Self::surface_under`] asks the space "what is here", and the space
+    /// holds toplevels at the size their clients have actually committed. That
+    /// answer disagrees with the shell's in two ways, and both are bugs the
+    /// user sees as touch being broken.
+    ///
+    /// A window that has been told to shrink keeps its old size until it
+    /// repaints, so it overlaps its neighbours and takes their input. A window
+    /// nobody is streaming is suspended and gets a frame callback once a
+    /// second, so it can stay wrong for a long time. Tiling a group made this
+    /// routine rather than rare, because windows now change size on both axes.
+    ///
+    /// Popups are worse. They are not space elements at all: `PopupManager`
+    /// tracks them and they are drawn as overlays on their parent. A menu or a
+    /// picture-in-picture window that extends past its parent's rect therefore
+    /// sits over *nothing* the space knows about, `element_under` returns
+    /// `None`, and the event is dropped. Smaller windows push popups outside
+    /// more often, so tiling made that routine too.
+    ///
+    /// The shell has already answered the question. It computed the layout,
+    /// positioned the surfaces, and named the window the finger landed on.
+    /// Re-deriving it here can only ever disagree, so this takes the shell's
+    /// word and searches inside that window, which `WindowSurfaceType::ALL`
+    /// extends to its subsurfaces and its Wayland popups.
+    ///
+    /// # X11 is the exception, and it matters most for games
+    ///
+    /// An override-redirect X11 window opts out of window management and is a
+    /// *separate element of the space*, even though [`Self::overlays_for`]
+    /// draws it into whichever window it overlaps. Searching inside the named
+    /// window would never find one, so every X11 menu, tooltip, dropdown and
+    /// in-game overlay would stop taking input. Those are checked first here,
+    /// topmost last in the space and so walked in reverse, which matches the
+    /// order they are drawn in.
+    ///
+    /// This is deliberately not the general space search: only windows that
+    /// have opted out of management are consulted, so an ordinary neighbour
+    /// with a stale size still cannot steal anything.
+    pub fn surface_in(
+        &self,
+        window: &Window,
+        origin: Point<i32, Logical>,
+        pos: Point<f64, Logical>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        for other in self.space.elements().rev() {
+            let is_override = other
+                .x11_surface()
+                .is_some_and(|x11| x11.is_override_redirect());
+            if !is_override {
+                continue;
+            }
+            let Some(location) = self.space.element_location(other) else {
+                continue;
+            };
+            if let Some((surface, point)) =
+                other.surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
+            {
+                return Some((surface, (point + location).to_f64()));
+            }
+        }
+
+        window
+            .surface_under(pos - origin.to_f64(), WindowSurfaceType::ALL)
+            .map(|(s, p)| (s, (p + origin).to_f64()))
     }
 }
 
