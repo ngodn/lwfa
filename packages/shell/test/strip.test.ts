@@ -40,9 +40,15 @@ import {
   removeWindow,
   stackedHeight,
   fillsOutput,
+  fitsOnScreen,
+  fittedWidth,
+  isFitted,
+  liveWindows,
   moveWindow,
   sendToWorkspace,
+  setColumnLive,
   setColumnWidth,
+  setFit,
   setFullscreen,
   streamList,
   stripBounds,
@@ -602,6 +608,18 @@ describe("fullscreen", () => {
  * watched. No pause state is written anywhere in either round trip, which is
  * what makes resume automatic and unable to leak.
  */
+/**
+ * Windows 1, 3 and 2 stacked into a single column, in that order, focused on
+ * the first. Built with the real transitions rather than as a literal, so the
+ * cases below also prove the flag survives being moved around.
+ */
+function stackOfThree(): StripState {
+  const apart = withWindows([1, 2, 3])
+  const joined = moveWindow(apart, 3 as WindowId, { kind: "column", index: 0 }, wide, config)
+  const all = moveWindow(joined, 2 as WindowId, { kind: "column", index: 0 }, wide, config)
+  return focusWindow(all, 1 as WindowId, wide, config)
+}
+
 describe("streamList", () => {
   it("streams every visible window when pause-inactive is off", () => {
     const placed = layout(withWindows([1, 2]), wide, config)
@@ -641,6 +659,33 @@ describe("streamList", () => {
     const down = toggleFullscreen(up, wide, config)
     expect(
       streamList(layout(down, wide, config), wide, config, null, false, fullscreenWindow(down)),
+    ).toEqual([1, 2])
+  })
+
+  it("streams a live column's windows alongside the focused one", () => {
+    const state = setColumnLive(stackOfThree(), 1 as WindowId, true)
+    const placed = layout(state, wide, config)
+    expect(
+      streamList(placed, wide, config, 1 as WindowId, true, null, liveWindows(state)),
+    ).toEqual([1, 3, 2])
+  })
+
+  it("still refuses a live window the viewport cannot show", () => {
+    // The flag widens the *pause* rule and nothing else. Pixels for a column
+    // scrolled off the strip are wasted however it is marked.
+    const off = { id: 9 as WindowId, rect: { x: 2000, y: 8, width: 600, height: 1000 }, z: 1 }
+    const on = { id: 1 as WindowId, rect: { x: 8, y: 8, width: 600, height: 1000 }, z: 0 }
+    expect(
+      streamList([on, off], wide, config, 1 as WindowId, true, null, [1, 9] as WindowId[]),
+    ).toEqual([1])
+  })
+
+  it("cannot narrow what the global setting already streams", () => {
+    // Passing a live list while the pause is off must not turn the list into
+    // "only these". The flag has one direction.
+    const placed = layout(withWindows([1, 2]), wide, config)
+    expect(
+      streamList(placed, wide, config, 1 as WindowId, false, null, [1] as WindowId[]),
     ).toEqual([1, 2])
   })
 
@@ -933,6 +978,242 @@ describe("sendToWorkspace", () => {
     // Pull window 1 over from the workspace that then becomes empty.
     const moved = sendToWorkspace(state, 1 as WindowId, state.focus, out, config)
     expect(here(moved)).toEqual([...before, 1])
+  })
+})
+
+/**
+ * Fitting the columns to the screen.
+ *
+ * The strip could always *express* a grid, since a column of windows is a row
+ * of cells, but it could not hold one: the width presets are fractions of the
+ * whole viewport and ignore the gaps, so two halves overflow and the strip
+ * scrolls, and centring then slides the arrangement about on every focus
+ * change. These pin both halves of the fix.
+ */
+describe("fitting to the screen", () => {
+  it("divides the viewport exactly, gaps included", () => {
+    // The arithmetic the presets do not do. Three columns and the four gaps
+    // around and between them must add up to the viewport itself.
+    for (const count of [1, 2, 3, 4]) {
+      const width = fittedWidth(count, wide, config)
+      const total = config.gap * (count + 1) + width * count
+      expect(total).toBeLessThanOrEqual(wide.width)
+      // Within a pixel per column, which is all the flooring can cost.
+      expect(total).toBeGreaterThan(wide.width - count - 1)
+    }
+  })
+
+  it("lays four windows out as quadrants", () => {
+    // The case this exists for: four videos at once. Two columns of two.
+    const apart = withWindows([1, 2, 3, 4])
+    const left = moveWindow(apart, 3 as WindowId, { kind: "column", index: 0 }, wide, config)
+    const pairs = moveWindow(left, 4 as WindowId, { kind: "column", index: 1 }, wide, config)
+    const grid = setFit(pairs, true, wide, config)
+
+    const placed = layout(grid, wide, config)
+    expect(placed).toHaveLength(4)
+
+    // Two distinct columns and two distinct rows, and nothing off screen.
+    const xs = [...new Set(placed.map((w) => w.rect.x))].sort((a, b) => a - b)
+    const ys = [...new Set(placed.map((w) => w.rect.y))].sort((a, b) => a - b)
+    expect(xs).toHaveLength(2)
+    expect(ys).toHaveLength(2)
+    for (const { rect } of placed) {
+      expect(rect.x).toBeGreaterThanOrEqual(0)
+      expect(rect.y).toBeGreaterThanOrEqual(0)
+      expect(rect.x + rect.width).toBeLessThanOrEqual(wide.width)
+      expect(rect.y + rect.height).toBeLessThanOrEqual(wide.height)
+    }
+    // Each one really is about a quarter of the screen, not a sliver.
+    for (const { rect } of placed) {
+      expect(rect.width).toBeGreaterThan(wide.width / 2 - 3 * config.gap)
+      expect(rect.height).toBeGreaterThan(wide.height / 2 - 3 * config.gap)
+    }
+  })
+
+  it("fits along the axis the strip actually runs on", () => {
+    // Portrait, so the strip is a stack of rows and "fitting" is about
+    // height. Measuring the wrong axis here would give every window a sliver
+    // of a tall screen on the device this is mostly used from.
+    const portrait: Output = { width: 834, height: 1194 }
+    const state = setFit(withWindows([1, 2], portrait), true, portrait, config)
+    const placed = layout(state, portrait, config)
+
+    expect(placed).toHaveLength(2)
+    // Two rows, one column: they differ in y and share x and width.
+    expect(new Set(placed.map((w) => w.rect.x)).size).toBe(1)
+    expect(new Set(placed.map((w) => w.rect.y)).size).toBe(2)
+    for (const { rect } of placed) {
+      expect(rect.x + rect.width).toBeLessThanOrEqual(portrait.width)
+      expect(rect.y + rect.height).toBeLessThanOrEqual(portrait.height)
+      // Each takes about half the height, which is what fitting the long
+      // axis means here.
+      expect(rect.height).toBeGreaterThan(portrait.height / 2 - 3 * config.gap)
+    }
+    expect(currentWorkspace(state).viewOffset).toBe(0)
+  })
+
+  it("does not scroll, whatever has focus", () => {
+    // The other half of the fix. Centring would slide a grid that is meant to
+    // stay still every time a different video was clicked.
+    const three = setFit(withWindows([1, 2, 3]), true, wide, config)
+    expect(currentWorkspace(three).viewOffset).toBe(0)
+    const moved = focusWindow(three, 1 as WindowId, wide, config)
+    expect(currentWorkspace(moved).viewOffset).toBe(0)
+    expect(layout(moved, wide, config)[0]!.rect.x).toBe(config.gap)
+  })
+
+  it("keeps the columns usable when too many are open to fit", () => {
+    // Twenty columns on a 1920 screen is 84px each. Rather than slivers, they
+    // floor at `minWidth` and the strip goes back to scrolling, which is a
+    // worse fit but still a usable desktop.
+    const many = Array.from({ length: 20 }, (_, i) => i + 1)
+    const state = setFit(withWindows(many), true, wide, config)
+    expect(fitsOnScreen(20, wide, config)).toBe(false)
+    expect(fittedWidth(20, wide, config)).toBe(config.minWidth)
+    // Scrolling is back, so the focused column can still be reached.
+    expect(currentWorkspace(state).viewOffset).not.toBe(0)
+  })
+
+  it("streams everything in the fitted workspace", () => {
+    const apart = withWindows([1, 2])
+    const grid = setFit(apart, true, wide, config)
+    expect(liveWindows(grid)).toEqual([1, 2])
+    expect(
+      streamList(
+        layout(grid, wide, config),
+        wide,
+        config,
+        1 as WindowId,
+        true,
+        null,
+        liveWindows(grid),
+      ),
+    ).toEqual([1, 2])
+  })
+
+  it("drops out of fullscreen on the way in", () => {
+    // `layout` short-circuits on fullscreen, so fitting under one would do
+    // nothing at all and look like the button was broken.
+    const up = toggleFullscreen(withWindows([1, 2]), wide, config)
+    expect(isFullscreen(up)).toBe(true)
+    const grid = setFit(up, true, wide, config)
+    expect(isFullscreen(grid)).toBe(false)
+    expect(isFitted(grid)).toBe(true)
+    expect(layout(grid, wide, config)).toHaveLength(2)
+  })
+
+  it("gives the columns their own widths back on the way out", () => {
+    const state = withWindows([1, 2])
+    const before = layout(state, wide, config)
+    const after = layout(setFit(setFit(state, true, wide, config), false, wide, config), wide, config)
+    expect(after).toEqual(before)
+  })
+
+  it("is the same state when it is already what was asked for", () => {
+    const state = withWindows([1])
+    expect(setFit(state, false, wide, config)).toBe(state)
+    const fitted = setFit(state, true, wide, config)
+    expect(setFit(fitted, true, wide, config)).toBe(fitted)
+  })
+
+  it("is per workspace", () => {
+    // A video wall on one workspace must not turn the next one into a grid.
+    const state = setFit(withWindows([1]), true, wide, config)
+    const moved = moveToWorkspace(state, 1, wide, config)
+    expect(isFitted(moved)).toBe(false)
+  })
+})
+
+/**
+ * Streaming a whole column instead of only its focused window.
+ *
+ * A column shows its windows side by side, so freezing all but one of them is
+ * the one place the global pause is visibly wrong. The flag is per column and
+ * only ever widens the stream list; the bound that makes it affordable is that
+ * only the *focused* column's flag counts, so no amount of marking can cost
+ * more than the tallest stack.
+ */
+describe("liveWindows", () => {
+  it("is empty for a column nobody marked", () => {
+    expect(liveWindows(stackOfThree())).toEqual([])
+  })
+
+  it("is the whole column once it is marked", () => {
+    const live = setColumnLive(stackOfThree(), 3 as WindowId, true)
+    expect(liveWindows(live)).toEqual([1, 3, 2])
+  })
+
+  it("is empty again when focus leaves that column", () => {
+    // The bound. A marked column that is not focused costs nothing, which is
+    // what stops the flag accumulating into "stream everything".
+    const apart = withWindows([1, 2, 3])
+    const stacked = moveWindow(apart, 2 as WindowId, { kind: "column", index: 0 }, wide, config)
+    const live = setColumnLive(stacked, 1 as WindowId, true)
+    expect(liveWindows(live)).toEqual([1, 2])
+    expect(liveWindows(focusWindow(live, 3 as WindowId, wide, config))).toEqual([])
+  })
+
+  it("ignores the flag on a column of one", () => {
+    // Otherwise this would be a way to keep one named window awake for the
+    // whole session, which is the per-window pause control that was removed.
+    const live = setColumnLive(withWindows([1, 2]), 1 as WindowId, true)
+    expect(liveWindows(focusWindow(live, 1 as WindowId, wide, config))).toEqual([])
+  })
+
+  it("is empty on an empty workspace", () => {
+    expect(liveWindows(EMPTY)).toEqual([])
+  })
+})
+
+describe("setColumnLive", () => {
+  it("acts on the named window's column, not the focused one", () => {
+    const apart = withWindows([1, 2, 3])
+    const stacked = moveWindow(apart, 2 as WindowId, { kind: "column", index: 0 }, wide, config)
+    const focused = focusWindow(stacked, 3 as WindowId, wide, config)
+    const live = setColumnLive(focused, 1 as WindowId, true)
+
+    expect(currentWorkspace(live).columns[0]!.live).toBe(true)
+    expect(currentWorkspace(live).columns[1]!.live).toBeUndefined()
+  })
+
+  it("does not move focus", () => {
+    const state = stackOfThree()
+    expect(focusedWindow(setColumnLive(state, 2 as WindowId, true))).toBe(
+      focusedWindow(state),
+    )
+  })
+
+  it("is the same state when nothing would change", () => {
+    // Identity is what callers use to decide whether to re-push, so a toggle
+    // pressed twice must not send two identical layouts.
+    const state = stackOfThree()
+    expect(setColumnLive(state, 1 as WindowId, false)).toBe(state)
+    const live = setColumnLive(state, 1 as WindowId, true)
+    expect(setColumnLive(live, 1 as WindowId, true)).toBe(live)
+  })
+
+  it("ignores a window that is not there", () => {
+    const state = stackOfThree()
+    expect(setColumnLive(state, 99 as WindowId, true)).toBe(state)
+  })
+
+  it("survives the column being resized and restacked", () => {
+    // The flag belongs to the column, like its width, so the operations that
+    // rebuild a column must carry it rather than quietly dropping it.
+    const live = setColumnLive(stackOfThree(), 1 as WindowId, true)
+    const wider = setColumnWidth(live, 1 as WindowId, 0, wide, config)
+    expect(liveWindows(wider)).toEqual([1, 3, 2])
+
+    // Expelling one leaves the remainder marked, and the window that left in
+    // a column of its own that is not.
+    const expelled = expelFromColumn(
+      focusWindow(wider, 3 as WindowId, wide, config),
+      wide,
+      config,
+    )
+    expect(currentWorkspace(expelled).columns[0]!.live).toBe(true)
+    expect(currentWorkspace(expelled).columns[1]!.live).toBeUndefined()
   })
 })
 

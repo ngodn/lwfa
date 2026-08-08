@@ -86,14 +86,12 @@ import {
 import type { SurfaceInput } from "./WindowSurface.js";
 import { evdevFromCode, isShellKey, isTextEntry } from "./input.js";
 import {
-  DEFAULT_CONFIG,
   EMPTY,
-  WIDTH_PRESETS,
   type StripConfig,
-  type WidthPreset,
   type Output,
   type StripState,
   addWindow,
+  configFrom,
   consumeIntoColumn,
   cycleWidth,
   expelFromColumn,
@@ -107,12 +105,15 @@ import {
   fullscreenWindow,
   intersectsViewport,
   layout,
+  liveWindows,
   moveToWorkspace,
   moveWindow,
   reflow,
   removeWindow,
   sendToWorkspace,
+  setFit,
   setFullscreen,
+  setColumnLive,
   setColumnWidth,
   streamList,
   toggleFullscreen,
@@ -223,20 +224,7 @@ export function App(): React.ReactElement {
   const layoutPrefs = usePrefSection("layout");
   const streamPrefs = usePrefSection("stream");
   const motionPrefs = usePrefSection("motion");
-  const stripConfig = useMemo<StripConfig>(
-    () => ({
-      ...DEFAULT_CONFIG,
-      orientation: layoutPrefs.orientation,
-      centreFocused: layoutPrefs.centreFocused,
-      // Stored as a plain number so a preferences blob written against a
-      // shorter preset list cannot produce an out-of-range index.
-      defaultWidth: Math.min(
-        Math.max(0, layoutPrefs.defaultWidth),
-        WIDTH_PRESETS.length - 1,
-      ) as WidthPreset,
-    }),
-    [layoutPrefs],
-  );
+  const stripConfig = useMemo<StripConfig>(() => configFrom(layoutPrefs), [layoutPrefs]);
   const configRef = useRef(stripConfig);
   configRef.current = stripConfig;
 
@@ -422,11 +410,12 @@ export function App(): React.ReactElement {
     }
 
     // Ask for pixels only for columns the viewport can actually show, and
-    // with `pauseInactive` on (the default) only the focused one of those.
-    // This is what keeps the encoder budget bounded rather than growing with
-    // how many windows are open. See `streamList` for the rules together.
-    // Focus changes always come through `update`, so the list follows focus
-    // without anything extra here.
+    // with `pauseInactive` on (the default) only the focused one of those,
+    // plus the rest of its column when that column is marked live. This is
+    // what keeps the encoder budget bounded rather than growing with how many
+    // windows are open. See `streamList` for the rules together. Focus changes
+    // always come through `update`, so the list follows focus without anything
+    // extra here, and so does the live column, which is read from focus.
     connection.current?.send({
       type: "setStreams",
       windows: streamingRef.current
@@ -437,6 +426,7 @@ export function App(): React.ReactElement {
             focused,
             pauseInactiveRef.current,
             fullscreenWindow(next),
+            liveWindows(next),
           )
         : [],
       // What this browser can actually decode, asked of it rather than
@@ -476,6 +466,7 @@ export function App(): React.ReactElement {
             focusedWindow(state),
             pauseInactive,
             fullscreenWindow(state),
+            liveWindows(state),
           )
         : [],
       codecs: codecsRef.current,
@@ -1057,6 +1048,11 @@ export function App(): React.ReactElement {
       cycleWidth: () => update(cycleWidthAt),
       setColumnWidth: (id, preset) =>
         update((st, o) => setColumnWidth(st, id, preset, o, configRef.current)),
+      // Through `update` like every other transition, because the point of the
+      // flag is the stream list and `push` is what re-sends it. Nothing moves,
+      // so the layout that goes with it is the one already on screen.
+      setColumnLive: (id, live) => update((st) => setColumnLive(st, id, live), false),
+      setFit: (fit) => update((st, o) => setFit(st, fit, o, configRef.current)),
       takeControl: () => send({ type: "takeControl" }),
       listDir: (request, path) => send({ type: "listDir", request, path }),
       statPath: (request, path) => send({ type: "statPath", request, path }),

@@ -104,8 +104,21 @@ export interface SessionActions {
   cycleWidth: () => void
   /** Set a named window's column to a chosen width preset. */
   setColumnWidth: (id: WindowId, preset: number) => void
+  /**
+   * Stream every window in a named window's column, or go back to just the
+   * focused one. Has no effect while `stream.pauseInactive` is off, since
+   * everything on screen is already streaming. See `Column.live`.
+   */
+  setColumnLive: (id: WindowId, live: boolean) => void
   /** Fill the whole client viewport with the focused window, or go back. */
   toggleFullscreen: () => void
+  /**
+   * Divide the screen among this workspace's columns and stop scrolling, or
+   * go back to the strip. Every window in a fitted workspace streams, since
+   * putting them all on screen at once is what fitting is for. See
+   * `Workspace.fit`.
+   */
+  setFit: (fit: boolean) => void
   /** Ask to become the connection that decides layout. */
   takeControl: () => void
   /**
