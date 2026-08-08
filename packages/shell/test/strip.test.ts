@@ -38,7 +38,7 @@ import {
   presetWidth,
   reflow,
   removeWindow,
-  stackedHeight,
+  tile,
   fillsOutput,
   fitsOnScreen,
   fittedWidth,
@@ -134,12 +134,113 @@ describe("column sizing", () => {
   })
 })
 
+/**
+ * How a group divides its own rectangle.
+ *
+ * This used to be equal horizontal slices, which is right only for a tall
+ * narrow column. Four windows in a wide one became full-width bands a quarter
+ * tall, so a video fitted itself to the height and threw away most of the
+ * width as black. The rule is Hyprland's dwindle rule instead: split whichever
+ * axis is longer, and recurse.
+ */
+describe("tile", () => {
+  const gap = 12
+
+  it("gives one window the whole box", () => {
+    const box = { x: 10, y: 20, width: 400, height: 300 }
+    expect(tile(box, 1, gap)).toEqual([box])
+  })
+
+  it("splits a wide box side by side", () => {
+    const cells = tile({ x: 0, y: 0, width: 400, height: 200 }, 2, gap)
+    expect(cells).toHaveLength(2)
+    expect(cells[0]!.y).toBe(cells[1]!.y)
+    expect(cells[0]!.height).toBe(cells[1]!.height)
+    expect(cells[1]!.x).toBeGreaterThan(cells[0]!.x)
+  })
+
+  it("splits a tall box top and bottom", () => {
+    // The old behaviour, which was only ever right for this shape, and still
+    // is: a tall narrow column of two stays a stack.
+    const cells = tile({ x: 0, y: 0, width: 200, height: 400 }, 2, gap)
+    expect(cells[0]!.x).toBe(cells[1]!.x)
+    expect(cells[0]!.width).toBe(cells[1]!.width)
+    expect(cells[1]!.y).toBeGreaterThan(cells[0]!.y)
+  })
+
+  it("makes four windows in a wide box into quadrants", () => {
+    // The case that started this: four videos in one group.
+    const cells = tile({ x: 0, y: 0, width: 1200, height: 800 }, 4, gap)
+    expect(cells).toHaveLength(4)
+    expect(new Set(cells.map((c) => c.x)).size).toBe(2)
+    expect(new Set(cells.map((c) => c.y)).size).toBe(2)
+    // Every cell is roughly square rather than a sliver, which is the whole
+    // point: a 16:9 video in one of these wastes very little.
+    for (const cell of cells) {
+      const ratio = cell.width / cell.height
+      expect(ratio).toBeGreaterThan(0.5)
+      expect(ratio).toBeLessThan(2.5)
+    }
+  })
+
+  it("never lets a cell collapse to a sliver, however many there are", () => {
+    // The failure being fixed, stated as a property: under equal slices the
+    // aspect ratio ran away with the count.
+    for (const count of [2, 3, 4, 5, 6, 8, 9]) {
+      const cells = tile({ x: 0, y: 0, width: 1200, height: 800 }, count, gap)
+      expect(cells).toHaveLength(count)
+      for (const cell of cells) {
+        const ratio = cell.width / cell.height
+        expect(ratio).toBeGreaterThan(0.25)
+        expect(ratio).toBeLessThan(4)
+      }
+    }
+  })
+
+  it("fills the box without overlapping", () => {
+    const box = { x: 5, y: 7, width: 1201, height: 799 }
+    for (const count of [1, 2, 3, 4, 5, 7]) {
+      const cells = tile(box, count, gap)
+      for (const cell of cells) {
+        expect(cell.x).toBeGreaterThanOrEqual(box.x)
+        expect(cell.y).toBeGreaterThanOrEqual(box.y)
+        expect(cell.x + cell.width).toBeLessThanOrEqual(box.x + box.width)
+        expect(cell.y + cell.height).toBeLessThanOrEqual(box.y + box.height)
+      }
+      for (let a = 0; a < cells.length; a++) {
+        for (let b = a + 1; b < cells.length; b++) {
+          const one = cells[a]!
+          const two = cells[b]!
+          const apart =
+            one.x + one.width <= two.x ||
+            two.x + two.width <= one.x ||
+            one.y + one.height <= two.y ||
+            two.y + two.height <= one.y
+          expect(apart).toBe(true)
+        }
+      }
+    }
+  })
+
+  it("is the same picture however the group was assembled", () => {
+    // Balanced rather than dwindle's spiral, which depends on focus history.
+    // A group is deliberate; it should look the same tomorrow.
+    const box = { x: 0, y: 0, width: 1200, height: 800 }
+    expect(tile(box, 4, gap)).toEqual(tile(box, 4, gap))
+  })
+})
+
 describe("stacking within a column", () => {
-  it("splits height equally, accounting for gaps", () => {
-    const full = stackedHeight(1, wide, config)
-    const half = stackedHeight(2, wide, config)
-    expect(full).toBe(wide.height - config.gap * 2)
-    expect(half * 2 + config.gap).toBeLessThanOrEqual(full)
+  it("lays a group out through tile, not as equal slices", () => {
+    // Two windows in one column on a landscape output now sit side by side,
+    // because that is the longer axis. Under the old rule they were two
+    // full-width bands.
+    let state = withWindows([1, 2])
+    state = consumeIntoColumn(state, wide, config)
+    const placed = layout(state, wide, config)
+    expect(placed).toHaveLength(2)
+    expect(placed[0]!.rect.y).toBe(placed[1]!.rect.y)
+    expect(placed[1]!.rect.x).toBeGreaterThan(placed[0]!.rect.x)
   })
 
   it("consumes the focused window into the column on its left", () => {
@@ -175,13 +276,18 @@ describe("stacking within a column", () => {
     expect(expelFromColumn(state, wide, config)).toBe(state)
   })
 
-  it("stacks windows vertically in the layout", () => {
-    let state = withWindows([1, 2])
-    state = consumeIntoColumn(state, wide, config)
-    const placed = layout(state, wide, config)
+  it("stacks a group vertically when the column is taller than it is wide", () => {
+    // What this used to assert unconditionally. It is still true for a narrow
+    // column, and now it is true *because* the long axis is vertical rather
+    // than because stacking was the only thing the layout could do. A third
+    // of a 1200-wide output is 400 against 780 of height.
+    const narrow = { width: 1200, height: 800 }
+    let state = withWindows([1, 2], narrow)
+    state = setColumnWidth(state, 1 as WindowId, 0, narrow, config)
+    state = consumeIntoColumn(state, narrow, config)
+    const placed = layout(state, narrow, config)
 
     expect(placed).toHaveLength(2)
-    // Same column: same x and width, different y.
     expect(placed[0]!.rect.x).toBe(placed[1]!.rect.x)
     expect(placed[0]!.rect.width).toBe(placed[1]!.rect.width)
     expect(placed[1]!.rect.y).toBeGreaterThan(placed[0]!.rect.y)

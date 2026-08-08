@@ -9,20 +9,35 @@
 
 import { describe, expect, it } from "vitest"
 import type { WindowId } from "@lwfa/proto"
-import { EDGE_BAND, dropTarget, isNoop, rowAt, type ColumnBox } from "../src/lib/arrangeDrop"
+import { EDGE_BAND, dropTarget, isNoop, cellAt, type ColumnBox } from "../src/lib/arrangeDrop"
+
+/** One window's box inside a column. */
+const cell = (id: number, left: number, right: number, top: number, bottom: number) => ({
+  id: id as WindowId,
+  left,
+  right,
+  top,
+  bottom,
+})
+
 
 /** Three columns, 200 wide, 20 apart, one window each unless stacked. */
 const columns: ColumnBox[] = [
-  { index: 0, left: 0, right: 200, rows: [{ id: 1 as WindowId, top: 0, bottom: 400 }] },
-  { index: 1, left: 220, right: 420, rows: [{ id: 2 as WindowId, top: 0, bottom: 400 }] },
-  { index: 2, left: 440, right: 640, rows: [{ id: 3 as WindowId, top: 0, bottom: 400 }] },
+  { index: 0, left: 0, right: 200, cells: [cell(1, 0, 200, 0, 400)] },
+  { index: 1, left: 220, right: 420, cells: [cell(2, 220, 420, 0, 400)] },
+  { index: 2, left: 440, right: 640, cells: [cell(3, 440, 640, 0, 400)] },
 ]
 
 const at = (x: number, y = 200) => dropTarget({ x, y }, columns)
 
 describe("dropping on a column", () => {
   it("joins the column under the pointer", () => {
-    expect(at(310)).toEqual({ kind: "column", index: 1, row: 1 })
+    // The slot is whichever side of the window the pointer fell on. Here it
+    // is ten pixels left of a centre it is level with vertically, so it goes
+    // before. Which side used to be a question about height alone; a group is
+    // tiled in two dimensions now, so both axes are asked.
+    expect(at(310)).toEqual({ kind: "column", index: 1, row: 0 })
+    expect(at(330)).toEqual({ kind: "column", index: 1, row: 1 })
   })
 
   it("uses the middle of the column, away from both edges", () => {
@@ -57,7 +72,7 @@ describe("dropping between columns", () => {
     // A fixed 44px band on a 60px column would make the whole column a gap, so
     // there would be no way to drop *into* it at all.
     const narrow: ColumnBox[] = [
-      { index: 0, left: 0, right: 60, rows: [{ id: 1 as WindowId, top: 0, bottom: 100 }] },
+      { index: 0, left: 0, right: 60, cells: [cell(1, 0, 60, 0, 100)] },
     ]
     expect(EDGE_BAND).toBeGreaterThan(60 / 4)
     expect(dropTarget({ x: 30, y: 50 }, narrow)).toMatchObject({ kind: "column", index: 0 })
@@ -74,28 +89,72 @@ describe("choosing a row in a stacked column", () => {
       index: 0,
       left: 0,
       right: 200,
-      rows: [
-        { id: 1 as WindowId, top: 0, bottom: 100 },
-        { id: 2 as WindowId, top: 110, bottom: 210 },
-        { id: 3 as WindowId, top: 220, bottom: 320 },
+      cells: [
+        cell(1, 0, 200, 0, 100),
+        cell(2, 0, 200, 110, 210),
+        cell(3, 0, 200, 220, 320),
       ],
     },
   ]
 
   it("goes above a window when the pointer is in its top half", () => {
-    expect(rowAt(40, stacked[0]!.rows)).toBe(0)
-    expect(rowAt(150, stacked[0]!.rows)).toBe(1)
+    expect(cellAt({ x: 100, y: 40 }, stacked[0]!.cells)).toBe(0)
+    expect(cellAt({ x: 100, y: 150 }, stacked[0]!.cells)).toBe(1)
   })
 
   it("goes below when the pointer is in the bottom half", () => {
     // Measured against midpoints, so the gap between two windows is never
     // ambiguous and the insertion point does not flicker crossing it.
-    expect(rowAt(60, stacked[0]!.rows)).toBe(1)
-    expect(rowAt(105, stacked[0]!.rows)).toBe(1)
+    expect(cellAt({ x: 100, y: 60 }, stacked[0]!.cells)).toBe(1)
+    expect(cellAt({ x: 100, y: 105 }, stacked[0]!.cells)).toBe(1)
   })
 
   it("goes last below everything", () => {
-    expect(rowAt(400, stacked[0]!.rows)).toBe(3)
+    expect(cellAt({ x: 100, y: 400 }, stacked[0]!.cells)).toBe(3)
+  })
+
+  it("reads left and right when the pair is side by side", () => {
+    // The case a height alone could never answer, and the one that arrives
+    // with two-dimensional groups: two windows sharing a band of height.
+    const pair: ColumnBox["cells"] = [
+      cell(1, 0, 100, 0, 200),
+      cell(2, 110, 210, 0, 200),
+    ]
+    expect(cellAt({ x: 20, y: 100 }, pair)).toBe(0)
+    expect(cellAt({ x: 80, y: 100 }, pair)).toBe(1)
+    expect(cellAt({ x: 130, y: 100 }, pair)).toBe(1)
+    expect(cellAt({ x: 200, y: 100 }, pair)).toBe(2)
+  })
+
+  it("picks the nearest cell in a quadrant, not the nearest row", () => {
+    // Four windows as quadrants, which is what a group of four looks like now.
+    // Under the old rule the left and right of each band were indistinguishable,
+    // so half of these drops landed on the wrong window.
+    const quad: ColumnBox["cells"] = [
+      cell(1, 0, 100, 0, 100),
+      cell(2, 0, 100, 110, 210),
+      cell(3, 110, 210, 0, 100),
+      cell(4, 110, 210, 110, 210),
+    ]
+
+    // The property, rather than the tie-break: a drop inside a quadrant lands
+    // in one of the two slots either side of that quadrant's own window. Which
+    // of the two depends on where in the cell the pointer fell, and at exactly
+    // 45 degrees from its centre either answer is as good.
+    const brackets = (point: { x: number; y: number }, index: number) => {
+      const slot = cellAt(point, quad)
+      expect(slot === index || slot === index + 1).toBe(true)
+    }
+
+    brackets({ x: 30, y: 30 }, 0)
+    brackets({ x: 30, y: 180 }, 1)
+    brackets({ x: 180, y: 30 }, 2)
+    brackets({ x: 180, y: 180 }, 3)
+
+    // And the corners resolve to the far ends, which a y-only rule could not
+    // do: bottom-right is last, top-left is first.
+    expect(cellAt({ x: 0, y: 0 }, quad)).toBe(0)
+    expect(cellAt({ x: 210, y: 210 }, quad)).toBe(4)
   })
 
   it("reports the row through dropTarget too", () => {

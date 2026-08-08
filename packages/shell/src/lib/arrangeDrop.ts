@@ -24,16 +24,26 @@
 import type { WindowId } from "@lwfa/proto"
 import type { MoveTarget } from "@/strip"
 
-/** A column as it appears on screen, with the windows stacked inside it. */
+/** A column as it appears on screen, with the windows tiled inside it. */
 export interface ColumnBox {
   index: number
   left: number
   right: number
-  rows: RowBox[]
+  cells: CellBox[]
 }
 
-export interface RowBox {
+/**
+ * One window's box inside a column.
+ *
+ * A full rectangle rather than a top and a bottom. Windows in a group used to
+ * be full-width bands, so a height was enough to say which one a finger was
+ * over; they are tiled in two dimensions now (see `tile` in strip.ts), and two
+ * windows can share the same band of height while sitting side by side.
+ */
+export interface CellBox {
   id: WindowId
+  left: number
+  right: number
   top: number
   bottom: number
 }
@@ -82,7 +92,7 @@ export function dropTarget(
       // Near an edge means between columns, not on this one.
       if (point.x < column.left + band) return { kind: "newColumn", index: column.index }
       if (point.x > column.right - band) return { kind: "newColumn", index: column.index + 1 }
-      return { kind: "column", index: column.index, row: rowAt(point.y, column.rows) }
+      return { kind: "column", index: column.index, row: cellAt(point, column.cells) }
     }
 
     // In the space between this column and the next.
@@ -95,19 +105,49 @@ export function dropTarget(
 }
 
 /**
- * Which row a drop at this height lands on.
+ * Which slot in a group a drop here lands on.
  *
- * Measured against each row's midpoint rather than its edges: above the middle
- * means before it, below means after. Using edges would leave the space between
- * two windows ambiguous and make the insertion point flicker as a finger
- * crossed the gap.
+ * This used to compare a height against a list of bands, which worked only
+ * while windows in a group were stacked full width. They are tiled in two
+ * dimensions now, so a y on its own cannot tell the left half of a row from
+ * the right half of it.
+ *
+ * The pointer is matched to the nearest cell by centre, and then goes before
+ * or after that cell depending on which side of the centre it fell. Which
+ * side is judged along whichever axis the pointer is further from the middle
+ * on, so the answer follows however that particular pair happens to be split:
+ * a side-by-side pair reads left and right, a stacked pair reads up and down,
+ * without either being hard-coded.
+ *
+ * Centres rather than edges, as before, so the gap between two windows is
+ * never ambiguous and the insertion point does not flicker as a finger
+ * crosses it.
  */
-export function rowAt(y: number, rows: RowBox[]): number {
-  for (let at = 0; at < rows.length; at++) {
-    const row = rows[at]!
-    if (y < (row.top + row.bottom) / 2) return at
-  }
-  return rows.length
+export function cellAt(point: { x: number; y: number }, cells: CellBox[]): number {
+  if (cells.length === 0) return 0
+
+  let nearest = 0
+  let best = Infinity
+  const centres = cells.map((cell) => ({
+    x: (cell.left + cell.right) / 2,
+    y: (cell.top + cell.bottom) / 2,
+  }))
+
+  centres.forEach((centre, at) => {
+    const dx = point.x - centre.x
+    const dy = point.y - centre.y
+    const distance = dx * dx + dy * dy
+    if (distance < best) {
+      best = distance
+      nearest = at
+    }
+  })
+
+  const centre = centres[nearest]!
+  const dx = point.x - centre.x
+  const dy = point.y - centre.y
+  const after = Math.abs(dx) > Math.abs(dy) ? dx > 0 : dy > 0
+  return after ? nearest + 1 : nearest
 }
 
 /**
