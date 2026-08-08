@@ -18,5 +18,15 @@
     }
   ],
   "names": [],
+  "places": [
+    {
+      "name": "Home",
+      "path": "/home/user"
+    },
+    {
+      "name": "Documents",
+      "path": "/home/user/Documents"
+    }
+  ],
   "ticket": "f00dfeedf00dfeedf00dfeedf00dfeed"
 }

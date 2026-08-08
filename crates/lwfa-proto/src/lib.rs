@@ -353,6 +353,8 @@ pub enum ToShell {
         /// The filenames a `saveFiles` dialog will write into the chosen
         /// folder. Empty in every other mode.
         names: Vec<String>,
+        /// Starting points for the browse pane's sidebar. See [`Place`].
+        places: Vec<Place>,
         /// One-shot credential for this dialog's upload channel.
         ticket: String,
     },
@@ -448,6 +450,30 @@ pub struct DirEntry {
     pub dir: bool,
     /// Bytes, and zero for directories.
     pub size: u64,
+    /// Last modification, in whole seconds since the Unix epoch.
+    ///
+    /// `None` when the filesystem will not say, which is rare but real:
+    /// some network mounts and some FUSE filesystems have no mtime. The
+    /// dialog shows a dash rather than inventing a date, and sorts those
+    /// entries last.
+    ///
+    /// Seconds rather than millis because a browser's `number` is exact
+    /// only to 2^53, and because no file dialog has ever needed better.
+    pub modified: Option<u64>,
+}
+
+/// A named starting point in the machine's filesystem.
+///
+/// The sidebar of every file browser: home, and whichever of the XDG user
+/// directories actually exist. Sent with the dialog rather than guessed by
+/// the shell, because these are the machine's directories and only the
+/// machine knows which of them are real or where the user moved them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Place {
+    /// What to call it: "Home", "Documents", "Downloads".
+    pub name: String,
+    pub path: String,
 }
 
 /// One of the application's file filters, simplified for a browser.

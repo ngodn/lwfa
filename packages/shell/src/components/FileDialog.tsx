@@ -19,17 +19,22 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import {
+  ArrowDown,
   ArrowUp,
   Check,
   CircleAlert,
+  Eye,
+  EyeOff,
   File as FileIcon,
   Folder,
   FolderOpen,
+  Home,
   Loader2,
   Search,
   TriangleAlert,
   Upload,
 } from "lucide-react"
+import type { DirEntry } from "@lwfa/proto"
 import { useSessionActions } from "@/session"
 import {
   type DialogState,
@@ -468,6 +473,9 @@ function BrowsePane({
   const wantsDirs = dialog.mode === "open" && dialog.directory
   const extensions = useMemo(() => filterExtensions(dialog), [dialog])
   const [query, setQuery] = useState("")
+  const [sort, setSort] = useState<SortKey>("name")
+  const [descending, setDescending] = useState(false)
+  const [showHidden, setShowHidden] = useState(false)
 
   if (listing === null) {
     return (
@@ -487,15 +495,24 @@ function BrowsePane({
     const lower = entry.name.toLowerCase()
     return extensions.some((ext) => lower.endsWith(ext))
   }
-  const typed = listing.entries.filter(matchesType)
+  // Dotfiles are hidden by default, as every file dialog does: a home
+  // directory is mostly configuration nobody opened this to look at.
+  const shown = listing.entries.filter(
+    (entry) => showHidden || !entry.name.startsWith("."),
+  )
+  const typed = shown.filter(matchesType)
   const needle = query.trim().toLowerCase()
   // Filters this directory, rather than searching the whole disk: the engine
   // sends one directory at a time, and a recursive search would be a walk of
   // the machine's filesystem on someone else's behalf.
-  const visible = needle
+  const matched = needle
     ? typed.filter((entry) => entry.name.toLowerCase().includes(needle))
     : typed
-  const hiddenByFilter = listing.entries.length - typed.length
+  const visible = sortEntries(matched, sort, descending)
+  const hiddenByFilter = shown.length - typed.length
+  const hiddenDotfiles = showHidden
+    ? 0
+    : listing.entries.length - shown.length
 
   const toggle = (path: string) => {
     if (selected.includes(path)) {
@@ -507,7 +524,7 @@ function BrowsePane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
         <Button
           variant="outline"
           size="icon"
@@ -518,11 +535,7 @@ function BrowsePane({
         >
           <ArrowUp aria-hidden />
         </Button>
-        {/* dir="rtl" keeps the tail of a long path visible; the tail is the
-            part that says where you are. */}
-        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" dir="rtl">
-          {listing.path}
-        </span>
+        <Breadcrumbs path={listing.path} onGo={browse} />
         <div className="relative w-40 shrink-0">
           <Search
             className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -537,6 +550,32 @@ function BrowsePane({
             data-selectable
           />
         </div>
+        <SortControl
+          sort={sort}
+          descending={descending}
+          onSort={(next) => {
+            // Clicking the active key flips direction, which is what every
+            // column header in every file browser does.
+            if (next === sort) setDescending(!descending)
+            else {
+              setSort(next)
+              // Names read A to Z; sizes and dates are asked for biggest
+              // and newest first, which is what people actually want.
+              setDescending(next !== "name")
+            }
+          }}
+        />
+        <Button
+          variant={showHidden ? "secondary" : "outline"}
+          size="icon"
+          className="size-9 shrink-0"
+          aria-label={showHidden ? "Hide hidden files" : "Show hidden files"}
+          aria-pressed={showHidden}
+          title={showHidden ? "Hide hidden files" : "Show hidden files"}
+          onClick={() => setShowHidden(!showHidden)}
+        >
+          {showHidden ? <Eye aria-hidden /> : <EyeOff aria-hidden />}
+        </Button>
       </div>
 
       {listing.error ? (
@@ -544,40 +583,74 @@ function BrowsePane({
           {listing.error}
         </div>
       ) : (
-        // Plain overflow rather than the shared ScrollArea, for the reason
-        // spelled out in `UploadPane`: Radix's viewport needs a percentage
-        // height to resolve against and a flex child cannot give it one.
-        <div className="min-h-32 flex-1 overflow-y-auto overscroll-contain rounded-md border">
-          {/* Two columns once there is width for them. A home directory is
-              eighty entries; one long column on a wide screen is mostly
-              scrolling past empty space. */}
-          <ul className="grid grid-cols-1 gap-x-2 p-1 lg:grid-cols-2 2xl:grid-cols-3">
-            {visible.length === 0 ? (
-              <li className="px-3 py-6 text-center text-sm text-muted-foreground">
-                {needle ? `Nothing here matches "${query.trim()}".` : "Nothing here."}
-              </li>
-            ) : (
-              visible.map((entry) => {
-                const path = joinPath(listing.path, entry.name)
-                const selectable = entry.dir ? wantsDirs : !saveShaped && !wantsDirs
-                const isSelected = selected.includes(path)
+        <div className="flex min-h-32 flex-1 gap-2">
+          {/* The places sidebar, on screens with room for one. The engine
+              sends what actually exists, localised names and all. */}
+          {dialog.places.length > 0 ? (
+            <nav
+              aria-label="Places"
+              className="hidden w-44 shrink-0 overflow-y-auto rounded-md border p-1 sm:block"
+            >
+              {dialog.places.map((place) => {
+                const here = listing.path === place.path
                 return (
-                  <BrowseRow
-                    key={entry.name}
-                    name={entry.name}
-                    dir={entry.dir}
-                    size={entry.size}
-                    selected={isSelected}
-                    onActivate={() => {
-                      if (entry.dir && !wantsDirs) browse(path)
-                      else if (selectable) toggle(path)
-                    }}
-                    onDescend={entry.dir ? () => browse(path) : undefined}
-                  />
+                  <button
+                    key={place.path}
+                    type="button"
+                    onClick={() => browse(place.path)}
+                    className={cn(
+                      "flex h-10 w-full items-center gap-2 rounded-md px-2 text-left text-sm",
+                      here ? "bg-primary/15 text-foreground" : "hover:bg-accent",
+                    )}
+                  >
+                    {place.name === "Home" ? (
+                      <Home className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                    ) : (
+                      <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">{place.name}</span>
+                  </button>
                 )
-              })
-            )}
-          </ul>
+              })}
+            </nav>
+          ) : null}
+
+          {/* Plain overflow rather than the shared ScrollArea, for the reason
+              spelled out in `UploadPane`: Radix's viewport needs a percentage
+              height to resolve against and a flex child cannot give it one. */}
+          <div className="min-w-0 flex-1 overflow-y-auto overscroll-contain rounded-md border">
+            {/* Two columns once there is width for them. A home directory is
+                eighty entries; one long column on a wide screen is mostly
+                scrolling past empty space. */}
+            <ul className="grid grid-cols-1 gap-x-2 p-1 xl:grid-cols-2">
+              {visible.length === 0 ? (
+                <li className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  {needle ? `Nothing here matches "${query.trim()}".` : "Nothing here."}
+                </li>
+              ) : (
+                visible.map((entry) => {
+                  const path = joinPath(listing.path, entry.name)
+                  const selectable = entry.dir ? wantsDirs : !saveShaped && !wantsDirs
+                  const isSelected = selected.includes(path)
+                  return (
+                    <BrowseRow
+                      key={entry.name}
+                      name={entry.name}
+                      dir={entry.dir}
+                      size={entry.size}
+                      modified={entry.modified}
+                      selected={isSelected}
+                      onActivate={() => {
+                        if (entry.dir && !wantsDirs) browse(path)
+                        else if (selectable) toggle(path)
+                      }}
+                      onDescend={entry.dir ? () => browse(path) : undefined}
+                    />
+                  )
+                })
+              )}
+            </ul>
+          </div>
         </div>
       )}
 
@@ -592,6 +665,9 @@ function BrowsePane({
                 : ""}
           {hiddenByFilter > 0 && !showAll
             ? `${selected.length > 0 || listing.truncated ? " · " : ""}${hiddenByFilter} hidden by filter`
+            : ""}
+          {hiddenDotfiles > 0
+            ? `${selected.length > 0 || listing.truncated || (hiddenByFilter > 0 && !showAll) ? " · " : ""}${hiddenDotfiles} hidden`
             : ""}
         </span>
         {hiddenByFilter > 0 || showAll ? (
@@ -612,6 +688,7 @@ const BrowseRow = memo(function BrowseRow({
   name,
   dir,
   size,
+  modified,
   selected,
   onActivate,
   onDescend,
@@ -619,6 +696,7 @@ const BrowseRow = memo(function BrowseRow({
   name: string
   dir: boolean
   size: number
+  modified: number | null
   selected: boolean
   onActivate: () => void
   onDescend?: (() => void) | undefined
@@ -651,30 +729,170 @@ const BrowseRow = memo(function BrowseRow({
           <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         )}
         <span className="min-w-0 flex-1 truncate">{name}</span>
-        {dir ? (
-          onDescend ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-9 shrink-0"
-              aria-label={`Open ${name}`}
-              onClick={(event) => {
-                event.stopPropagation()
-                onDescend()
-              }}
-            >
-              <FolderOpen aria-hidden />
-            </Button>
-          ) : null
+        {/* Date first, then size, both right-aligned in fixed columns so
+            the eye can scan down them instead of following ragged text. */}
+        <span
+          className="hidden w-28 shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block"
+          title={modified === null ? undefined : new Date(modified * 1000).toLocaleString()}
+        >
+          {prettyDate(modified)}
+        </span>
+        <span className="w-16 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
+          {dir ? "" : prettySize(size)}
+        </span>
+        {dir && onDescend ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-9 shrink-0"
+            aria-label={`Open ${name}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onDescend()
+            }}
+          >
+            <FolderOpen aria-hidden />
+          </Button>
         ) : (
-          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-            {prettySize(size)}
-          </span>
+          <span className="size-9 shrink-0" aria-hidden />
         )}
       </div>
     </li>
   )
 })
+
+// ---------------------------------------------------------------------------
+// Navigation and ordering
+// ---------------------------------------------------------------------------
+
+/** A clickable path, so getting back up is one tap rather than several. */
+const Breadcrumbs = memo(function Breadcrumbs({
+  path,
+  onGo,
+}: {
+  path: string
+  onGo: (path: string) => void
+}) {
+  const parts = path.split("/").filter(Boolean)
+  // Only the tail fits on a narrow screen, and the tail is the part that
+  // says where you are. Earlier segments stay reachable with "Up".
+  const shown = parts.slice(-4)
+  const skipped = parts.length - shown.length
+  return (
+    <nav
+      aria-label="Path"
+      className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden text-sm"
+    >
+      <button
+        type="button"
+        onClick={() => onGo("/")}
+        className="shrink-0 rounded px-1.5 py-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        /
+      </button>
+      {skipped > 0 ? <span className="shrink-0 text-muted-foreground">…</span> : null}
+      {shown.map((part, index) => {
+        const upto = "/" + parts.slice(0, parts.length - shown.length + index + 1).join("/")
+        const last = index === shown.length - 1
+        return (
+          <span key={upto} className="flex min-w-0 items-center gap-0.5">
+            <button
+              type="button"
+              onClick={() => onGo(upto)}
+              className={cn(
+                "min-w-0 truncate rounded px-1.5 py-1 hover:bg-accent",
+                last ? "font-medium text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {part}
+            </button>
+            {last ? null : <span className="shrink-0 text-muted-foreground">/</span>}
+          </span>
+        )
+      })}
+    </nav>
+  )
+})
+
+/** What a listing can be ordered by. */
+export type SortKey = "name" | "size" | "modified"
+
+const SORT_LABELS: Record<SortKey, string> = {
+  name: "Name",
+  size: "Size",
+  modified: "Modified",
+}
+
+function SortControl({
+  sort,
+  descending,
+  onSort,
+}: {
+  sort: SortKey
+  descending: boolean
+  onSort: (key: SortKey) => void
+}) {
+  return (
+    <div className="flex shrink-0 items-center rounded-md border p-0.5">
+      {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => {
+        const active = key === sort
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onSort(key)}
+            aria-pressed={active}
+            className={cn(
+              "flex h-8 items-center gap-1 rounded px-2 text-xs",
+              active ? "bg-accent font-medium text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {SORT_LABELS[key]}
+            {active ? (
+              descending ? (
+                <ArrowDown className="size-3" aria-hidden />
+              ) : (
+                <ArrowUp className="size-3" aria-hidden />
+              )
+            ) : null}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * Order a listing, directories first.
+ *
+ * Directories lead whatever the key is, which is what every file browser
+ * does: they are the navigation, not the content, and mixing them into a
+ * size order puts the way out of a folder somewhere in the middle.
+ */
+export function sortEntries(entries: DirEntry[], key: SortKey, descending: boolean): DirEntry[] {
+  const sign = descending ? -1 : 1
+  return [...entries].sort((a, b) => {
+    if (a.dir !== b.dir) return a.dir ? -1 : 1
+    let by = 0
+    if (key === "size") by = a.size - b.size
+    else if (key === "modified") {
+      // Entries with no mtime sort last in either direction: they are
+      // unknown, not ancient, and burying them is less misleading.
+      if (a.modified === null || b.modified === null) {
+        if (a.modified === b.modified) by = 0
+        else return a.modified === null ? 1 : -1
+      } else by = a.modified - b.modified
+    }
+    // Name is the key itself and the tiebreak for the others, so equal
+    // sizes come out in a stable, readable order rather than at random.
+    if (by === 0) {
+      return (
+        sign * a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
+      )
+    }
+    return sign * by
+  })
+}
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -717,6 +935,29 @@ function filterExtensions(dialog: DialogState): string[] {
     }
   }
   return Array.from(exts)
+}
+
+/**
+ * A date at the resolution the eye needs: a time for today, a weekday for
+ * this week, a date otherwise, and a year once it is not this one.
+ */
+function prettyDate(seconds: number | null): string {
+  if (seconds === null) return "—"
+  const then = new Date(seconds * 1000)
+  const now = new Date()
+  const sameDay = then.toDateString() === now.toDateString()
+  if (sameDay) {
+    return then.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+  }
+  const days = (now.getTime() - then.getTime()) / 86_400_000
+  if (days >= 0 && days < 7) {
+    return then.toLocaleDateString(undefined, { weekday: "short" })
+  }
+  return then.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(then.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  })
 }
 
 function prettySize(bytes: number): string {

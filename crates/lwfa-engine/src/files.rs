@@ -86,6 +86,7 @@ impl Lwfa {
             suggested_name: request.suggested_name,
             filters: request.filters,
             names: request.names.clone(),
+            places: places(),
             ticket: ticket.clone(),
         };
 
@@ -438,6 +439,77 @@ fn discard_uploads(uploads: &[crate::upload::Finished]) {
     }
 }
 
+/// The sidebar's starting points: home, then whichever user directories
+/// actually exist.
+///
+/// Read from `user-dirs.dirs` where the XDG spec puts it, because a
+/// localised desktop calls them `Documentos` or `ドキュメント` and a
+/// hardcoded English list would send people to folders that are not there.
+/// Falls back to the English defaults when that file is absent, which is
+/// what the spec says they are.
+fn places() -> Vec<lwfa_proto::Place> {
+    let home = crate::upload::home_dir();
+    let mut places = vec![lwfa_proto::Place {
+        name: "Home".to_string(),
+        path: home.to_string_lossy().into_owned(),
+    }];
+
+    // XDG_DESKTOP_DIR="$HOME/Desktop" and friends, one per line.
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    let declared: std::collections::HashMap<String, String> =
+        std::fs::read_to_string(config.join("user-dirs.dirs"))
+            .map(|text| {
+                text.lines()
+                    .filter_map(|line| {
+                        let line = line.trim();
+                        let rest = line.strip_prefix("XDG_")?.strip_suffix('"')?;
+                        let (key, value) = rest.split_once("_DIR=\"")?;
+                        Some((key.to_string(), value.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+    // Ordered the way a sidebar reads, not alphabetically.
+    const WANTED: [(&str, &str); 6] = [
+        ("DESKTOP", "Desktop"),
+        ("DOCUMENTS", "Documents"),
+        ("DOWNLOAD", "Downloads"),
+        ("PICTURES", "Pictures"),
+        ("MUSIC", "Music"),
+        ("VIDEOS", "Videos"),
+    ];
+    for (key, label) in WANTED {
+        let path = match declared.get(key) {
+            // "$HOME/Documents" is the spec's own spelling.
+            Some(raw) => PathBuf::from(
+                raw.replace("$HOME/", &format!("{}/", home.to_string_lossy()))
+                    .replace("$HOME", &home.to_string_lossy()),
+            ),
+            None => home.join(label),
+        };
+        if path.is_dir() {
+            places.push(lwfa_proto::Place {
+                name: label.to_string(),
+                path: path.to_string_lossy().into_owned(),
+            });
+        }
+    }
+
+    // Where this feature's own uploads land, once there are any. Listed
+    // last because it is lwfa's folder rather than one of the user's.
+    let uploads = home.join("Uploads");
+    if uploads.is_dir() {
+        places.push(lwfa_proto::Place {
+            name: "Uploads".to_string(),
+            path: uploads.to_string_lossy().into_owned(),
+        });
+    }
+    places
+}
+
 /// How many entries a listing may carry. Big enough for any directory a
 /// human browses on purpose; small enough that `node_modules` cannot flood
 /// the socket. The shell is told when the cap bites.
@@ -455,6 +527,15 @@ fn read_dir_sorted(path: &Path) -> std::io::Result<(Vec<lwfa_proto::DirEntry>, b
                 name,
                 dir: meta.is_dir(),
                 size: if meta.is_dir() { 0 } else { meta.len() },
+                // Whole seconds: a browser number is only exact to 2^53,
+                // and no file dialog has ever needed better than a second.
+                // `None` rather than 0 where the filesystem will not say,
+                // so the dialog can show a dash instead of 1970.
+                modified: meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs()),
             })
         })
         .collect();

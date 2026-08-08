@@ -6,7 +6,7 @@
 // and upload rows must update by id without disturbing their neighbours.
 
 import { beforeEach, describe, expect, it } from "vitest"
-import type { ToShell } from "@lwfa/proto"
+import type { DirEntry, ToShell } from "@lwfa/proto"
 import {
   activeFileDialogNow,
   addUploads,
@@ -19,6 +19,7 @@ import {
   updateUpload,
   type UploadRow,
 } from "../src/lib/fileDialog"
+import { sortEntries } from "../src/components/FileDialog"
 
 function chooser(request: number): Extract<ToShell, { type: "fileChooser" }> {
   return {
@@ -33,6 +34,7 @@ function chooser(request: number): Extract<ToShell, { type: "fileChooser" }> {
     suggestedName: null,
     filters: [],
     names: [],
+    places: [{ name: "Home", path: "/home/u" }],
     ticket: "aa".repeat(16),
   }
 }
@@ -88,7 +90,7 @@ describe("fileDialog store", () => {
       type: "dirListing",
       request: 2,
       path: "/home/u",
-      entries: [{ name: "docs", dir: true, size: 0 }],
+      entries: [{ name: "docs", dir: true, size: 0, modified: 1_754_600_000 }],
       truncated: false,
       error: null,
     })
@@ -108,5 +110,69 @@ describe("fileDialog store", () => {
     expect(appDisplayName("firefox")).toBe("Firefox")
     expect(appDisplayName("org.videolan.VLC")).toBe("VLC")
     expect(appDisplayName("")).toBe("An app")
+  })
+})
+
+// Ordering is the part of a file browser people notice when it is wrong:
+// directories wandering into the middle of a size sort, or files with no
+// timestamp claiming to be the oldest things on the disk.
+describe("sortEntries", () => {
+  const entry = (
+    name: string,
+    dir: boolean,
+    size: number,
+    modified: number | null,
+  ): DirEntry => ({ name, dir, size, modified })
+
+  const listing: DirEntry[] = [
+    entry("zebra.txt", false, 100, 3000),
+    entry("apple.txt", false, 900, 1000),
+    entry("beta", true, 0, 2000),
+    entry("mystery.bin", false, 500, null),
+    entry("alpha", true, 0, 5000),
+  ]
+
+  const names = (rows: DirEntry[]) => rows.map((r) => r.name)
+
+  it("keeps directories first whatever the key", () => {
+    for (const key of ["name", "size", "modified"] as const) {
+      for (const desc of [false, true]) {
+        const sorted = sortEntries(listing, key, desc)
+        expect(sorted.slice(0, 2).every((r) => r.dir)).toBe(true)
+      }
+    }
+  })
+
+  it("sorts by name, and reverses", () => {
+    expect(names(sortEntries(listing, "name", false))).toEqual([
+      "alpha",
+      "beta",
+      "apple.txt",
+      "mystery.bin",
+      "zebra.txt",
+    ])
+    expect(names(sortEntries(listing, "name", true)).slice(2)).toEqual([
+      "zebra.txt",
+      "mystery.bin",
+      "apple.txt",
+    ])
+  })
+
+  it("sorts by size, largest first when descending", () => {
+    const files = sortEntries(listing, "size", true).filter((r) => !r.dir)
+    expect(names(files)).toEqual(["apple.txt", "mystery.bin", "zebra.txt"])
+  })
+
+  it("puts entries with no timestamp last in both directions", () => {
+    for (const desc of [false, true]) {
+      const files = sortEntries(listing, "modified", desc).filter((r) => !r.dir)
+      expect(files.at(-1)?.name).toBe("mystery.bin")
+    }
+  })
+
+  it("does not mutate the input", () => {
+    const before = names(listing)
+    sortEntries(listing, "size", true)
+    expect(names(listing)).toEqual(before)
   })
 })

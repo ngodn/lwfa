@@ -30,7 +30,7 @@
  */
 
 import { useSyncExternalStore } from "react"
-import type { DirEntry, FileChooserMode, FileFilter, ToShell } from "@lwfa/proto"
+import type { DirEntry, FileChooserMode, FileFilter, Place, ToShell } from "@lwfa/proto"
 
 /** One file being sent from this device, as the dialog shows it. */
 export interface UploadRow {
@@ -64,6 +64,7 @@ export interface DialogRequest {
   suggestedName: string | null
   filters: FileFilter[]
   names: string[]
+  places: Place[]
   ticket: string
 }
 

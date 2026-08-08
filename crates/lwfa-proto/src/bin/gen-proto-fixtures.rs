@@ -199,6 +199,16 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
                     ],
                 }],
                 names: vec![],
+                places: vec![
+                    Place {
+                        name: "Home".to_string(),
+                        path: "/home/user".to_string(),
+                    },
+                    Place {
+                        name: "Documents".to_string(),
+                        path: "/home/user/Documents".to_string(),
+                    },
+                ],
                 ticket: "f00dfeedf00dfeedf00dfeedf00dfeed".to_string(),
             },
         ));
@@ -215,6 +225,7 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
                 suggested_name: Some("report.pdf".to_string()),
                 filters: vec![],
                 names: vec![],
+                places: vec![],
                 ticket: "0123456789abcdef0123456789abcdef".to_string(),
             },
         ));
@@ -231,6 +242,7 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
                 suggested_name: None,
                 filters: vec![],
                 names: vec!["page.html".to_string(), "page_files".to_string()],
+                places: vec![],
                 ticket: "feedfacefeedfacefeedfacefeedface".to_string(),
             },
         ));
@@ -248,11 +260,13 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
                         name: "renders".to_string(),
                         dir: true,
                         size: 0,
+                        modified: Some(1_754_600_000),
                     },
                     DirEntry {
                         name: "hero-4k.png".to_string(),
                         dir: false,
                         size: 13_421_772,
+                        modified: None,
                     },
                 ],
                 truncated: false,

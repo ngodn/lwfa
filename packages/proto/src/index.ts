@@ -216,6 +216,8 @@ export type ToShell =
       filters: FileFilter[]
       /** The filenames a `saveFiles` dialog will write. Empty otherwise. */
       names: string[]
+      /** Starting points for the browse pane's sidebar. */
+      places: Place[]
       /** One-shot credential for this dialog's upload channel. */
       ticket: string
     }
@@ -284,6 +286,22 @@ export interface DirEntry {
   dir: boolean
   /** Bytes, and zero for directories. */
   size: number
+  /**
+   * Last modification, whole seconds since the Unix epoch, or `null` when
+   * the filesystem will not say. The dialog shows a dash for those and
+   * sorts them last rather than inventing a date.
+   */
+  modified: number | null
+}
+
+/**
+ * A named starting point in the machine's filesystem: the sidebar entries.
+ * Sent with the dialog rather than guessed here, because these are the
+ * machine's directories and only it knows which exist.
+ */
+export interface Place {
+  name: string
+  path: string
 }
 
 /**
@@ -926,6 +944,7 @@ export function decodeToShell(text: string): ToShell {
           "suggestedName",
           "filters",
           "names",
+          "places",
           "ticket",
         ],
         where,
@@ -953,6 +972,9 @@ export function decodeToShell(text: string): ToShell {
           }
           return n
         }),
+        places: array(o, "places", where).map((p, i) =>
+          decodePlace(p, `${where}.places[${i}]`),
+        ),
         ticket: str(o, "ticket", where),
       }
     }
@@ -1018,12 +1040,23 @@ export function decodeToShell(text: string): ToShell {
 
 function decodeDirEntry(value: unknown, at: string): DirEntry {
   const o = asObject(value, at)
-  noExtraKeys(o, ["name", "dir", "size"], at)
+  noExtraKeys(o, ["name", "dir", "size", "modified"], at)
+  const modified = o["modified"]
+  if (modified !== null && (typeof modified !== "number" || !Number.isInteger(modified))) {
+    throw new ProtocolError(`${at}.modified: expected an integer or null`)
+  }
   return {
     name: str(o, "name", at),
     dir: bool(o, "dir", at),
     size: int(o, "size", at),
+    modified,
   }
+}
+
+function decodePlace(value: unknown, at: string): Place {
+  const o = asObject(value, at)
+  noExtraKeys(o, ["name", "path"], at)
+  return { name: str(o, "name", at), path: str(o, "path", at) }
 }
 
 function decodeFileFilter(value: unknown, at: string): FileFilter {

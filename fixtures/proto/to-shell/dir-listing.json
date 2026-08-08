@@ -6,12 +6,14 @@
     {
       "name": "renders",
       "dir": true,
-      "size": 0
+      "size": 0,
+      "modified": 1754600000
     },
     {
       "name": "hero-4k.png",
       "dir": false,
-      "size": 13421772
+      "size": 13421772,
+      "modified": null
     }
   ],
   "truncated": false,
