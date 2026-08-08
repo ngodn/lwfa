@@ -1831,6 +1831,27 @@ impl Lwfa {
     /// This is deliberately not the general space search: only windows that
     /// have opted out of management are consulted, so an ordinary neighbour
     /// with a stale size still cannot steal anything.
+    /// # Where a window starts is not where its surface starts
+    ///
+    /// A client drawing its own decorations makes its surface bigger than its
+    /// window: GTK and Firefox pad it so the drop shadow has somewhere to go,
+    /// then declare the real window with `set_window_geometry`. The space is
+    /// told to put the *window* at a place, and Smithay converts that to where
+    /// the *surface* is drawn by subtracting the geometry offset:
+    ///
+    /// ```text
+    /// fn render_location(&self) -> Point<i32, Logical> {
+    ///     self.location - self.element.geometry().loc
+    /// }
+    /// ```
+    ///
+    /// `surface_under` wants the surface origin, so the offset has to come
+    /// off here too. It arrives as the window origin, because that is what the
+    /// layout places and what the capture renders from, so the shell's
+    /// window-relative coordinates are measured from it. Skipping this
+    /// subtraction put every hit test off by the shadow margin, which is a few
+    /// tens of pixels on Firefox and zero on a client without decorations,
+    /// which is exactly what "the touch is off a bit, sometimes" looks like.
     pub fn surface_in(
         &self,
         window: &Window,
@@ -1847,16 +1868,18 @@ impl Lwfa {
             let Some(location) = self.space.element_location(other) else {
                 continue;
             };
+            let render = location - other.geometry().loc;
             if let Some((surface, point)) =
-                other.surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
+                other.surface_under(pos - render.to_f64(), WindowSurfaceType::ALL)
             {
-                return Some((surface, (point + location).to_f64()));
+                return Some((surface, (point + render).to_f64()));
             }
         }
 
+        let render = origin - window.geometry().loc;
         window
-            .surface_under(pos - origin.to_f64(), WindowSurfaceType::ALL)
-            .map(|(s, p)| (s, (p + origin).to_f64()))
+            .surface_under(pos - render.to_f64(), WindowSurfaceType::ALL)
+            .map(|(s, p)| (s, (p + render).to_f64()))
     }
 }
 
