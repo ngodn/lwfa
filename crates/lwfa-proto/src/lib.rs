@@ -385,6 +385,38 @@ pub enum ToShell {
         error: Option<String>,
     },
 
+    /// Everything worth knowing about one path, for the dialog's details
+    /// panel. The answer to [`ToEngine::StatPath`].
+    #[serde(rename_all = "camelCase")]
+    PathInfo {
+        request: u64,
+        /// Canonical, so it is what the properties actually describe.
+        path: String,
+        name: String,
+        kind: PathKind,
+        /// Bytes for a file. For a directory this is the size of the
+        /// directory entry itself, which is not what anyone means by the
+        /// size of a folder, so the shell shows `items` instead.
+        size: u64,
+        modified: Option<u64>,
+        /// Creation time, where the filesystem records one. ext4 does,
+        /// through statx; older ones and some network mounts do not.
+        created: Option<u64>,
+        accessed: Option<u64>,
+        /// Permissions as `rwxr-xr-x`, the spelling everyone reads.
+        mode: String,
+        owner: String,
+        group: String,
+        /// The type a browser would need to render this, or empty when
+        /// nothing can. What the preview tab keys off.
+        mime: String,
+        /// Where a symlink points, unresolved.
+        target: Option<String>,
+        /// How many entries a directory holds, when it could be counted.
+        items: Option<u64>,
+        error: Option<String>,
+    },
+
     /// Upload channel only: the offset the engine already holds for a file.
     ///
     /// The answer to [`ToEngine::UploadBegin`]. Zero for a fresh file; after
@@ -460,6 +492,18 @@ pub struct DirEntry {
     /// Seconds rather than millis because a browser's `number` is exact
     /// only to 2^53, and because no file dialog has ever needed better.
     pub modified: Option<u64>,
+}
+
+/// What a path turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathKind {
+    File,
+    Dir,
+    /// A symlink, with `target` saying where it points.
+    Symlink,
+    /// A socket, fifo, or device node. Nothing to preview.
+    Other,
 }
 
 /// A named starting point in the machine's filesystem.
@@ -1097,6 +1141,14 @@ pub enum ToEngine {
     /// "cancelled": a dismissed dialog must leave nothing behind.
     #[serde(rename_all = "camelCase")]
     FileCancel { request: u64 },
+
+    /// Ask about one path, for the dialog's details panel.
+    ///
+    /// Answered with [`ToShell::PathInfo`]. Bound to an open dialog, like
+    /// [`ToEngine::ListDir`]: the shell may inspect what it is showing and
+    /// nothing else.
+    #[serde(rename_all = "camelCase")]
+    StatPath { request: u64, path: String },
 
     /// Upload channel only: announce one file before its bytes.
     ///

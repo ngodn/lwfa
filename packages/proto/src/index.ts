@@ -243,6 +243,34 @@ export type ToShell =
       error: string | null
     }
   /**
+   * Everything worth knowing about one path, for the details panel.
+   * The answer to `statPath`.
+   */
+  | {
+      type: "pathInfo"
+      request: number
+      /** Canonical, so it is what the properties actually describe. */
+      path: string
+      name: string
+      kind: PathKind
+      /** Bytes for a file; for a directory see `items` instead. */
+      size: number
+      modified: number | null
+      created: number | null
+      accessed: number | null
+      /** Permissions as `rwxr-xr-x`. */
+      mode: string
+      owner: string
+      group: string
+      /** What a browser would need to render this, or "" if nothing can. */
+      mime: string
+      /** Where a symlink points, unresolved. */
+      target: string | null
+      /** How many entries a directory holds, when it could be counted. */
+      items: number | null
+      error: string | null
+    }
+  /**
    * Upload channel only: the offset the engine already holds for a file.
    * Zero for a fresh file; after a reconnect, how much survived, and the
    * client streams from there instead of starting over.
@@ -279,6 +307,9 @@ export type ToShell =
  * the machine's own disk, and `saveFiles` is "pick a folder for these names".
  */
 export type FileChooserMode = "open" | "save" | "saveFiles"
+
+/** What a path turned out to be. */
+export type PathKind = "file" | "dir" | "symlink" | "other"
 
 /** One entry in a `dirListing`. */
 export interface DirEntry {
@@ -543,6 +574,11 @@ export type ToEngine =
    * deleted before the application hears "cancelled".
    */
   | { type: "fileCancel"; request: number }
+  /**
+   * Ask about one path, for the details panel. Answered with `pathInfo`,
+   * and bound to an open dialog like `listDir`.
+   */
+  | { type: "statPath"; request: number; path: string }
   /**
    * Upload channel only: announce one file before its bytes.
    *
@@ -997,6 +1033,65 @@ export function decodeToShell(text: string): ToShell {
         error: nullableStr(o, "error", where),
       }
     }
+    case "pathInfo": {
+      const where = `${at}.pathInfo`
+      noExtraKeys(
+        o,
+        [
+          "type",
+          "request",
+          "path",
+          "name",
+          "kind",
+          "size",
+          "modified",
+          "created",
+          "accessed",
+          "mode",
+          "owner",
+          "group",
+          "mime",
+          "target",
+          "items",
+          "error",
+        ],
+        where,
+      )
+      const kind = str(o, "kind", where)
+      if (kind !== "file" && kind !== "dir" && kind !== "symlink" && kind !== "other") {
+        throw new ProtocolError(`${where}.kind: not a path kind: ${kind}`)
+      }
+      const stamp = (key: string): number | null => {
+        const v = o[key]
+        if (v === null) return null
+        if (typeof v !== "number" || !Number.isInteger(v)) {
+          throw new ProtocolError(`${where}.${key}: expected an integer or null`)
+        }
+        return v
+      }
+      const items = o["items"]
+      if (items !== null && (typeof items !== "number" || !Number.isInteger(items))) {
+        throw new ProtocolError(`${where}.items: expected an integer or null`)
+      }
+      return {
+        type: "pathInfo",
+        request: int(o, "request", where),
+        path: str(o, "path", where),
+        name: str(o, "name", where),
+        kind,
+        size: int(o, "size", where),
+        modified: stamp("modified"),
+        created: stamp("created"),
+        accessed: stamp("accessed"),
+        mode: str(o, "mode", where),
+        owner: str(o, "owner", where),
+        group: str(o, "group", where),
+        mime: str(o, "mime", where),
+        target: nullableStr(o, "target", where),
+        items,
+        error: nullableStr(o, "error", where),
+      }
+    }
     case "uploadOffset": {
       const where = `${at}.uploadOffset`
       noExtraKeys(o, ["type", "request", "file", "offset"], where)
@@ -1346,6 +1441,15 @@ export function decodeToEngine(text: string): ToEngine {
       const where = `${at}.fileCancel`
       noExtraKeys(o, ["type", "request"], where)
       return { type: "fileCancel", request: int(o, "request", where) }
+    }
+    case "statPath": {
+      const where = `${at}.statPath`
+      noExtraKeys(o, ["type", "request", "path"], where)
+      return {
+        type: "statPath",
+        request: int(o, "request", where),
+        path: str(o, "path", where),
+      }
     }
     case "uploadBegin": {
       const where = `${at}.uploadBegin`

@@ -62,6 +62,7 @@ import { pendingKeys, resolvePending } from "@/lib/pending"
 import { blocked, clearBlocked } from "@/lib/alreadyRunning"
 import {
   closed as fileDialogClosed,
+  described as fileDialogDescribed,
   listed as fileDialogListed,
   opened as fileDialogOpened,
 } from "@/lib/fileDialog"
@@ -711,6 +712,10 @@ export function App(): React.ReactElement {
           fileDialogListed(message);
           break;
 
+        case "pathInfo":
+          fileDialogDescribed(message);
+          break;
+
         case "error":
           // Routing by the request name keeps this from becoming a global
           // error bus that every panel has to filter.
@@ -1054,6 +1059,7 @@ export function App(): React.ReactElement {
         update((st, o) => setColumnWidth(st, id, preset, o, configRef.current)),
       takeControl: () => send({ type: "takeControl" }),
       listDir: (request, path) => send({ type: "listDir", request, path }),
+      statPath: (request, path) => send({ type: "statPath", request, path }),
       fileChosen: (request, paths) => send({ type: "fileChosen", request, paths }),
       fileCancel: (request) => send({ type: "fileCancel", request }),
       signOut: () => {

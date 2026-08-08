@@ -1,0 +1,18 @@
+{
+  "type": "pathInfo",
+  "request": 7,
+  "path": "/home/user/Pictures/hero-4k.png",
+  "name": "hero-4k.png",
+  "kind": "file",
+  "size": 13421772,
+  "modified": 1754600000,
+  "created": 1754500000,
+  "accessed": null,
+  "mode": "rw-r--r--",
+  "owner": "user",
+  "group": "1000",
+  "mime": "image/png",
+  "target": null,
+  "items": null,
+  "error": null
+}

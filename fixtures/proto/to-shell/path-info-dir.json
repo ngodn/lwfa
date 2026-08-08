@@ -1,0 +1,18 @@
+{
+  "type": "pathInfo",
+  "request": 7,
+  "path": "/home/user/Pictures",
+  "name": "Pictures",
+  "kind": "dir",
+  "size": 4096,
+  "modified": 1754600000,
+  "created": null,
+  "accessed": null,
+  "mode": "rwxr-xr-x",
+  "owner": "user",
+  "group": "1000",
+  "mime": "",
+  "target": null,
+  "items": 42,
+  "error": null
+}

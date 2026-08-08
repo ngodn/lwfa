@@ -725,6 +725,23 @@ fn accept_loop(
                     // JavaScript over wifi would otherwise stall every other
                     // connection, including live sessions, for as long as the
                     // download takes.
+                    // A preview is an ordinary GET, not an upgrade, so it
+                    // is split off before the static-file path. Its own
+                    // thread for the same reason: a video being streamed
+                    // must not hold up anyone else's connection.
+                    if crate::http::wants_preview(&stream) {
+                        let gates = Arc::clone(&gates);
+                        let _ = thread::Builder::new()
+                            .name("lwfa-preview".into())
+                            .spawn(move || {
+                                let mut stream = stream;
+                                if let Some(head) = crate::http::peek_head(&mut stream) {
+                                    crate::preview::serve(stream, &head, &gates);
+                                }
+                            });
+                        continue;
+                    }
+
                     if !crate::http::wants_websocket(&stream) {
                         match shell_dir.as_deref() {
                             Some(root) => {

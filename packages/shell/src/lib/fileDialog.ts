@@ -78,11 +78,24 @@ export interface Listing {
 /** The upload channel's health, for the dialog's banner. */
 export type ChannelState = "idle" | "connecting" | "open" | "paused"
 
+/** What the details panel is showing, if it is open. */
+export interface Details {
+  /** The path asked about, so a stale reply can be ignored. */
+  path: string
+  /** `null` until the engine answers. */
+  info: PathInfo | null
+}
+
+/** The engine's answer about one path, minus the wire envelope. */
+export type PathInfo = Omit<Extract<ToShell, { type: "pathInfo" }>, "type" | "request">
+
 export interface DialogState extends DialogRequest {
   /** The remote browse pane's current directory, `null` while loading. */
   listing: Listing | null
   uploads: UploadRow[]
   channel: ChannelState
+  /** The details panel, open when non-null. */
+  details: Details | null
 }
 
 let queue: DialogState[] = []
@@ -118,7 +131,10 @@ export function opened(message: Extract<ToShell, { type: "fileChooser" }>): void
     return
   }
   const { type: _type, ...request } = message
-  queue = [...queue, { ...request, listing: null, uploads: [], channel: "idle" }]
+  queue = [
+    ...queue,
+    { ...request, listing: null, uploads: [], channel: "idle", details: null },
+  ]
   emit()
 }
 
@@ -160,6 +176,28 @@ export function updateUpload(
     ...dialog,
     uploads: dialog.uploads.map((row) => (row.id === id ? { ...row, ...change } : row)),
   }))
+}
+
+/** Open the details panel on a path, pending the engine's answer. */
+export function openDetails(request: number, path: string): void {
+  patch(request, (dialog) => ({ ...dialog, details: { path, info: null } }))
+}
+
+export function closeDetails(request: number): void {
+  patch(request, (dialog) => (dialog.details ? { ...dialog, details: null } : dialog))
+}
+
+/** The engine described a path. Ignored if the panel moved on since. */
+export function described(message: Extract<ToShell, { type: "pathInfo" }>): void {
+  const { type: _type, request, ...info } = message
+  patch(request, (dialog) => {
+    if (!dialog.details) return dialog
+    // Matched on the *canonical* path as well as the asked-for one: a
+    // symlink is asked about by its own path and answers with its target.
+    const asked = dialog.details.path
+    if (asked !== info.path && !asked.endsWith(`/${info.name}`)) return dialog
+    return { ...dialog, details: { ...dialog.details, info } }
+  })
 }
 
 export function setChannel(request: number, channel: ChannelState): void {

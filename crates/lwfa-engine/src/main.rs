@@ -28,6 +28,7 @@ mod gamepad;
 mod files;
 mod outside;
 mod portal;
+mod preview;
 mod upload;
 mod handlers;
 mod http;
@@ -750,9 +751,10 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
 
         // A file dialog is input too: answering one feeds an application
         // files, and browsing the disk is scoped to an open dialog besides.
-        ToEngine::ListDir { .. } | ToEngine::FileChosen { .. } | ToEngine::FileCancel { .. } => {
-            who.permissions.may_interact()
-        }
+        ToEngine::ListDir { .. }
+        | ToEngine::StatPath { .. }
+        | ToEngine::FileChosen { .. }
+        | ToEngine::FileCancel { .. } => who.permissions.may_interact(),
 
         // These belong to the upload channel, which authenticates with a
         // per-dialog ticket and never passes through here. On the session
@@ -851,6 +853,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
         }
 
         ToEngine::ListDir { request, path } => state.list_dir(session, request, &path),
+        ToEngine::StatPath { request, path } => state.stat_path(session, request, &path),
         ToEngine::FileChosen { request, paths } => state.file_chosen(session, request, paths),
         ToEngine::FileCancel { request } => state.file_cancel(session, request),
 

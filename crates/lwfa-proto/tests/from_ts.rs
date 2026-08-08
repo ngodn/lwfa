@@ -328,6 +328,46 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                 error: Some("checksum mismatch".into()),
             },
         ),
+        (
+            "path-info",
+            ToShell::PathInfo {
+                request: 7,
+                path: "/home/user/Pictures/hero-4k.png".into(),
+                name: "hero-4k.png".into(),
+                kind: PathKind::File,
+                size: 13_421_772,
+                modified: Some(1_754_600_000),
+                created: Some(1_754_500_000),
+                accessed: None,
+                mode: "rw-r--r--".into(),
+                owner: "user".into(),
+                group: "1000".into(),
+                mime: "image/png".into(),
+                target: None,
+                items: None,
+                error: None,
+            },
+        ),
+        (
+            "path-info-dir",
+            ToShell::PathInfo {
+                request: 7,
+                path: "/home/user/Pictures".into(),
+                name: "Pictures".into(),
+                kind: PathKind::Dir,
+                size: 4096,
+                modified: Some(1_754_600_000),
+                created: None,
+                accessed: None,
+                mode: "rwxr-xr-x".into(),
+                owner: "user".into(),
+                group: "1000".into(),
+                mime: String::new(),
+                target: None,
+                items: Some(42),
+                error: None,
+            },
+        ),
     ]
 }
 
@@ -514,6 +554,13 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
                 file: "c1d2e3f4".into(),
                 sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
                     .into(),
+            },
+        ),
+        (
+            "stat-path",
+            ToEngine::StatPath {
+                request: 7,
+                path: "/home/user/Pictures/hero-4k.png".into(),
             },
         ),
         ("ping", ToEngine::Ping),

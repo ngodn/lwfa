@@ -260,6 +260,15 @@ impl Lwfa {
         );
     }
 
+    /// Everything worth knowing about one path, for the details panel.
+    pub fn stat_path(&mut self, session: lwfa_proto::SessionId, request: u64, path: &str) {
+        if !self.file_request_belongs(session, request) {
+            return;
+        }
+        let info = describe_path(request, Path::new(path));
+        self.send_to_session(session, info);
+    }
+
     /// A file finished arriving on the dialog's upload channel.
     pub fn file_uploaded(&mut self, finished: crate::upload::Finished) {
         match self.pending_files.get_mut(&finished.request) {
@@ -437,6 +446,138 @@ fn discard_uploads(uploads: &[crate::upload::Finished]) {
             }
         }
     }
+}
+
+/// Describe one path for the details panel.
+///
+/// `symlink_metadata` first, so a link is reported as a link with its
+/// target rather than silently as whatever it points at; the target's own
+/// metadata then fills in size and times, which is what a person asking
+/// about a link actually wants to know.
+fn describe_path(request: u64, path: &Path) -> ToShell {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let link = std::fs::symlink_metadata(path);
+    let meta = std::fs::metadata(path);
+    let (Ok(link), Ok(meta)) = (link, meta) else {
+        let err = std::fs::metadata(path).err().map(|e| e.to_string());
+        return ToShell::PathInfo {
+            request,
+            path: canonical.to_string_lossy().into_owned(),
+            name,
+            kind: lwfa_proto::PathKind::Other,
+            size: 0,
+            modified: None,
+            created: None,
+            accessed: None,
+            mode: String::new(),
+            owner: String::new(),
+            group: String::new(),
+            mime: String::new(),
+            target: None,
+            items: None,
+            error: Some(err.unwrap_or_else(|| "cannot read this path".to_string())),
+        };
+    };
+
+    let kind = if link.file_type().is_symlink() {
+        lwfa_proto::PathKind::Symlink
+    } else if meta.is_dir() {
+        lwfa_proto::PathKind::Dir
+    } else if meta.is_file() {
+        lwfa_proto::PathKind::File
+    } else {
+        lwfa_proto::PathKind::Other
+    };
+
+    let stamp = |t: std::io::Result<std::time::SystemTime>| {
+        t.ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+    };
+
+    // Counted rather than guessed, and only for a directory that can be
+    // read: "42 items" is the only honest answer to "how big is a folder"
+    // without walking the whole tree, which a properties panel must not do.
+    let items = if meta.is_dir() {
+        std::fs::read_dir(path)
+            .ok()
+            .map(|entries| entries.filter_map(Result::ok).count() as u64)
+    } else {
+        None
+    };
+
+    let mime = if meta.is_file() {
+        match crate::preview::mime_for(&canonical) {
+            "application/octet-stream" => String::new(),
+            known => known.to_string(),
+        }
+    } else {
+        String::new()
+    };
+
+    ToShell::PathInfo {
+        request,
+        path: canonical.to_string_lossy().into_owned(),
+        name,
+        kind,
+        size: meta.len(),
+        modified: stamp(meta.modified()),
+        created: stamp(meta.created()),
+        accessed: stamp(meta.accessed()),
+        mode: rwx(meta.permissions().mode()),
+        owner: user_name(meta.uid()).unwrap_or_else(|| meta.uid().to_string()),
+        group: meta.gid().to_string(),
+        mime,
+        target: std::fs::read_link(path)
+            .ok()
+            .map(|t| t.to_string_lossy().into_owned()),
+        items,
+        error: None,
+    }
+}
+
+/// Permission bits as `rwxr-xr-x`.
+fn rwx(mode: u32) -> String {
+    let bit = |shift: u32, flag: u32, ch: char| {
+        if mode >> shift & flag != 0 { ch } else { '-' }
+    };
+    [
+        bit(6, 0b100, 'r'),
+        bit(6, 0b010, 'w'),
+        bit(6, 0b001, 'x'),
+        bit(3, 0b100, 'r'),
+        bit(3, 0b010, 'w'),
+        bit(3, 0b001, 'x'),
+        bit(0, 0b100, 'r'),
+        bit(0, 0b010, 'w'),
+        bit(0, 0b001, 'x'),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// A uid's login name, from `/etc/passwd`.
+///
+/// Read directly rather than through libc's `getpwuid`, which is not
+/// thread-safe in its simple form and would pull NSS into a compositor for
+/// one string. A uid with no entry keeps its number, which is honest.
+fn user_name(uid: u32) -> Option<String> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let name = fields.next()?;
+        let _password = fields.next()?;
+        let id: u32 = fields.next()?.parse().ok()?;
+        (id == uid).then(|| name.to_string())
+    })
 }
 
 /// The sidebar's starting points: home, then whichever user directories

@@ -187,6 +187,30 @@ pub fn wants_upload_channel(stream: &TcpStream) -> bool {
     path == "/upload" || path.ends_with("/upload")
 }
 
+/// Is this an ordinary request for the preview route?
+///
+/// Peeked like the others, and matched on the last path segment for the
+/// same reason: the shell derives it from wherever the engine lives, which
+/// may be behind a proxy prefix.
+pub fn wants_preview(stream: &TcpStream) -> bool {
+    let mut buf = [0u8; 4096];
+    let Ok(peeked) = stream.peek(&mut buf) else {
+        return false;
+    };
+    let head = &buf[..peeked];
+    let Some(line_end) = find(head, b"\r\n") else {
+        return false;
+    };
+    let Ok(line) = std::str::from_utf8(&head[..line_end]) else {
+        return false;
+    };
+    let Some(target) = line.split(' ').nth(1) else {
+        return false;
+    };
+    let path = target.split('?').next().unwrap_or("");
+    path == "/preview" || path.ends_with("/preview")
+}
+
 /// Serve one request from `root`, then close.
 ///
 /// Errors are deliberately swallowed: this runs on a throwaway thread for one
@@ -258,6 +282,15 @@ pub fn refuse(mut stream: TcpStream) {
 }
 
 /// Read until the blank line that ends the request head.
+/// Read the request head, for a handler that owns the stream from here on.
+///
+/// The same byte-at-a-time read as the static server, exposed because the
+/// preview route parses its own head and then keeps the connection.
+pub(crate) fn peek_head(stream: &mut TcpStream) -> Option<Vec<u8>> {
+    let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
+    read_head(stream)
+}
+
 fn read_head(stream: &mut TcpStream) -> Option<Vec<u8>> {
     let mut head = Vec::with_capacity(1024);
     let mut byte = [0u8; 1];
@@ -280,7 +313,7 @@ fn read_head(stream: &mut TcpStream) -> Option<Vec<u8>> {
 }
 
 /// The method and target from the request line.
-fn request_line(head: &[u8]) -> Option<(String, &str)> {
+pub(crate) fn request_line(head: &[u8]) -> Option<(String, &str)> {
     let line_end = find(head, b"\r\n")?;
     let line = std::str::from_utf8(&head[..line_end]).ok()?;
     let mut parts = line.split(' ');

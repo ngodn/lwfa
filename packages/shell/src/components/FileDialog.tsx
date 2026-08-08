@@ -29,6 +29,7 @@ import {
   Folder,
   FolderOpen,
   Home,
+  Info,
   Loader2,
   Search,
   TriangleAlert,
@@ -45,6 +46,7 @@ import {
   useActiveFileDialog,
   useQueuedFileDialogs,
 } from "@/lib/fileDialog"
+import { engineFor } from "@/lib/engineUrl"
 import { dropUploader, rowsFor, uploaderFor } from "@/lib/upload"
 import * as store from "@/lib/fileDialog"
 import { Button } from "@/components/ui/button"
@@ -56,6 +58,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { FileDetails } from "@/components/FileDetails"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
@@ -468,6 +471,7 @@ function BrowsePane({
   /** Non-null in save mode, where rows only navigate. */
   saveName: string | null
 }) {
+  const actions = useSessionActions()
   const listing = dialog.listing
   const saveShaped = dialog.mode !== "open"
   const wantsDirs = dialog.mode === "open" && dialog.directory
@@ -550,21 +554,6 @@ function BrowsePane({
             data-selectable
           />
         </div>
-        <SortControl
-          sort={sort}
-          descending={descending}
-          onSort={(next) => {
-            // Clicking the active key flips direction, which is what every
-            // column header in every file browser does.
-            if (next === sort) setDescending(!descending)
-            else {
-              setSort(next)
-              // Names read A to Z; sizes and dates are asked for biggest
-              // and newest first, which is what people actually want.
-              setDescending(next !== "name")
-            }
-          }}
-        />
         <Button
           variant={showHidden ? "secondary" : "outline"}
           size="icon"
@@ -615,42 +604,86 @@ function BrowsePane({
             </nav>
           ) : null}
 
-          {/* Plain overflow rather than the shared ScrollArea, for the reason
-              spelled out in `UploadPane`: Radix's viewport needs a percentage
-              height to resolve against and a flex child cannot give it one. */}
-          <div className="min-w-0 flex-1 overflow-y-auto overscroll-contain rounded-md border">
-            {/* Two columns once there is width for them. A home directory is
-                eighty entries; one long column on a wide screen is mostly
-                scrolling past empty space. */}
-            <ul className="grid grid-cols-1 gap-x-2 p-1 xl:grid-cols-2">
-              {visible.length === 0 ? (
-                <li className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  {needle ? `Nothing here matches "${query.trim()}".` : "Nothing here."}
-                </li>
-              ) : (
-                visible.map((entry) => {
-                  const path = joinPath(listing.path, entry.name)
-                  const selectable = entry.dir ? wantsDirs : !saveShaped && !wantsDirs
-                  const isSelected = selected.includes(path)
-                  return (
-                    <BrowseRow
-                      key={entry.name}
-                      name={entry.name}
-                      dir={entry.dir}
-                      size={entry.size}
-                      modified={entry.modified}
-                      selected={isSelected}
-                      onActivate={() => {
-                        if (entry.dir && !wantsDirs) browse(path)
-                        else if (selectable) toggle(path)
-                      }}
-                      onDescend={entry.dir ? () => browse(path) : undefined}
-                    />
-                  )
-                })
-              )}
-            </ul>
+          {/* One column with aligned Name, Size and Modified, which is what
+              a list view is: the eye scans down a column. Two columns of
+              entries made you read in a zigzag and squeezed the metadata
+              out of the row.
+
+              Plain overflow rather than the shared ScrollArea, for the
+              reason spelled out in `UploadPane`: Radix's viewport needs a
+              percentage height to resolve against and a flex child cannot
+              give it one. */}
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border">
+            <ColumnHeader
+              sort={sort}
+              descending={descending}
+              // The open-folder column exists only in folder-picking mode;
+              // reserving its width everywhere would indent every row for
+              // a button that is never there.
+              reserveAction={wantsDirs}
+              onSort={(next) => {
+                // Clicking the active column flips direction, which is what
+                // every column header in every file browser does.
+                if (next === sort) setDescending(!descending)
+                else {
+                  setSort(next)
+                  // Names read A to Z; sizes and dates are asked for
+                  // biggest and newest first, which is what people want.
+                  setDescending(next !== "name")
+                }
+              }}
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              <ul className="flex flex-col p-1">
+                {visible.length === 0 ? (
+                  <li className="px-3 py-6 text-center text-sm text-muted-foreground">
+                    {needle ? `Nothing here matches "${query.trim()}".` : "Nothing here."}
+                  </li>
+                ) : (
+                  visible.map((entry) => {
+                    const path = joinPath(listing.path, entry.name)
+                    const selectable = entry.dir ? wantsDirs : !saveShaped && !wantsDirs
+                    const isSelected = selected.includes(path)
+                    return (
+                      <BrowseRow
+                        key={entry.name}
+                        name={entry.name}
+                        dir={entry.dir}
+                        size={entry.size}
+                        modified={entry.modified}
+                        selected={isSelected}
+                        onActivate={() => {
+                          if (entry.dir && !wantsDirs) browse(path)
+                          else if (selectable) toggle(path)
+                        }}
+                        // Only where clicking the row does something else.
+                        // In folder-picking mode a click selects the
+                        // folder, so opening it needs a control of its
+                        // own; every other mode opens on click, where a
+                        // second button is the same action twice.
+                        onDescend={
+                          entry.dir && wantsDirs ? () => browse(path) : undefined
+                        }
+                        onInspect={() => {
+                          store.openDetails(dialog.request, path)
+                          actions.statPath(dialog.request, path)
+                        }}
+                        inspecting={dialog.details?.path === path}
+                      />
+                    )
+                  })
+                )}
+              </ul>
+            </div>
           </div>
+
+          {dialog.details ? (
+            <FileDetails
+              info={dialog.details.info}
+              previewUrl={previewUrlFor(dialog, dialog.details)}
+              onClose={() => store.closeDetails(dialog.request)}
+            />
+          ) : null}
         </div>
       )}
 
@@ -692,6 +725,8 @@ const BrowseRow = memo(function BrowseRow({
   selected,
   onActivate,
   onDescend,
+  onInspect,
+  inspecting,
 }: {
   name: string
   dir: boolean
@@ -700,6 +735,8 @@ const BrowseRow = memo(function BrowseRow({
   selected: boolean
   onActivate: () => void
   onDescend?: (() => void) | undefined
+  onInspect: () => void
+  inspecting: boolean
 }) {
   return (
     // content-visibility keeps a 3000-row directory cheap: offscreen rows
@@ -729,22 +766,22 @@ const BrowseRow = memo(function BrowseRow({
           <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         )}
         <span className="min-w-0 flex-1 truncate">{name}</span>
-        {/* Date first, then size, both right-aligned in fixed columns so
-            the eye can scan down them instead of following ragged text. */}
+        {/* Right-aligned in the same fixed columns the header uses, so the
+            eye scans straight down them instead of following ragged text. */}
         <span
-          className="hidden w-28 shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block"
+          className={cn(COL_DATE, "text-xs text-muted-foreground tabular-nums")}
           title={modified === null ? undefined : new Date(modified * 1000).toLocaleString()}
         >
           {prettyDate(modified)}
         </span>
-        <span className="w-16 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
-          {dir ? "" : prettySize(size)}
+        <span className={cn(COL_SIZE, "text-xs text-muted-foreground tabular-nums")}>
+          {dir ? "—" : prettySize(size)}
         </span>
-        {dir && onDescend ? (
+        {onDescend ? (
           <Button
             variant="ghost"
             size="icon"
-            className="size-9 shrink-0"
+            className={cn(COL_ACTION, "h-9")}
             aria-label={`Open ${name}`}
             onClick={(event) => {
               event.stopPropagation()
@@ -753,9 +790,22 @@ const BrowseRow = memo(function BrowseRow({
           >
             <FolderOpen aria-hidden />
           </Button>
-        ) : (
-          <span className="size-9 shrink-0" aria-hidden />
-        )}
+        ) : null}
+        {/* Details, not a second way to open: what this file is, and what
+            it looks like. The row itself already opens or selects. */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(COL_ACTION, "h-9", inspecting && "bg-accent")}
+          aria-label={`About ${name}`}
+          aria-pressed={inspecting}
+          onClick={(event) => {
+            event.stopPropagation()
+            onInspect()
+          }}
+        >
+          <Info aria-hidden />
+        </Button>
       </div>
     </li>
   )
@@ -817,47 +867,75 @@ const Breadcrumbs = memo(function Breadcrumbs({
 /** What a listing can be ordered by. */
 export type SortKey = "name" | "size" | "modified"
 
-const SORT_LABELS: Record<SortKey, string> = {
-  name: "Name",
-  size: "Size",
-  modified: "Modified",
-}
+/**
+ * Column widths, shared by the header and every row.
+ *
+ * One place, because a header that does not line up with its column is
+ * worse than no header at all. The date hides on a narrow screen, where
+ * there is only room for a name and a size.
+ */
+const COL_DATE = "hidden w-28 shrink-0 text-right sm:block"
+const COL_SIZE = "w-20 shrink-0 text-right"
+/** Matches the row's trailing "open folder" button, so columns align. */
+const COL_ACTION = "w-9 shrink-0"
 
-function SortControl({
+/** The clickable header of a list view: sorts, and shows which way. */
+function ColumnHeader({
   sort,
   descending,
+  reserveAction,
   onSort,
 }: {
   sort: SortKey
   descending: boolean
+  /** Whether rows carry a trailing button this header must line up with. */
+  reserveAction: boolean
   onSort: (key: SortKey) => void
 }) {
+  const Header = ({
+    column,
+    label,
+    className,
+  }: {
+    column: SortKey
+    label: string
+    className: string
+  }) => {
+    const active = column === sort
+    return (
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        aria-sort={active ? (descending ? "descending" : "ascending") : "none"}
+        className={cn(
+          "flex items-center gap-1 rounded px-1 py-0.5 hover:text-foreground",
+          column === "name" ? "justify-start" : "justify-end",
+          active ? "font-medium text-foreground" : "",
+          className,
+        )}
+      >
+        {label}
+        {active ? (
+          descending ? (
+            <ArrowDown className="size-3 shrink-0" aria-hidden />
+          ) : (
+            <ArrowUp className="size-3 shrink-0" aria-hidden />
+          )
+        ) : null}
+      </button>
+    )
+  }
   return (
-    <div className="flex shrink-0 items-center rounded-md border p-0.5">
-      {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => {
-        const active = key === sort
-        return (
-          <button
-            key={key}
-            type="button"
-            onClick={() => onSort(key)}
-            aria-pressed={active}
-            className={cn(
-              "flex h-8 items-center gap-1 rounded px-2 text-xs",
-              active ? "bg-accent font-medium text-foreground" : "text-muted-foreground",
-            )}
-          >
-            {SORT_LABELS[key]}
-            {active ? (
-              descending ? (
-                <ArrowDown className="size-3" aria-hidden />
-              ) : (
-                <ArrowUp className="size-3" aria-hidden />
-              )
-            ) : null}
-          </button>
-        )
-      })}
+    <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
+      {/* Stands in for each row's leading icon, so "Name" sits above the
+          names rather than above the icons. */}
+      <span className="size-4 shrink-0" aria-hidden />
+      <Header column="name" label="Name" className="min-w-0 flex-1" />
+      <Header column="modified" label="Modified" className={COL_DATE} />
+      <Header column="size" label="Size" className={COL_SIZE} />
+      {reserveAction ? <span className={COL_ACTION} aria-hidden /> : null}
+      {/* The details button, on every row. */}
+      <span className={COL_ACTION} aria-hidden />
     </div>
   )
 }
@@ -897,6 +975,23 @@ export function sortEntries(entries: DirEntry[], key: SortKey, descending: boole
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Where the engine serves this file, ticket included.
+ *
+ * The same one-shot credential the upload channel uses, and it dies with
+ * the dialog: nothing here outlives the question being asked. `http`
+ * rather than `ws`, since this is an ordinary GET the browser's own media
+ * stack performs.
+ */
+function previewUrlFor(dialog: DialogState, details: store.Details): string | null {
+  if (!details.info || details.info.kind !== "file" || details.info.mime === "") return null
+  const base = engineFor(location, location.search)
+    .replace(/^ws/, "http")
+    .replace(/\/$/, "")
+  const path = encodeURIComponent(details.info.path)
+  return `${base}/preview?request=${dialog.request}&ticket=${dialog.ticket}&path=${path}`
+}
 
 function joinPath(dir: string, name: string): string {
   return dir.endsWith("/") ? `${dir}${name}` : `${dir}/${name}`

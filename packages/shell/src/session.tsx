@@ -116,6 +116,8 @@ export interface SessionActions {
    * is asking. See `lib/fileDialog`.
    */
   listDir: (request: number, path: string) => void
+  /** Ask about one path, for the dialog's details panel. */
+  statPath: (request: number, path: string) => void
   /** Answer a file dialog with machine paths. Uploads fold in engine-side. */
   fileChosen: (request: number, paths: string[]) => void
   /** Dismiss a file dialog. Everything uploaded under it is deleted. */
