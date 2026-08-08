@@ -192,6 +192,182 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                 }],
             },
         ),
+        (
+            "file-chooser",
+            ToShell::FileChooser {
+                request: 7,
+                mode: FileChooserMode::Open,
+                multiple: true,
+                directory: false,
+                title: "Open Image".into(),
+                app_id: "org.gimp.GIMP".into(),
+                accept_label: Some("_Open".into()),
+                suggested_name: None,
+                filters: vec![FileFilter {
+                    name: "PNG and JPEG images".into(),
+                    patterns: vec!["*.png".into(), "image/jpeg".into()],
+                }],
+                names: vec![],
+                places: vec![
+                    Place {
+                        name: "Home".into(),
+                        path: "/home/user".into(),
+                    },
+                    Place {
+                        name: "Documents".into(),
+                        path: "/home/user/Documents".into(),
+                    },
+                ],
+                ticket: "f00dfeedf00dfeedf00dfeedf00dfeed".into(),
+            },
+        ),
+        (
+            "file-chooser-save",
+            ToShell::FileChooser {
+                request: 8,
+                mode: FileChooserMode::Save,
+                multiple: false,
+                directory: false,
+                title: "Save File".into(),
+                app_id: String::new(),
+                accept_label: None,
+                suggested_name: Some("report.pdf".into()),
+                filters: vec![],
+                names: vec![],
+                places: vec![],
+                ticket: "0123456789abcdef0123456789abcdef".into(),
+            },
+        ),
+        (
+            "file-chooser-save-files",
+            ToShell::FileChooser {
+                request: 9,
+                mode: FileChooserMode::SaveFiles,
+                multiple: false,
+                directory: true,
+                title: String::new(),
+                app_id: "firefox".into(),
+                accept_label: None,
+                suggested_name: None,
+                filters: vec![],
+                names: vec!["page.html".into(), "page_files".into()],
+                places: vec![],
+                ticket: "feedfacefeedfacefeedfacefeedface".into(),
+            },
+        ),
+        (
+            "file-chooser-closed",
+            ToShell::FileChooserClosed { request: 7 },
+        ),
+        (
+            "dir-listing",
+            ToShell::DirListing {
+                request: 7,
+                path: "/home/user/Pictures".into(),
+                entries: vec![
+                    DirEntry {
+                        name: "renders".into(),
+                        dir: true,
+                        size: 0,
+                        modified: Some(1_754_600_000),
+                    },
+                    DirEntry {
+                        name: "hero-4k.png".into(),
+                        dir: false,
+                        size: 13_421_772,
+                        modified: None,
+                    },
+                ],
+                truncated: false,
+                error: None,
+            },
+        ),
+        (
+            "dir-listing-error",
+            ToShell::DirListing {
+                request: 7,
+                path: "/root".into(),
+                entries: vec![],
+                truncated: false,
+                error: Some("Permission denied (os error 13)".into()),
+            },
+        ),
+        (
+            "upload-offset",
+            ToShell::UploadOffset {
+                request: 7,
+                file: "c1d2e3f4".into(),
+                offset: 79_691_776,
+            },
+        ),
+        (
+            "upload-progress",
+            ToShell::UploadProgress {
+                request: 7,
+                file: "c1d2e3f4".into(),
+                written: 83_886_080,
+            },
+        ),
+        (
+            "upload-done",
+            ToShell::UploadDone {
+                request: 7,
+                file: "c1d2e3f4".into(),
+                name: "clip-final-2.mov".into(),
+                ok: true,
+                error: None,
+            },
+        ),
+        (
+            "upload-done-failed",
+            ToShell::UploadDone {
+                request: 7,
+                file: "c1d2e3f4".into(),
+                name: String::new(),
+                ok: false,
+                error: Some("checksum mismatch".into()),
+            },
+        ),
+        (
+            "path-info",
+            ToShell::PathInfo {
+                request: 7,
+                path: "/home/user/Pictures/hero-4k.png".into(),
+                name: "hero-4k.png".into(),
+                kind: PathKind::File,
+                size: 13_421_772,
+                modified: Some(1_754_600_000),
+                created: Some(1_754_500_000),
+                accessed: None,
+                mode: "rw-r--r--".into(),
+                owner: "user".into(),
+                group: "1000".into(),
+                mime: "image/png".into(),
+                target: None,
+                items: None,
+                error: None,
+            },
+        ),
+        (
+            "path-info-dir",
+            ToShell::PathInfo {
+                request: 7,
+                path: "/home/user/Pictures".into(),
+                name: "Pictures".into(),
+                kind: PathKind::Dir,
+                size: 4096,
+                modified: Some(1_754_600_000),
+                created: None,
+                accessed: None,
+                mode: "rwxr-xr-x".into(),
+                owner: "user".into(),
+                group: "1000".into(),
+                mime: String::new(),
+                target: None,
+                items: Some(42),
+                error: None,
+            },
+        ),
     ]
 }
 
@@ -324,6 +500,67 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
             ToEngine::SetSessionMode {
                 session: 3,
                 mode: SessionMode::View,
+            },
+        ),
+        (
+            "list-dir",
+            ToEngine::ListDir {
+                request: 7,
+                path: "~".into(),
+            },
+        ),
+        (
+            "file-chosen",
+            ToEngine::FileChosen {
+                request: 7,
+                paths: vec![
+                    "/home/user/Pictures/hero-4k.png".into(),
+                    "/home/user/Pictures/hero-4k-alt.png".into(),
+                ],
+            },
+        ),
+        (
+            "file-chosen-uploads-only",
+            ToEngine::FileChosen {
+                request: 7,
+                paths: vec![],
+            },
+        ),
+        ("file-cancel", ToEngine::FileCancel { request: 7 }),
+        (
+            "upload-begin",
+            ToEngine::UploadBegin {
+                request: 7,
+                file: "c1d2e3f4".into(),
+                name: "clip-final.mov".into(),
+                rel: vec![],
+                size: 127_926_272,
+            },
+        ),
+        (
+            "upload-begin-in-folder",
+            ToEngine::UploadBegin {
+                request: 7,
+                file: "a5b6c7d8".into(),
+                name: "notes.md".into(),
+                rel: vec!["ProjectDocs".into(), "meeting".into()],
+                size: 1_126,
+            },
+        ),
+        (
+            "upload-end",
+            ToEngine::UploadEnd {
+                request: 7,
+                file: "c1d2e3f4".into(),
+                sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+                    .into(),
+            },
+        ),
+        (
+            "stat-path",
+            ToEngine::StatPath {
+                request: 7,
+                path: "/home/user/Pictures/hero-4k.png".into(),
             },
         ),
         ("ping", ToEngine::Ping),

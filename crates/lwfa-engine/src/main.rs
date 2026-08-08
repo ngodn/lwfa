@@ -25,7 +25,11 @@ mod encode;
 mod focus;
 mod bitrate;
 mod gamepad;
+mod files;
 mod outside;
+mod portal;
+mod preview;
+mod upload;
 mod handlers;
 mod http;
 mod icons;
@@ -61,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     winit::init_winit(&mut event_loop, &mut data)?;
     init_shell_link(&mut event_loop, &mut data)?;
     init_xwayland(&mut event_loop, &mut data);
+    init_portal(&mut event_loop, &mut data);
 
     // The focus guardian's tick: once a second, repair the X server's input
     // focus if it has fallen on nothing. See `xfocus.rs` for the story.
@@ -240,6 +245,7 @@ fn init_shell_link(
         events_tx,
         data.config.stream.max_frames_in_flight,
         shell_dir,
+        data.upload_gates.clone(),
     ) {
         Ok(bound) => bound,
         Err(err) => {
@@ -274,6 +280,43 @@ fn init_shell_link(
         .map_err(|err| format!("failed to insert the shell event source: {err}"))?;
 
     Ok(())
+}
+
+/// Start the file-chooser portal and route its requests into the compositor.
+///
+/// Never fatal: a machine without `xdg-desktop-portal` or `dbus-daemon`
+/// still gets a working compositor, and applications fall back to drawing
+/// their own file dialogs, which is what they did before this existed.
+fn init_portal(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut CalloopData) {
+    // Partials from a crashed engine are not resumable by anyone; a fresh
+    // start is the one safe moment to clear them.
+    crate::upload::sweep_stale_partials();
+
+    let (portal_tx, portal_rx) = channel::channel::<crate::portal::PortalEvent>();
+    match crate::portal::Portal::start(portal_tx) {
+        Ok(portal) => data.portal = Some(portal),
+        Err(err) => {
+            tracing::warn!("file-chooser portal unavailable: {err}");
+            return;
+        }
+    }
+    let ret = event_loop
+        .handle()
+        .insert_source(portal_rx, |event, _, data| {
+            let channel::Event::Msg(event) = event else {
+                return;
+            };
+            match event {
+                crate::portal::PortalEvent::Ask(request) => data.file_request(request),
+                crate::portal::PortalEvent::Closed(handle) => {
+                    data.file_close_by_handle(&handle)
+                }
+            }
+        });
+    if let Err(err) = ret {
+        tracing::warn!("could not watch the portal: {err}. File dialogs disabled.");
+        data.portal = None;
+    }
 }
 
 /// Re-read `AUTH_PASS` when `.env` changes.
@@ -472,6 +515,10 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // unplayable until something happened to re-announce it. See
             // `Lwfa::restore_gamepad_for`.
             state.restore_gamepad_for(session, &client);
+            // Any dialog orphaned by a disconnect is this session's now, if
+            // it may interact. Usually it is the same browser coming back a
+            // moment later, mid-upload. See `files.rs`.
+            state.adopt_file_dialogs(session);
             state.layout.set_mode(Mode::Shell);
 
             // The first connection that can actually drive takes the wheel. A
@@ -526,6 +573,10 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // socket otherwise, because the seat never hears that a connection
             // died. See `Lwfa::release_keys_for`.
             state.release_keys_for(session);
+            // Its file dialogs go dormant rather than dying with it: the
+            // application is still blocked on an answer, and the browser is
+            // usually about to reconnect. See `files.rs`.
+            state.orphan_file_dialogs(session);
             // Parked, not unplugged: a network flap must not cost the game
             // its controller device. Inputs are released on the way into the
             // parking spot, so a tab closed mid-press does not leave a
@@ -586,6 +637,12 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 return;
             }
             handle_shell_message(state, session, message)
+        }
+
+        ShellEvent::Uploaded(finished) => {
+            // From an upload thread, not a session; the ticket authenticated
+            // it. The compositor folds the file into its dialog's answer.
+            state.file_uploaded(finished);
         }
     }
 }
@@ -692,6 +749,18 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
         | ToEngine::GamepadButton { .. }
         | ToEngine::GamepadAxis { .. } => who.permissions.may_interact(),
 
+        // A file dialog is input too: answering one feeds an application
+        // files, and browsing the disk is scoped to an open dialog besides.
+        ToEngine::ListDir { .. }
+        | ToEngine::StatPath { .. }
+        | ToEngine::FileChosen { .. }
+        | ToEngine::FileCancel { .. } => who.permissions.may_interact(),
+
+        // These belong to the upload channel, which authenticates with a
+        // per-dialog ticket and never passes through here. On the session
+        // socket they are always wrong, whoever sends them.
+        ToEngine::UploadBegin { .. } | ToEngine::UploadEnd { .. } => false,
+
         // Everything else drives the machine.
         _ => who.permissions.may_interact(),
     }
@@ -781,6 +850,18 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             // uses the round trip to tell a live socket from the corpse iOS
             // hands back after a resume; see the variant's docs in lwfa-proto.
             state.send_to_session(session, lwfa_proto::ToShell::Pong);
+        }
+
+        ToEngine::ListDir { request, path } => state.list_dir(session, request, &path),
+        ToEngine::StatPath { request, path } => state.stat_path(session, request, &path),
+        ToEngine::FileChosen { request, paths } => state.file_chosen(session, request, paths),
+        ToEngine::FileCancel { request } => state.file_cancel(session, request),
+
+        // Upload-channel messages on the session socket. `allowed` already
+        // refused them; this arm exists because the match must be total, and
+        // reaching it would mean the permission gate grew a hole.
+        ToEngine::UploadBegin { .. } | ToEngine::UploadEnd { .. } => {
+            tracing::warn!("upload message on the session socket from {session}; dropped");
         }
 
         ToEngine::ListApps => {

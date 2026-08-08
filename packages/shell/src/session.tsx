@@ -109,6 +109,20 @@ export interface SessionActions {
   /** Ask to become the connection that decides layout. */
   takeControl: () => void
   /**
+   * List one directory of the machine's disk, for an open file dialog.
+   *
+   * Scoped to a dialog: the engine refuses it without an open request,
+   * because the shell has no business browsing except while an application
+   * is asking. See `lib/fileDialog`.
+   */
+  listDir: (request: number, path: string) => void
+  /** Ask about one path, for the dialog's details panel. */
+  statPath: (request: number, path: string) => void
+  /** Answer a file dialog with machine paths. Uploads fold in engine-side. */
+  fileChosen: (request: number, paths: string[]) => void
+  /** Dismiss a file dialog. Everything uploaded under it is deleted. */
+  fileCancel: (request: number) => void
+  /**
    * Forget the stored password and return to the login screen.
    *
    * An action rather than a prop threaded down to the one panel that offers

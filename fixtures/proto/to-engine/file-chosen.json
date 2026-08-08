@@ -1,0 +1,8 @@
+{
+  "type": "fileChosen",
+  "request": 7,
+  "paths": [
+    "/home/user/Pictures/hero-4k.png",
+    "/home/user/Pictures/hero-4k-alt.png"
+  ]
+}

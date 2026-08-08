@@ -60,6 +60,13 @@ import { requestLeadership } from "@/lib/leader"
 import { log } from "@/lib/log"
 import { pendingKeys, resolvePending } from "@/lib/pending"
 import { blocked, clearBlocked } from "@/lib/alreadyRunning"
+import {
+  closed as fileDialogClosed,
+  described as fileDialogDescribed,
+  listed as fileDialogListed,
+  opened as fileDialogOpened,
+} from "@/lib/fileDialog"
+import { dropUploader } from "@/lib/upload"
 import { motion } from "@/lib/motion"
 import { WINDOW_SPRING } from "@/generated/config"
 import {
@@ -686,6 +693,29 @@ export function App(): React.ReactElement {
           });
           break;
 
+        case "fileChooser":
+          // An application on the desktop wants files, and this session is
+          // the one being asked. State lives in lib/fileDialog; the modal
+          // renders from it. A re-send after a reconnect is recognised by
+          // its request id and keeps the local state, uploads included.
+          fileDialogOpened(message);
+          break;
+
+        case "fileChooserClosed":
+          // Over without our answer: withdrawn, expired, or answered by
+          // another session. The engine already cleaned the machine up.
+          dropUploader(message.request);
+          fileDialogClosed(message.request);
+          break;
+
+        case "dirListing":
+          fileDialogListed(message);
+          break;
+
+        case "pathInfo":
+          fileDialogDescribed(message);
+          break;
+
         case "error":
           // Routing by the request name keeps this from becoming a global
           // error bus that every panel has to filter.
@@ -1028,6 +1058,10 @@ export function App(): React.ReactElement {
       setColumnWidth: (id, preset) =>
         update((st, o) => setColumnWidth(st, id, preset, o, configRef.current)),
       takeControl: () => send({ type: "takeControl" }),
+      listDir: (request, path) => send({ type: "listDir", request, path }),
+      statPath: (request, path) => send({ type: "statPath", request, path }),
+      fileChosen: (request, paths) => send({ type: "fileChosen", request, paths }),
+      fileCancel: (request) => send({ type: "fileCancel", request }),
       signOut: () => {
         clearPassword();
         setPassword(null);

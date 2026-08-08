@@ -22,6 +22,7 @@ import { PanelHost } from "@/components/PanelHost"
 import { InputDock } from "@/components/InputDock"
 import { useArranging } from "@/lib/arrange"
 import { AlreadyRunning } from "@/components/AlreadyRunning"
+import { FileDialog } from "@/components/FileDialog"
 import { toggleDock } from "@/lib/dock"
 import { NAV_ITEMS } from "@/nav/registry"
 import { useSessionActions } from "@/session"
@@ -130,6 +131,7 @@ export const ShellChrome = memo(function ShellChrome({
         </main>
         <PanelHost active={active} onClose={close} />
         <AlreadyRunning />
+        <FileDialog />
       </div>
     </TooltipProvider>
   )
