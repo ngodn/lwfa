@@ -76,18 +76,95 @@ export const DEFAULT_CONFIG: StripConfig = {
   orientation: ORIENTATION,
 }
 
+/**
+ * The machine's defaults with the device's layout preferences over them.
+ *
+ * Takes the three fields structurally rather than importing the preferences
+ * module, so this file still depends on nothing. It exists because more than
+ * one place needs the config the session is actually running under, and two
+ * copies of this would drift: a panel measuring with the default orientation
+ * while the strip ran vertically would answer questions about the wrong axis.
+ */
+export function configFrom(prefs: {
+  orientation: OrientationPref
+  centreFocused: boolean
+  defaultWidth: number
+}): StripConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    orientation: prefs.orientation,
+    centreFocused: prefs.centreFocused,
+    // Clamped, because a preferences blob written against a shorter preset
+    // list can hold an index that no longer exists.
+    defaultWidth: Math.min(
+      Math.max(0, prefs.defaultWidth),
+      WIDTH_PRESETS.length - 1,
+    ) as WidthPreset,
+  }
+}
+
 /** A vertical stack of windows sharing one slot on the strip. */
 export interface Column {
   windows: WindowId[]
   /** Index into `windows`. Clamped by every operation here. */
   focus: number
   width: WidthPreset
+  /**
+   * Stream every window in this column while it has focus, not just the one.
+   *
+   * A column puts its windows on screen *together*, each taking an equal
+   * slice. `Prefs.stream.pauseInactive` then freezes all but the focused one,
+   * which is right across the strip and wrong inside a stack: the two windows
+   * beside the one being typed in are visible, side by side with it, and
+   * still. Stacking three terminals to watch three builds shows one build.
+   *
+   * So this is opt-in per column, and it only ever *widens* what streams.
+   * There is deliberately no way to make a column stream less than the global
+   * setting already allows: an earlier per-window pause toggle was removed for
+   * making "why is this window frozen" a question with two answers in two
+   * places, and this must not bring that back.
+   *
+   * Only the *focused* column's flag is read (see [`liveWindows`]), so the
+   * extra cost is bounded by the largest stack rather than by how many columns
+   * carry the flag. Marking every column on the strip cannot cost more than
+   * marking one.
+   *
+   * Optional because the columns built before this existed had no opinion, and
+   * absent is the same answer as false.
+   */
+  live?: boolean
 }
 
 export interface Workspace {
   columns: Column[]
   /** Index into `columns`. */
   focus: number
+  /**
+   * Divide the viewport among the columns exactly, and stop scrolling.
+   *
+   * # Why this exists
+   *
+   * The strip can already express a grid: two columns of two windows is a
+   * 2x2, because a column of windows *is* a row of cells. What it could not
+   * do was hold one. Width presets are fractions of the whole viewport and
+   * take no account of the gaps, so two "halves" overflow by three gaps and
+   * the strip scrolls; and `centreFocused` then slides the pair around every
+   * time focus moves. The shape was reachable and would not sit still.
+   *
+   * Fitting solves both at once: every column takes the same share of what is
+   * left after the gaps, and the offset is pinned. Four videos in two columns
+   * become four quadrants that stay where they are put.
+   *
+   * # What it costs
+   *
+   * Per-column widths stop applying while it is on, because "each column
+   * chooses its width" and "the columns exactly fill the screen" cannot both
+   * be true. The presets are disabled rather than silently ignored.
+   *
+   * Held per workspace, like `fullscreen`, so a workspace can be a video wall
+   * while the one next to it is a normal scrolling strip.
+   */
+  fit: boolean
   /**
    * How far this workspace has scrolled right, in logical pixels.
    *
@@ -124,6 +201,7 @@ const emptyWorkspace = (): Workspace => ({
   focus: 0,
   viewOffset: 0,
   fullscreen: null,
+  fit: false,
 })
 
 /**
@@ -184,8 +262,52 @@ export function presetWidth(
   return Math.max(Math.round(mainLength(output, config) * WIDTH_PRESETS[preset]!), config.minWidth)
 }
 
-export function columnWidth(column: Column, output: Output, config: StripConfig): number {
-  return presetWidth(column.width, output, config)
+/**
+ * Extent of every column when the workspace is fitted.
+ *
+ * The gaps come out of the viewport *first*, so `count` columns and the
+ * `count + 1` gaps around and between them add up to exactly the viewport and
+ * the last column ends flush with its edge. This is the arithmetic the width
+ * presets do not do: 50% of the viewport twice is three gaps too wide.
+ *
+ * Still floored at `minWidth`, so a workspace with more columns than can
+ * honestly fit does not shrink them to slivers. Past that point the row is
+ * wider than the screen and scrolling comes back on its own; see
+ * [`fitsOnScreen`].
+ */
+export function fittedWidth(count: number, output: Output, config: StripConfig): number {
+  if (count <= 0) return mainLength(output, config)
+  const available = mainLength(output, config) - config.gap * (count + 1)
+  return Math.max(Math.floor(available / count), config.minWidth)
+}
+
+/** Whether a fitted workspace's columns actually all fit. */
+export function fitsOnScreen(count: number, output: Output, config: StripConfig): boolean {
+  if (count <= 0) return true
+  const width = fittedWidth(count, output, config)
+  return config.gap * (count + 1) + width * count <= mainLength(output, config)
+}
+
+/**
+ * The width every column takes, or `undefined` to use each column's preset.
+ *
+ * One value for the whole workspace rather than a per-column question,
+ * because that is exactly what fitting means. Computed once by the callers
+ * that walk the columns, so a strip of twenty does not recompute it twenty
+ * times.
+ */
+function fitOverride(ws: Workspace, output: Output, config: StripConfig): number | undefined {
+  return ws.fit ? fittedWidth(ws.columns.length, output, config) : undefined
+}
+
+export function columnWidth(
+  column: Column,
+  output: Output,
+  config: StripConfig,
+  /** Fitted width, when the workspace is fitted. */
+  fitted?: number,
+): number {
+  return fitted ?? presetWidth(column.width, output, config)
 }
 
 /**
@@ -220,10 +342,11 @@ export function columnX(
   index: number,
   output: Output,
   config: StripConfig,
+  fitted?: number,
 ): number {
   let x = config.gap
   for (let i = 0; i < index && i < columns.length; i++) {
-    x += columnWidth(columns[i]!, output, config) + config.gap
+    x += columnWidth(columns[i]!, output, config, fitted) + config.gap
   }
   return x
 }
@@ -254,10 +377,18 @@ export function targetOffset(state: StripState, output: Output, config: StripCon
   const ws = currentWorkspace(state)
   if (ws.columns.length === 0) return 0
 
+  // A fitted workspace does not scroll: everything is on screen, so there is
+  // nowhere to scroll to, and re-centring on focus would slide a grid that is
+  // meant to stay still. Past the point where the columns stop fitting the
+  // row is genuinely wider than the screen, and the usual rules below are the
+  // right answer again.
+  const fitted = fitOverride(ws, output, config)
+  if (ws.fit && fitsOnScreen(ws.columns.length, output, config)) return 0
+
   const index = clampIndex(ws.focus, ws.columns.length)
   const column = ws.columns[index]!
-  const width = columnWidth(column, output, config)
-  const left = columnX(ws.columns, index, output, config) - config.gap
+  const width = columnWidth(column, output, config, fitted)
+  const left = columnX(ws.columns, index, output, config, fitted) - config.gap
   const right = left + width + config.gap * 2
 
   // Wider than the viewport: pin the left edge, since no offset shows all of
@@ -309,10 +440,13 @@ export function layout(state: StripState, output: Output, config: StripConfig): 
   // those into screen coordinates, so portrait is a transpose rather than a
   // second implementation of the layout.
   const vertical = orientationOf(output, config) === "vertical"
+  // Computed once for the whole strip rather than per column: fitting is a
+  // property of the workspace, not of any one column.
+  const fitted = fitOverride(ws, output, config)
 
   ws.columns.forEach((column, index) => {
-    const extent = columnWidth(column, output, config)
-    const along = columnX(ws.columns, index, output, config) - offset
+    const extent = columnWidth(column, output, config, fitted)
+    const along = columnX(ws.columns, index, output, config, fitted) - offset
     const slice = stackedHeight(column.windows.length, output, config)
 
     column.windows.forEach((id, row) => {
@@ -380,6 +514,12 @@ export function intersectsViewport(
  * window leaving this list and tells its application to stop rendering, so
  * the saving is real, not cosmetic. When nothing is focused the candidates
  * all stream: a session with no focus yet must not open on a wall of stills.
+ *
+ * `live` is the per-column opt-out of that one rule, and the only thing that
+ * can widen the list: the windows of a focused column marked `Column.live`.
+ * See [`liveWindows`], which is what a caller should pass. It cannot narrow
+ * anything, so a window frozen with an empty `live` stays frozen with a full
+ * one, and every id in it still has to clear the viewport filter above.
  */
 export function streamList(
   placed: WindowLayout[],
@@ -388,6 +528,7 @@ export function streamList(
   focused: WindowId | null,
   pauseInactive: boolean,
   fullscreen: WindowId | null,
+  live: readonly WindowId[] = [],
 ): WindowId[] {
   return placed
     .filter(
@@ -398,9 +539,47 @@ export function streamList(
         !pauseInactive ||
         focused === null ||
         w.id === focused ||
-        w.id === fullscreen,
+        w.id === fullscreen ||
+        live.includes(w.id),
     )
     .map((w) => w.id)
+}
+
+/**
+ * The windows a live column adds to the stream list. See [`Column.live`].
+ *
+ * # A fitted workspace is live throughout
+ *
+ * Fitting puts every column on screen at once and stops the strip scrolling,
+ * which is a statement that everything in it is meant to be watched: four
+ * videos tiled into quadrants are four videos, not one video and three
+ * stills. So fitting implies live for the whole workspace and there is no
+ * second switch to find.
+ *
+ * That stays bounded for the same reason the mode does. Fitting only holds
+ * what fits, and `streamList` still drops anything the viewport cannot show,
+ * so a workspace with more columns than fit streams the ones on screen and no
+ * more.
+ *
+ * Otherwise only the focused column is consulted, which is the whole reason
+ * this is affordable: whatever the user has marked, at most one column can be
+ * focused, so the extra encoder sessions are bounded by the tallest stack and
+ * not by how liberally the flag has been handed out.
+ *
+ * A column of one is not a group, so its flag reads as nothing here. That
+ * window is the focused one whenever the column is, and it therefore already
+ * streams; honouring the flag would only mean this function could be used to
+ * keep a single named window awake, which is exactly the per-window pause
+ * control that was taken out of the windows panel. The flag is left on the
+ * column rather than cleared, so a column that is stacked up again remembers
+ * what it was told, the way it remembers its width.
+ */
+export function liveWindows(state: StripState): WindowId[] {
+  const ws = currentWorkspace(state)
+  if (ws.fit) return ws.columns.flatMap((column) => column.windows)
+  const column = ws.columns[clampIndex(ws.focus, ws.columns.length)]
+  if (!column?.live || column.windows.length < 2) return []
+  return column.windows
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +827,31 @@ export function setColumnWidth(
 }
 
 /**
+ * Mark a named window's column as streaming all of itself, or stop.
+ *
+ * Named rather than focused, and no re-settling afterwards, for the same
+ * reasons as {@link setColumnWidth}: the control is a row in a list, so
+ * choosing from it must not first move focus somewhere the user did not ask
+ * for. Unlike a width this changes no geometry at all, so there is no offset
+ * to re-derive and nothing to animate. Only the stream list changes, and the
+ * caller re-sends that.
+ *
+ * Returns the same object when nothing would change, which is what stops a
+ * toggle pressed twice from pushing two identical layouts at the engine.
+ */
+export function setColumnLive(state: StripState, id: WindowId, live: boolean): StripState {
+  const where = findWindow(state, id)
+  if (!where || where.workspace !== state.focus) return state
+  const column = currentWorkspace(state).columns[where.column]
+  if (!column || (column.live ?? false) === live) return state
+
+  return withWorkspace(state, (ws) => ({
+    ...ws,
+    columns: ws.columns.map((c, i) => (i === where.column ? { ...c, live } : c)),
+  }))
+}
+
+/**
  * Does this window cover the whole output, leaving nothing around it?
  *
  * Asked geometrically rather than by reading the fullscreen flag, because the
@@ -714,6 +918,38 @@ export function setFullscreen(
     fullscreen: fullscreen ? id : ws.fullscreen === id ? null : ws.fullscreen,
   }))
   return scrollFocusIntoView(next, output, config)
+}
+
+/**
+ * Fit the focused workspace's columns to the screen, or go back to scrolling.
+ *
+ * Clears fullscreen on the way in. Fitting is a request to see everything at
+ * once and fullscreen is a request to see one thing, so leaving it set would
+ * mean pressing "fit to screen" and watching nothing happen, since `layout`
+ * short-circuits on fullscreen before it reaches any of this.
+ *
+ * The offset is re-derived rather than assumed, because that is what turns
+ * scrolling off going in and puts the strip back under the focused column
+ * coming out.
+ */
+export function setFit(
+  state: StripState,
+  fit: boolean,
+  output: Output,
+  config: StripConfig,
+): StripState {
+  if (currentWorkspace(state).fit === fit) return state
+  const next = withWorkspace(state, (ws) => ({
+    ...ws,
+    fit,
+    fullscreen: fit ? null : ws.fullscreen,
+  }))
+  return scrollFocusIntoView(next, output, config)
+}
+
+/** Is the focused workspace fitted to the screen? */
+export function isFitted(state: StripState): boolean {
+  return currentWorkspace(state).fit
 }
 
 export function toggleFullscreen(
