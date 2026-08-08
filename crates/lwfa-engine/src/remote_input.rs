@@ -39,25 +39,39 @@ impl Lwfa {
     /// Uses the engine's current placement, not the shell's target. Returns
     /// `None` if the window is not currently placed, which happens when the
     /// shell sends input for something it has just scrolled off.
-    fn window_point(&self, window: WindowId, x: f64, y: f64) -> Option<Point<f64, Logical>> {
-        let target = self.layout.window(window)?;
-        let (_, location) = self
+    fn window_point(
+        &self,
+        window: WindowId,
+        x: f64,
+        y: f64,
+    ) -> Option<(smithay::desktop::Window, Point<i32, Logical>, Point<f64, Logical>)> {
+        let target = self.layout.window(window)?.clone();
+        let (_, origin) = self
             .layout
             .placements()
             .into_iter()
-            .find(|(w, _)| w == target)?;
-        Some(Point::from((location.x as f64 + x, location.y as f64 + y)))
+            .find(|(w, _)| w == &target)?;
+        Some((
+            target,
+            origin,
+            Point::from((origin.x as f64 + x, origin.y as f64 + y)),
+        ))
     }
 
     pub fn remote_pointer_motion(&mut self, window: WindowId, x: f64, y: f64) {
-        let Some(location) = self.window_point(window, x, y) else {
+        let Some((target, origin, location)) = self.window_point(window, x, y) else {
             return;
         };
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
         let serial = SERIAL_COUNTER.next_serial();
-        let under = self.surface_under(location);
+        // Inside the window the shell named, not whatever the space thinks is
+        // at this point. See `Lwfa::surface_in`.
+        let under = self.surface_in(&target, origin, location);
+        // Remembered for the button below, which arrives without a window of
+        // its own and must not go hunting for one.
+        self.pointer_window = Some(window);
 
         pointer.motion(
             self,
@@ -80,11 +94,11 @@ impl Lwfa {
         // Clicking focuses, exactly as a local click does. Without this a
         // remote user could click a window and still type into another one.
         if pressed && !pointer.is_grabbed() {
-            let clicked = self
-                .space
-                .element_under(pointer.current_location())
-                .map(|(w, _)| w.clone())
-                .and_then(|w| self.layout.id_of(&w));
+            // Whichever window the last motion was aimed at, which the shell
+            // named. Hit-testing the space for it re-derived an answer the
+            // shell had already given, and got it wrong whenever a window's
+            // committed size was stale. See `Lwfa::surface_in`.
+            let clicked = self.pointer_window;
             // One line per click. Cheap, off unless RUST_LOG asks for it, and
             // the only thing that answers "the click went to the wrong window".
             tracing::debug!(
@@ -215,7 +229,7 @@ impl Lwfa {
     }
 
     pub fn remote_touch_down(&mut self, window: WindowId, id: i32, x: f64, y: f64) {
-        let Some(location) = self.window_point(window, x, y) else {
+        let Some((target, origin, location)) = self.window_point(window, x, y) else {
             return;
         };
 
@@ -223,7 +237,7 @@ impl Lwfa {
             return;
         };
         let serial = SERIAL_COUNTER.next_serial();
-        let under = self.surface_under(location);
+        let under = self.surface_in(&target, origin, location);
         let time = self.millis();
 
         // A touch is also a focus change, the same way a click is.
@@ -245,13 +259,13 @@ impl Lwfa {
     }
 
     pub fn remote_touch_motion(&mut self, window: WindowId, id: i32, x: f64, y: f64) {
-        let Some(location) = self.window_point(window, x, y) else {
+        let Some((target, origin, location)) = self.window_point(window, x, y) else {
             return;
         };
         let Some(touch) = self.seat.get_touch() else {
             return;
         };
-        let under = self.surface_under(location);
+        let under = self.surface_in(&target, origin, location);
         let time = self.millis();
 
         touch.motion(

@@ -151,6 +151,27 @@ export const WindowSurface = memo(function WindowSurface({
     const el = canvas.current
     if (!el) return
 
+    // A bitmap that was closed between the render that read it and this effect
+    // is detached, and drawing it throws `InvalidStateError`. That threw from a
+    // passive effect, which React treats as a render error, so it hit the error
+    // boundary and took the *whole shell* down: the desktop, the panels, input,
+    // everything. The visible symptom was "touch stopped working", because
+    // there was no longer a shell to send any.
+    //
+    // The gap is real and unavoidable from here. `publishFrame` closes the
+    // frame it replaces and `dropFrame` closes one whose window has stopped
+    // streaming, both the instant they are called, while this effect runs after
+    // paint. Anything that raises the frame rate or churns the stream list
+    // widens the odds: several windows in a group streaming at once, a video in
+    // its own window, a layout change moving windows in and out of the list.
+    //
+    // A detached bitmap reports zero dimensions, which is the only way to ask.
+    // Returning here rather than drawing leaves the canvas showing the last
+    // good frame, which is exactly right: the next frame is milliseconds away,
+    // and a stale frame for one tick is invisible where a blanked window is
+    // not.
+    if (frame.width === 0 || frame.height === 0) return
+
     // Size the backing store to the frame, not to the CSS box. The CSS box is
     // the layout the shell chose; the backing store is what the engine sent.
     // Conflating them would resample every frame on the GPU for nothing.
@@ -161,7 +182,14 @@ export const WindowSurface = memo(function WindowSurface({
 
     const ctx = el.getContext("2d", { alpha: false })
     if (!ctx) return
-    ctx.drawImage(frame, 0, 0)
+    try {
+      ctx.drawImage(frame, 0, 0)
+    } catch {
+      // Belt and braces for the same race: the check above is the honest test,
+      // but a bitmap closed *between* it and here would still throw, and no
+      // single frame is worth the session.
+      return
+    }
 
     // Measure what the engine actually sent, when asked to. Off by default and
     // free when off; see `captureProbe`. Rate limited because a window being
