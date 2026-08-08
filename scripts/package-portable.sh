@@ -31,7 +31,7 @@
 # that depends on glibc, so it is built on the host with the toolchain that is
 # already set up and copied in.
 #
-# # Why the build gets a network of its own
+# # Why the packaging step gets a network of its own
 #
 # Docker's bridge is 1500 bytes whatever the host can actually carry. Behind a
 # VPN the route out is smaller (ExpressVPN's tun0 is 1350 here), so a container
@@ -39,14 +39,21 @@
 # through depends on the far end noticing and shrinking. A CDN does; a single
 # small web server may not, and then its packets vanish rather than erroring.
 #
-# That failed a release: apt and GitHub were fine while ffmpeg.org's TLS
-# handshake got zero bytes back, which reads like an outage and is not one. The
-# same fetch over a bridge at the tunnel's MTU succeeds.
+# That blocked the 1.1.0 release, with a TLS handshake to ffmpeg.org that read
+# zero bytes back while apt and GitHub were fine in the same build. A plain
+# `docker run` on a bridge at the tunnel's MTU fetched the same file first try,
+# so that is what the packaging step gets.
 #
-# So the MTU of whatever carries the default route is measured, and if it is
-# below 1500 the build runs on a bridge that matches. A machine with no tunnel
-# measures 1500 and nothing changes. Setting `"mtu"` in /etc/docker/daemon.json
-# is the machine-wide version of this, if you would rather fix it once.
+# The image build deliberately does *not* get one, because it cannot use it.
+# BuildKit rejects a named network outright ("not supported by buildkit"), and
+# a docker-container builder attached to one still fails: it nests its own
+# bridge underneath, so the RUN step reports the MTU it was given and its
+# packets are encapsulated again below that. Measured, not assumed. The image
+# build is fixed where the problem actually is instead, by fetching FFmpeg from
+# a host that copes; see deploy/build/Dockerfile.
+#
+# Setting `"mtu"` in /etc/docker/daemon.json is the machine-wide version of
+# this, and the only one that would also cover the image build.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -84,14 +91,16 @@ if [ -n "$MTU" ] && [ "$MTU" -lt 1500 ] 2>/dev/null; then
       || { echo "could not create a ${MTU}-byte docker network" >&2; exit 1; }
   fi
   NET_ARGS=(--network "$NET")
-  echo "the route out carries $MTU bytes, so the build runs on a matching network"
+  echo "the route out carries $MTU bytes, so packaging runs on a matching network"
 fi
 
 echo "building the shell on the host"
 pnpm run build >/dev/null || { echo "shell build failed" >&2; exit 1; }
 
 echo "building the image (cached after the first time)"
-docker build "${NET_ARGS[@]}" -f deploy/build/Dockerfile -t "$IMAGE" deploy/build >/dev/null \
+# No NET_ARGS here on purpose: BuildKit will not take a named network. See the
+# header.
+docker build -f deploy/build/Dockerfile -t "$IMAGE" deploy/build >/dev/null \
   || { echo "image build failed" >&2; exit 1; }
 
 echo "building the engine and packaging inside it"

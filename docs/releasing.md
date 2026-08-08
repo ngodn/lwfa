@@ -32,13 +32,24 @@ That reads like an outage and is not one. It cost a release: apt and GitHub
 were fine in the same build while ffmpeg.org's TLS handshake got zero bytes
 back, and the same fetch over a bridge at the tunnel's MTU worked first time.
 
-`package-portable.sh` now measures the MTU of the interface traffic actually
-leaves by and builds on a matching network, so this should not recur. Note it
-asks `ip route get` rather than reading the default route: a VPN usually leaves
-the default alone and adds `0.0.0.0/1` and `128.0.0.0/1` over the top, so the
-default route names the physical NIC and measures 1500 while nothing goes that
-way. Setting `"mtu"` in `/etc/docker/daemon.json` fixes it machine-wide if you
-would rather do it once.
+Two fixes, because the image build and the packaging step need different ones.
+
+**Packaging** runs under `docker run`, which takes a named network, so
+`package-portable.sh` measures the MTU of the interface traffic actually leaves
+by and uses a bridge that matches. Note it asks `ip route get` rather than
+reading the default route: a VPN usually leaves the default alone and adds
+`0.0.0.0/1` and `128.0.0.0/1` over the top, so the default route names the
+physical NIC and measures 1500 while nothing goes that way.
+
+**The image build** cannot do that. BuildKit rejects a named network outright,
+and a `docker-container` builder attached to one still fails, because it nests
+its own bridge under the MTU it advertises: the RUN step prints 1350 and the
+fetch dies anyway. So the Dockerfile fetches FFmpeg from GitHub, which is
+behind a CDN that copes, and falls back to ffmpeg.org. Same tree either way,
+since the release tarball is made from the tag.
+
+Setting `"mtu"` in `/etc/docker/daemon.json` and restarting the daemon is the
+machine-wide version, and the only single fix that covers both.
 
 ## Why it builds in a container
 

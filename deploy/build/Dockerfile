@@ -76,9 +76,40 @@ RUN git clone --depth 1 --branch "$NV_CODEC_HEADERS" \
 #
 # --disable-programs because nothing here needs the ffmpeg CLI, and
 # --disable-doc because manual pages in a build container help nobody.
+#
+# # Two sources, and why GitHub is the one tried first
+#
+# ffmpeg.org is the canonical home and stays here as the fallback, but it is a
+# single small server and it cannot be reached from inside a build container on
+# a machine behind a VPN. Docker's bridge is 1500 bytes whatever the host can
+# carry, so the container sends segments the tunnel cannot pass; a CDN notices
+# and backs off, that server does not, and its packets vanish rather than
+# erroring. The symptom is a TLS handshake that reads zero bytes:
+#
+#   curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to
+#   ffmpeg.org:443
+#
+# which reads like an outage and is not one. It blocked the 1.1.0 release.
+# Lowering the build network's MTU does not fix it either: BuildKit refuses a
+# named network outright, and a docker-container builder attached to one still
+# fails, because it nests another bridge under the MTU it advertises.
+#
+# GitHub is the same source. FFmpeg tags its releases there and the tarball
+# ffmpeg.org serves is made from the tag, so `n8.1` and `ffmpeg-8.1.tar.xz`
+# carry the same tree; the fetched copy reports 8.1 in RELEASE and ships the
+# same handwritten configure. It is behind a CDN that copes, and this file
+# already trusts GitHub for nv-codec-headers directly above.
+#
+# `tar xf` sniffs the compression, so one extract handles .tar.gz and .tar.xz
+# alike and the fallback needs no second code path.
 ARG FFMPEG_VERSION=8.1
-RUN curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o /tmp/ffmpeg.tar.xz \
-    && mkdir -p /tmp/ffmpeg && tar xf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 \
+RUN { curl -fsSL --connect-timeout 10 --retry 2 \
+        "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${FFMPEG_VERSION}.tar.gz" \
+        -o /tmp/ffmpeg.tar \
+      || curl -fsSL --connect-timeout 10 --retry 2 \
+        "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+        -o /tmp/ffmpeg.tar; } \
+    && mkdir -p /tmp/ffmpeg && tar xf /tmp/ffmpeg.tar -C /tmp/ffmpeg --strip-components=1 \
     && cd /tmp/ffmpeg \
     && ./configure \
          --prefix=/usr/local \
@@ -96,7 +127,7 @@ RUN curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o 
          --enable-swscale --enable-swresample \
          --enable-avdevice --enable-avfilter --enable-avformat \
     && make -j"$(nproc)" && make install \
-    && ldconfig && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz
+    && ldconfig && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar
 
 # Rust, pinned to what rust-toolchain.toml asks for. Installed after the slow
 # layers so a toolchain bump does not rebuild FFmpeg.
