@@ -52,6 +52,15 @@ libc = "0.2.189"
 rustix = { version = "1.1", features = ["process", "event", "net"] }
 opus = "0.3.1"
 x11rb = "0.13"
+# The file-chooser portal backend: a D-Bus service on a private session bus.
+# zbus spawns a task per method call, which is what lets a dialog stay open
+# for minutes without starving the Settings interface next to it.
+zbus = "5"
+# Streaming SHA-256 of uploads, so "ok" means verified rather than hoped.
+sha2 = "0.11.0"
+# One oneshot per open dialog, carrying the answer from the compositor
+# thread back into the portal's executor.
+futures-channel = "0.3.33"
 
 [lints]
 workspace = true

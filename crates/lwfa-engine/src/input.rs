@@ -341,6 +341,18 @@ impl Lwfa {
             cmd.env("PULSE_SINK", crate::sink::SINK_NAME);
         }
 
+        // The private portal bus, so this application's file dialogs open on
+        // the connected device instead of on the host's physical display.
+        // Without it the child inherits the host's session bus, asks the
+        // host's portal, and the dialog appears on a screen nobody is looking
+        // at while the application seems hung from the shell. GTK3 needs the
+        // explicit opt-in; GTK4 spells the same request GDK_DEBUG=portals.
+        if let Some(portal) = self.portal.as_ref() {
+            cmd.env("DBUS_SESSION_BUS_ADDRESS", portal.address());
+            cmd.env("GTK_USE_PORTAL", "1");
+            cmd.env("GDK_DEBUG", "portals");
+        }
+
         // Set per-process rather than with `set_var`, which is unsafe in
         // edition 2024 and genuinely racy here: by the time Xwayland reports
         // ready, the encoder and shell threads are already running and could be

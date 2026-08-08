@@ -180,6 +180,131 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
             },
         ));
         v.push(("pong", ToShell::Pong));
+        v.push((
+            "file-chooser",
+            ToShell::FileChooser {
+                request: 7,
+                mode: FileChooserMode::Open,
+                multiple: true,
+                directory: false,
+                title: "Open Image".to_string(),
+                app_id: "org.gimp.GIMP".to_string(),
+                accept_label: Some("_Open".to_string()),
+                suggested_name: None,
+                filters: vec![FileFilter {
+                    name: "PNG and JPEG images".to_string(),
+                    patterns: vec![
+                        "*.png".to_string(),
+                        "image/jpeg".to_string(),
+                    ],
+                }],
+                names: vec![],
+                ticket: "f00dfeedf00dfeedf00dfeedf00dfeed".to_string(),
+            },
+        ));
+        v.push((
+            "file-chooser-save",
+            ToShell::FileChooser {
+                request: 8,
+                mode: FileChooserMode::Save,
+                multiple: false,
+                directory: false,
+                title: "Save File".to_string(),
+                app_id: String::new(),
+                accept_label: None,
+                suggested_name: Some("report.pdf".to_string()),
+                filters: vec![],
+                names: vec![],
+                ticket: "0123456789abcdef0123456789abcdef".to_string(),
+            },
+        ));
+        v.push((
+            "file-chooser-save-files",
+            ToShell::FileChooser {
+                request: 9,
+                mode: FileChooserMode::SaveFiles,
+                multiple: false,
+                directory: true,
+                title: String::new(),
+                app_id: "firefox".to_string(),
+                accept_label: None,
+                suggested_name: None,
+                filters: vec![],
+                names: vec!["page.html".to_string(), "page_files".to_string()],
+                ticket: "feedfacefeedfacefeedfacefeedface".to_string(),
+            },
+        ));
+        v.push((
+            "file-chooser-closed",
+            ToShell::FileChooserClosed { request: 7 },
+        ));
+        v.push((
+            "dir-listing",
+            ToShell::DirListing {
+                request: 7,
+                path: "/home/user/Pictures".to_string(),
+                entries: vec![
+                    DirEntry {
+                        name: "renders".to_string(),
+                        dir: true,
+                        size: 0,
+                    },
+                    DirEntry {
+                        name: "hero-4k.png".to_string(),
+                        dir: false,
+                        size: 13_421_772,
+                    },
+                ],
+                truncated: false,
+                error: None,
+            },
+        ));
+        v.push((
+            "dir-listing-error",
+            ToShell::DirListing {
+                request: 7,
+                path: "/root".to_string(),
+                entries: vec![],
+                truncated: false,
+                error: Some("Permission denied (os error 13)".to_string()),
+            },
+        ));
+        v.push((
+            "upload-offset",
+            ToShell::UploadOffset {
+                request: 7,
+                file: "c1d2e3f4".to_string(),
+                offset: 79_691_776,
+            },
+        ));
+        v.push((
+            "upload-progress",
+            ToShell::UploadProgress {
+                request: 7,
+                file: "c1d2e3f4".to_string(),
+                written: 83_886_080,
+            },
+        ));
+        v.push((
+            "upload-done",
+            ToShell::UploadDone {
+                request: 7,
+                file: "c1d2e3f4".to_string(),
+                name: "clip-final-2.mov".to_string(),
+                ok: true,
+                error: None,
+            },
+        ));
+        v.push((
+            "upload-done-failed",
+            ToShell::UploadDone {
+                request: 7,
+                file: "c1d2e3f4".to_string(),
+                name: String::new(),
+                ok: false,
+                error: Some("checksum mismatch".to_string()),
+            },
+        ));
         v
     };
 
@@ -314,6 +439,60 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         ToEngine::SetSessionMode {
             session: 3,
             mode: SessionMode::View,
+        },
+    ));
+    to_engine.push((
+        "list-dir",
+        ToEngine::ListDir {
+            request: 7,
+            path: "~".to_string(),
+        },
+    ));
+    to_engine.push((
+        "file-chosen",
+        ToEngine::FileChosen {
+            request: 7,
+            paths: vec![
+                "/home/user/Pictures/hero-4k.png".to_string(),
+                "/home/user/Pictures/hero-4k-alt.png".to_string(),
+            ],
+        },
+    ));
+    to_engine.push((
+        "file-chosen-uploads-only",
+        ToEngine::FileChosen {
+            request: 7,
+            paths: vec![],
+        },
+    ));
+    to_engine.push(("file-cancel", ToEngine::FileCancel { request: 7 }));
+    to_engine.push((
+        "upload-begin",
+        ToEngine::UploadBegin {
+            request: 7,
+            file: "c1d2e3f4".to_string(),
+            name: "clip-final.mov".to_string(),
+            rel: vec![],
+            size: 127_926_272,
+        },
+    ));
+    to_engine.push((
+        "upload-begin-in-folder",
+        ToEngine::UploadBegin {
+            request: 7,
+            file: "a5b6c7d8".to_string(),
+            name: "notes.md".to_string(),
+            rel: vec!["ProjectDocs".to_string(), "meeting".to_string()],
+            size: 1_126,
+        },
+    ));
+    to_engine.push((
+        "upload-end",
+        ToEngine::UploadEnd {
+            request: 7,
+            file: "c1d2e3f4".to_string(),
+            sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+                .to_string(),
         },
     ));
     to_engine.push(("ping", ToEngine::Ping));

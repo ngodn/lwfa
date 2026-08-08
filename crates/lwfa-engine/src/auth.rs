@@ -212,7 +212,10 @@ fn warn_if_world_readable(path: &std::path::Path) {
 /// `/dev/urandom` rather than a crate: this is Linux-only software that already
 /// depends on DRM and libinput, and it avoids a dependency whose only job is
 /// reading a file.
-fn generate_token() -> std::io::Result<String> {
+///
+/// Crate-visible because upload tickets are minted from the same cloth as
+/// the bootstrap password; see `files.rs`.
+pub(crate) fn generate_token() -> std::io::Result<String> {
     let mut bytes = [0u8; TOKEN_BYTES];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())

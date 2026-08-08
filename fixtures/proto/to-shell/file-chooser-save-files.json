@@ -1,0 +1,17 @@
+{
+  "type": "fileChooser",
+  "request": 9,
+  "mode": "saveFiles",
+  "multiple": false,
+  "directory": true,
+  "title": "",
+  "appId": "firefox",
+  "acceptLabel": null,
+  "suggestedName": null,
+  "filters": [],
+  "names": [
+    "page.html",
+    "page_files"
+  ],
+  "ticket": "feedfacefeedfacefeedfacefeedface"
+}

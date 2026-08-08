@@ -1,0 +1,8 @@
+{
+  "type": "dirListing",
+  "request": 7,
+  "path": "/root",
+  "entries": [],
+  "truncated": false,
+  "error": "Permission denied (os error 13)"
+}

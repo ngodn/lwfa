@@ -155,6 +155,38 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+/// Is this WebSocket upgrade aimed at the upload channel?
+///
+/// Peeked, like [`wants_websocket`], so the stream reaches its real handler
+/// untouched. Only the request target is inspected: `/upload` is the upload
+/// channel, everything else is a session. Called after `wants_websocket`
+/// said yes, so the head is already known to have arrived.
+pub fn wants_upload_channel(stream: &TcpStream) -> bool {
+    let mut buf = [0u8; 4096];
+    let Ok(peeked) = stream.peek(&mut buf) else {
+        return false;
+    };
+    let head = &buf[..peeked];
+    let Some(line_end) = find(head, b"\r\n") else {
+        return false;
+    };
+    let Ok(line) = std::str::from_utf8(&head[..line_end]) else {
+        return false;
+    };
+    // "GET /engine/upload?request=...&ticket=... HTTP/1.1". Matched on the
+    // path's last segment rather than the whole path, because the shell
+    // derives it from wherever the engine socket lives (`/engine` direct,
+    // or deeper behind a reverse proxy) and every proxy in the chain should
+    // keep forwarding it without new rules.
+    let mut parts = line.split(' ');
+    let _method = parts.next();
+    let Some(target) = parts.next() else {
+        return false;
+    };
+    let path = target.split('?').next().unwrap_or("");
+    path == "/upload" || path.ends_with("/upload")
+}
+
 /// Serve one request from `root`, then close.
 ///
 /// Errors are deliberately swallowed: this runs on a throwaway thread for one

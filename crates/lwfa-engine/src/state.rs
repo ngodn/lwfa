@@ -193,6 +193,14 @@ pub struct Lwfa {
     /// Keys each session currently holds, so they can be let go if it dies.
     /// See `Lwfa::remote_key`.
     pub held_keys: std::collections::HashMap<lwfa_proto::SessionId, std::collections::HashSet<u32>>,
+    /// The file-chooser portal plumbing, when it came up. See `portal.rs`.
+    pub portal: Option<crate::portal::Portal>,
+    /// Open file dialogs, by the request id the shell echoes back.
+    pub pending_files: std::collections::HashMap<u64, crate::files::PendingFile>,
+    pub(crate) next_file_request: u64,
+    /// Per-dialog upload authorisation, shared with the accept thread and
+    /// every upload thread. See `upload.rs`.
+    pub upload_gates: crate::upload::Gates,
     parked_pad: Option<crate::gamepad::VirtualPad>,
     /// The browser that was holding the parked controller, if any.
     ///
@@ -318,6 +326,12 @@ impl Lwfa {
             last_popup_map: None,
             xfocus: None,
             held_keys: std::collections::HashMap::new(),
+            portal: None,
+            pending_files: std::collections::HashMap::new(),
+            next_file_request: 1,
+            upload_gates: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             parked_pad: None,
             parked_pad_client: None,
             grace_until: None,

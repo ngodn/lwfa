@@ -316,8 +316,153 @@ pub enum ToShell {
         pid: u32,
     },
 
+    /// An application asked the desktop for a file dialog; the shell is it.
+    ///
+    /// Sent to exactly one session, the one that may interact, because the
+    /// dialog is input. The application is blocked on the answer the whole
+    /// time, which is normal for it: file dialogs are modal in every desktop
+    /// it has ever met.
+    ///
+    /// `ticket` authenticates the upload channel for this dialog and nothing
+    /// else. The shell presents it when it opens the upload socket, so file
+    /// bytes never ride the session socket and the session password never
+    /// appears in an upload URL.
+    #[serde(rename_all = "camelCase")]
+    FileChooser {
+        /// Echoed back in every message about this dialog.
+        request: u64,
+        mode: FileChooserMode,
+        /// Whether several files may be chosen. Open mode only.
+        multiple: bool,
+        /// Whether the application wants a folder rather than files.
+        directory: bool,
+        /// The application's own title for the dialog, possibly empty.
+        title: String,
+        /// Who is asking, as the application identified itself to the portal.
+        /// Possibly empty; the shell shows what it can.
+        app_id: String,
+        /// The label the application wants on the confirm button.
+        accept_label: Option<String>,
+        /// The name to prefill when saving.
+        suggested_name: Option<String>,
+        /// What the application says it can open. Advisory, for the picker's
+        /// `accept` attribute and for filtering the browse pane; the engine
+        /// does not enforce it, because the portal contract is that the user
+        /// chooses and the application copes.
+        filters: Vec<FileFilter>,
+        /// The filenames a `saveFiles` dialog will write into the chosen
+        /// folder. Empty in every other mode.
+        names: Vec<String>,
+        /// One-shot credential for this dialog's upload channel.
+        ticket: String,
+    },
+
+    /// The dialog is over without an answer from this shell.
+    ///
+    /// Sent when the application withdrew its own request, when the request
+    /// expired with nobody answering, or when another session answered a
+    /// dialog this one was showing. The shell closes the dialog and discards
+    /// its local state; everything on the machine is already cleaned up.
+    #[serde(rename_all = "camelCase")]
+    FileChooserClosed { request: u64 },
+
+    /// One directory of the machine's disk, for the dialog's browse pane.
+    ///
+    /// Errors travel inside rather than as [`ToShell::Error`], because the
+    /// dialog shows them in place: "permission denied" belongs where the
+    /// listing would have been, not in a global toast.
+    #[serde(rename_all = "camelCase")]
+    DirListing {
+        request: u64,
+        /// Canonicalised, so the shell can climb it segment by segment.
+        path: String,
+        entries: Vec<DirEntry>,
+        /// Whether the listing was cut at the cap. The shell says so instead
+        /// of silently showing most of a directory.
+        truncated: bool,
+        error: Option<String>,
+    },
+
+    /// Upload channel only: the offset the engine already holds for a file.
+    ///
+    /// The answer to [`ToEngine::UploadBegin`]. Zero for a fresh file; after
+    /// a dropped connection it is how much of the earlier attempt survived,
+    /// and the client streams from there instead of starting over.
+    #[serde(rename_all = "camelCase")]
+    UploadOffset {
+        request: u64,
+        file: String,
+        offset: u64,
+    },
+
+    /// Upload channel only: bytes confirmed written to the machine's disk.
+    ///
+    /// This is the progress bar's truth. Bytes handed to a socket are not
+    /// progress, they are hope; a fast LAN used to read as "done" while the
+    /// disk was still writing.
+    #[serde(rename_all = "camelCase")]
+    UploadProgress {
+        request: u64,
+        file: String,
+        written: u64,
+    },
+
+    /// Upload channel only: the file is complete on disk, or it failed.
+    ///
+    /// `ok` means the byte count matched, the checksum matched, and the file
+    /// was flushed and moved into place under `name`, which differs from the
+    /// announced name whenever a collision was renamed. Anything less is
+    /// `ok: false` with the reason, and nothing is left behind.
+    #[serde(rename_all = "camelCase")]
+    UploadDone {
+        request: u64,
+        file: String,
+        name: String,
+        ok: bool,
+        error: Option<String>,
+    },
+
     /// The answer to [`ToEngine::Ping`]. Carries nothing; arriving is the point.
     Pong,
+}
+
+/// Which question a file dialog is asking.
+///
+/// Open and save are different dialogs, not one dialog with a flag: opening
+/// can take uploads from the client device, saving only makes sense against
+/// the machine's own disk, and `saveFiles` is "pick a folder for these names"
+/// rather than "pick a name".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileChooserMode {
+    Open,
+    Save,
+    SaveFiles,
+}
+
+/// One entry in a [`ToShell::DirListing`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirEntry {
+    pub name: String,
+    pub dir: bool,
+    /// Bytes, and zero for directories.
+    pub size: u64,
+}
+
+/// One of the application's file filters, simplified for a browser.
+///
+/// The portal expresses filters as typed pairs of globs and MIME types; a
+/// browser's `accept` attribute takes extensions and MIME types in one list.
+/// `patterns` carries both shapes and the shell maps each to what `accept`
+/// understands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileFilter {
+    /// The human name, such as "PNG and JPEG images".
+    pub name: String,
+    /// Globs like `*.png` and MIME types like `image/png`, mixed.
+    pub patterns: Vec<String>,
 }
 
 /// A video codec the engine can encode and a client might decode.
@@ -901,6 +1046,60 @@ pub enum ToEngine {
         windows: Vec<WindowId>,
         /// What this client can decode, best first. Empty means send JPEG.
         codecs: Vec<Codec>,
+    },
+
+    /// Ask for one directory of the machine's disk, while a dialog is open.
+    ///
+    /// Answered with [`ToShell::DirListing`]. Bound to an open request and
+    /// refused otherwise: the shell has no business listing directories
+    /// except while an application is asking it to choose from them. An
+    /// empty path or `"~"` means the session's home.
+    #[serde(rename_all = "camelCase")]
+    ListDir { request: u64, path: String },
+
+    /// The human answered a file dialog with these machine paths.
+    ///
+    /// Uploads are not listed here; the engine already knows what arrived on
+    /// the dialog's upload channel and folds it into the answer itself, so a
+    /// client cannot claim an upload that never happened.
+    #[serde(rename_all = "camelCase")]
+    FileChosen { request: u64, paths: Vec<String> },
+
+    /// The human dismissed a file dialog.
+    ///
+    /// Everything uploaded under it is deleted before the application hears
+    /// "cancelled": a dismissed dialog must leave nothing behind.
+    #[serde(rename_all = "camelCase")]
+    FileCancel { request: u64 },
+
+    /// Upload channel only: announce one file before its bytes.
+    ///
+    /// `file` is the client's own id for this file, stable across reconnects,
+    /// which is what makes resuming possible. `rel` is the path inside a
+    /// picked folder, empty for a plain file; the engine sanitises every
+    /// component and decides the real destination alone. Answered with
+    /// [`ToShell::UploadOffset`], after which the client streams raw binary
+    /// frames from that offset and finishes with [`ToEngine::UploadEnd`].
+    #[serde(rename_all = "camelCase")]
+    UploadBegin {
+        request: u64,
+        file: String,
+        name: String,
+        rel: Vec<String>,
+        size: u64,
+    },
+
+    /// Upload channel only: the announced bytes are all sent.
+    ///
+    /// `sha256` is the hex digest of the whole file, computed while reading
+    /// it. The engine has been hashing what it wrote; the two agreeing is
+    /// what `ok` in [`ToShell::UploadDone`] means. A truncated or corrupted
+    /// transfer can be many things, but it can no longer be "ok".
+    #[serde(rename_all = "camelCase")]
+    UploadEnd {
+        request: u64,
+        file: String,
+        sha256: String,
     },
 
     /// Is this connection actually alive? Answered with [`ToShell::Pong`].

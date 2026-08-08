@@ -1,0 +1,8 @@
+{
+  "type": "uploadDone",
+  "request": 7,
+  "file": "c1d2e3f4",
+  "name": "",
+  "ok": false,
+  "error": "checksum mismatch"
+}

@@ -187,8 +187,114 @@ export type ToShell =
       program: string
       pid: number
     }
+  /**
+   * An application asked the desktop for a file dialog; the shell is it.
+   *
+   * Sent to exactly one session, the one that may interact. The application
+   * is blocked on the answer the whole time, which is what it expects from a
+   * file dialog. `ticket` authenticates the dialog's upload channel and
+   * nothing else, so file bytes never ride the session socket and the
+   * session password never appears in an upload URL.
+   */
+  | {
+      type: "fileChooser"
+      request: number
+      mode: FileChooserMode
+      /** Whether several files may be chosen. Open mode only. */
+      multiple: boolean
+      /** Whether the application wants a folder rather than files. */
+      directory: boolean
+      /** The application's own title for the dialog, possibly empty. */
+      title: string
+      /** Who is asking, as it identified itself to the portal. May be "". */
+      appId: string
+      /** The label the application wants on the confirm button. */
+      acceptLabel: string | null
+      /** The name to prefill when saving. */
+      suggestedName: string | null
+      /** What the application says it can open. Advisory. */
+      filters: FileFilter[]
+      /** The filenames a `saveFiles` dialog will write. Empty otherwise. */
+      names: string[]
+      /** One-shot credential for this dialog's upload channel. */
+      ticket: string
+    }
+  /**
+   * The dialog is over without an answer from this shell: the application
+   * withdrew it, it expired, or another session answered it. Close and
+   * discard; the machine is already cleaned up.
+   */
+  | { type: "fileChooserClosed"; request: number }
+  /**
+   * One directory of the machine's disk, for the dialog's browse pane.
+   * Errors travel inside rather than as `error`, because the dialog shows
+   * them in place of the listing.
+   */
+  | {
+      type: "dirListing"
+      request: number
+      /** Canonicalised, so the shell can climb it segment by segment. */
+      path: string
+      entries: DirEntry[]
+      /** Whether the listing was cut at the cap. */
+      truncated: boolean
+      error: string | null
+    }
+  /**
+   * Upload channel only: the offset the engine already holds for a file.
+   * Zero for a fresh file; after a reconnect, how much survived, and the
+   * client streams from there instead of starting over.
+   */
+  | { type: "uploadOffset"; request: number; file: string; offset: number }
+  /**
+   * Upload channel only: bytes confirmed written to the machine's disk.
+   * This is the progress bar's truth; bytes handed to a socket are not
+   * progress, they are hope.
+   */
+  | { type: "uploadProgress"; request: number; file: string; written: number }
+  /**
+   * Upload channel only: the file is complete on disk, or it failed.
+   * `ok` means byte count and checksum both matched and the file was moved
+   * into place under `name` (renamed if it collided). Anything less is
+   * `ok: false` with the reason, and nothing is left behind.
+   */
+  | {
+      type: "uploadDone"
+      request: number
+      file: string
+      name: string
+      ok: boolean
+      error: string | null
+    }
   /** The answer to `ping`. Carries nothing; arriving is the point. */
   | { type: "pong" }
+
+/**
+ * Which question a file dialog is asking.
+ *
+ * Open and save are different dialogs, not one dialog with a flag: opening
+ * can take uploads from the client device, saving only makes sense against
+ * the machine's own disk, and `saveFiles` is "pick a folder for these names".
+ */
+export type FileChooserMode = "open" | "save" | "saveFiles"
+
+/** One entry in a `dirListing`. */
+export interface DirEntry {
+  name: string
+  dir: boolean
+  /** Bytes, and zero for directories. */
+  size: number
+}
+
+/**
+ * One of the application's file filters, simplified for a browser.
+ * `patterns` mixes globs like `*.png` with MIME types like `image/png`;
+ * the shell maps each to what an `accept` attribute understands.
+ */
+export interface FileFilter {
+  name: string
+  patterns: string[]
+}
 
 /**
  * A video codec the engine can encode and a client might decode.
@@ -401,6 +507,47 @@ export type ToEngine =
        */
       quality: AudioQuality
     }
+  /**
+   * Ask for one directory of the machine's disk, while a dialog is open.
+   * Answered with `dirListing`. Refused unless the request is open: the
+   * shell has no business listing directories except while an application
+   * is asking it to choose from them. `""` or `"~"` means home.
+   */
+  | { type: "listDir"; request: number; path: string }
+  /**
+   * The human answered a file dialog with these machine paths. Uploads are
+   * not listed; the engine already knows what arrived on the dialog's
+   * upload channel and folds it in itself.
+   */
+  | { type: "fileChosen"; request: number; paths: string[] }
+  /**
+   * The human dismissed a file dialog. Everything uploaded under it is
+   * deleted before the application hears "cancelled".
+   */
+  | { type: "fileCancel"; request: number }
+  /**
+   * Upload channel only: announce one file before its bytes.
+   *
+   * `file` is the client's own id for this file, stable across reconnects,
+   * which is what makes resuming possible. `rel` is the path inside a
+   * picked folder, empty for a plain file. Answered with `uploadOffset`,
+   * then the client streams raw binary frames from that offset and
+   * finishes with `uploadEnd`.
+   */
+  | {
+      type: "uploadBegin"
+      request: number
+      file: string
+      name: string
+      rel: string[]
+      size: number
+    }
+  /**
+   * Upload channel only: the announced bytes are all sent. `sha256` is the
+   * hex digest of the whole file; the engine hashing what it wrote and the
+   * two agreeing is what `ok` in `uploadDone` means.
+   */
+  | { type: "uploadEnd"; request: number; file: string; sha256: string }
   /**
    * Is this connection actually alive? Answered with `pong`.
    *
@@ -763,12 +910,133 @@ export function decodeToShell(text: string): ToShell {
       if (!Array.isArray(list)) throw new ProtocolError(`${where}.apps: expected an array`)
       return { type: "apps", apps: list.map((app, i) => decodeApp(app, `${where}.apps[${i}]`)) }
     }
+    case "fileChooser": {
+      const where = `${at}.fileChooser`
+      noExtraKeys(
+        o,
+        [
+          "type",
+          "request",
+          "mode",
+          "multiple",
+          "directory",
+          "title",
+          "appId",
+          "acceptLabel",
+          "suggestedName",
+          "filters",
+          "names",
+          "ticket",
+        ],
+        where,
+      )
+      const mode = str(o, "mode", where)
+      if (mode !== "open" && mode !== "save" && mode !== "saveFiles") {
+        throw new ProtocolError(`${where}.mode: not a file chooser mode: ${mode}`)
+      }
+      return {
+        type: "fileChooser",
+        request: int(o, "request", where),
+        mode,
+        multiple: bool(o, "multiple", where),
+        directory: bool(o, "directory", where),
+        title: str(o, "title", where),
+        appId: str(o, "appId", where),
+        acceptLabel: nullableStr(o, "acceptLabel", where),
+        suggestedName: nullableStr(o, "suggestedName", where),
+        filters: array(o, "filters", where).map((f, i) =>
+          decodeFileFilter(f, `${where}.filters[${i}]`),
+        ),
+        names: array(o, "names", where).map((n, i) => {
+          if (typeof n !== "string") {
+            throw new ProtocolError(`${where}.names[${i}]: expected a string`)
+          }
+          return n
+        }),
+        ticket: str(o, "ticket", where),
+      }
+    }
+    case "fileChooserClosed": {
+      const where = `${at}.fileChooserClosed`
+      noExtraKeys(o, ["type", "request"], where)
+      return { type: "fileChooserClosed", request: int(o, "request", where) }
+    }
+    case "dirListing": {
+      const where = `${at}.dirListing`
+      noExtraKeys(o, ["type", "request", "path", "entries", "truncated", "error"], where)
+      return {
+        type: "dirListing",
+        request: int(o, "request", where),
+        path: str(o, "path", where),
+        entries: array(o, "entries", where).map((e, i) =>
+          decodeDirEntry(e, `${where}.entries[${i}]`),
+        ),
+        truncated: bool(o, "truncated", where),
+        error: nullableStr(o, "error", where),
+      }
+    }
+    case "uploadOffset": {
+      const where = `${at}.uploadOffset`
+      noExtraKeys(o, ["type", "request", "file", "offset"], where)
+      return {
+        type: "uploadOffset",
+        request: int(o, "request", where),
+        file: str(o, "file", where),
+        offset: int(o, "offset", where),
+      }
+    }
+    case "uploadProgress": {
+      const where = `${at}.uploadProgress`
+      noExtraKeys(o, ["type", "request", "file", "written"], where)
+      return {
+        type: "uploadProgress",
+        request: int(o, "request", where),
+        file: str(o, "file", where),
+        written: int(o, "written", where),
+      }
+    }
+    case "uploadDone": {
+      const where = `${at}.uploadDone`
+      noExtraKeys(o, ["type", "request", "file", "name", "ok", "error"], where)
+      return {
+        type: "uploadDone",
+        request: int(o, "request", where),
+        file: str(o, "file", where),
+        name: str(o, "name", where),
+        ok: bool(o, "ok", where),
+        error: nullableStr(o, "error", where),
+      }
+    }
     case "pong": {
       noExtraKeys(o, ["type"], `${at}.pong`)
       return { type: "pong" }
     }
     default:
       throw new ProtocolError(`${at}: unknown message type ${JSON.stringify(t)}`)
+  }
+}
+
+function decodeDirEntry(value: unknown, at: string): DirEntry {
+  const o = asObject(value, at)
+  noExtraKeys(o, ["name", "dir", "size"], at)
+  return {
+    name: str(o, "name", at),
+    dir: bool(o, "dir", at),
+    size: int(o, "size", at),
+  }
+}
+
+function decodeFileFilter(value: unknown, at: string): FileFilter {
+  const o = asObject(value, at)
+  noExtraKeys(o, ["name", "patterns"], at)
+  return {
+    name: str(o, "name", at),
+    patterns: array(o, "patterns", at).map((p, i) => {
+      if (typeof p !== "string") {
+        throw new ProtocolError(`${at}.patterns[${i}]: expected a string`)
+      }
+      return p
+    }),
   }
 }
 
@@ -1016,6 +1284,61 @@ export function decodeToEngine(text: string): ToEngine {
           }
           return value
         }),
+      }
+    }
+    case "listDir": {
+      const where = `${at}.listDir`
+      noExtraKeys(o, ["type", "request", "path"], where)
+      return {
+        type: "listDir",
+        request: int(o, "request", where),
+        path: str(o, "path", where),
+      }
+    }
+    case "fileChosen": {
+      const where = `${at}.fileChosen`
+      noExtraKeys(o, ["type", "request", "paths"], where)
+      return {
+        type: "fileChosen",
+        request: int(o, "request", where),
+        paths: array(o, "paths", where).map((p, i) => {
+          if (typeof p !== "string") {
+            throw new ProtocolError(`${where}.paths[${i}]: expected a string`)
+          }
+          return p
+        }),
+      }
+    }
+    case "fileCancel": {
+      const where = `${at}.fileCancel`
+      noExtraKeys(o, ["type", "request"], where)
+      return { type: "fileCancel", request: int(o, "request", where) }
+    }
+    case "uploadBegin": {
+      const where = `${at}.uploadBegin`
+      noExtraKeys(o, ["type", "request", "file", "name", "rel", "size"], where)
+      return {
+        type: "uploadBegin",
+        request: int(o, "request", where),
+        file: str(o, "file", where),
+        name: str(o, "name", where),
+        rel: array(o, "rel", where).map((r, i) => {
+          if (typeof r !== "string") {
+            throw new ProtocolError(`${where}.rel[${i}]: expected a string`)
+          }
+          return r
+        }),
+        size: int(o, "size", where),
+      }
+    }
+    case "uploadEnd": {
+      const where = `${at}.uploadEnd`
+      noExtraKeys(o, ["type", "request", "file", "sha256"], where)
+      return {
+        type: "uploadEnd",
+        request: int(o, "request", where),
+        file: str(o, "file", where),
+        sha256: str(o, "sha256", where),
       }
     }
     case "ping": {

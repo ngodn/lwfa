@@ -126,6 +126,10 @@ pub enum ShellEvent {
     },
     Message(SessionId, ToEngine),
     Disconnected(SessionId),
+    /// A file finished arriving on a dialog's upload channel. Not from a
+    /// session at all: upload connections authenticate with a per-dialog
+    /// ticket and never become sessions. See `upload.rs`.
+    Uploaded(crate::upload::Finished),
 }
 
 /// Something queued for the shell: a control message or a frame of pixels.
@@ -486,6 +490,7 @@ impl ShellLink {
         events: LoopSender<ShellEvent>,
         max_in_flight: usize,
         shell_dir: Option<std::path::PathBuf>,
+        gates: crate::upload::Gates,
     ) -> std::io::Result<(Self, std::net::SocketAddr, SharedToken)> {
         let listener = TcpListener::bind(addr)?;
         let local = listener.local_addr()?;
@@ -512,6 +517,7 @@ impl ShellLink {
                     events,
                     thread_clients,
                     shell_dir,
+                    gates,
                 )
             })?;
 
@@ -697,6 +703,7 @@ fn accept_loop(
     events: LoopSender<ShellEvent>,
     clients: Arc<Clients>,
     shell_dir: Option<std::path::PathBuf>,
+    gates: crate::upload::Gates,
 ) {
     if listener.set_nonblocking(true).is_err() {
         tracing::error!("could not set the shell listener non-blocking; no shell can connect");
@@ -736,6 +743,21 @@ fn accept_loop(
                                 crate::http::refuse(stream);
                             }
                         }
+                        continue;
+                    }
+
+                    // Upload connections are WebSockets too, but they are not
+                    // sessions: they authenticate with a per-dialog ticket,
+                    // move bulk bytes, and must not count against the session
+                    // cap or share this thread. Each gets a thread of its own,
+                    // for the same reason the HTTP requests do: this loop must
+                    // not block, and an upload lasts as long as the file.
+                    if crate::http::wants_upload_channel(&stream) {
+                        let gates = Arc::clone(&gates);
+                        let upload_events = events.clone();
+                        let _ = thread::Builder::new()
+                            .name("lwfa-upload".into())
+                            .spawn(move || crate::upload::serve(stream, gates, upload_events));
                         continue;
                     }
 

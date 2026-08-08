@@ -1,0 +1,22 @@
+{
+  "type": "fileChooser",
+  "request": 7,
+  "mode": "open",
+  "multiple": true,
+  "directory": false,
+  "title": "Open Image",
+  "appId": "org.gimp.GIMP",
+  "acceptLabel": "_Open",
+  "suggestedName": null,
+  "filters": [
+    {
+      "name": "PNG and JPEG images",
+      "patterns": [
+        "*.png",
+        "image/jpeg"
+      ]
+    }
+  ],
+  "names": [],
+  "ticket": "f00dfeedf00dfeedf00dfeedf00dfeed"
+}

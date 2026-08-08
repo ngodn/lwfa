@@ -1,0 +1,19 @@
+{
+  "type": "dirListing",
+  "request": 7,
+  "path": "/home/user/Pictures",
+  "entries": [
+    {
+      "name": "renders",
+      "dir": true,
+      "size": 0
+    },
+    {
+      "name": "hero-4k.png",
+      "dir": false,
+      "size": 13421772
+    }
+  ],
+  "truncated": false,
+  "error": null
+}

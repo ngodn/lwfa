@@ -1,0 +1,14 @@
+{
+  "type": "fileChooser",
+  "request": 8,
+  "mode": "save",
+  "multiple": false,
+  "directory": false,
+  "title": "Save File",
+  "appId": "",
+  "acceptLabel": null,
+  "suggestedName": "report.pdf",
+  "filters": [],
+  "names": [],
+  "ticket": "0123456789abcdef0123456789abcdef"
+}
