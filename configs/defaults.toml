@@ -190,10 +190,18 @@ gap = 12
 
 # Column widths as a fraction of the output, cycled by Alt+4.
 #
-# 0.9 rather than 1.0 for the widest: the sliver of the neighbour showing at the
-# edge is what tells you the strip continues. A column at exactly 100% looks
-# like a maximised window, and then scrolling sideways is a surprise.
-width_presets = [0.3333333333333333, 0.5, 0.6666666666666667, 0.9]
+# 0.9 is the widest that still shows the strip: the sliver of the neighbour at
+# the edge is what tells you there is more in that direction. A column at
+# exactly 100% looks like a maximised window, and then scrolling sideways is a
+# surprise.
+#
+# 0.99 is deliberately past that line, for the cases where the surprise is
+# worth it: reading, or watching something, where you want the whole viewport
+# and not a mode. It is not fullscreen, which drops every other window from the
+# layout and stops capturing them. This is still a column on a strip, so the
+# gaps, the rounded corners and the neighbours are all still there, one flick
+# away. Anyone who wants the neighbour visible has 0.9 one tap to the left.
+width_presets = [0.3333333333333333, 0.5, 0.6666666666666667, 0.9, 0.99]
 
 # Which of those a new column gets. An index into `width_presets`.
 #
