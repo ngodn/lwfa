@@ -320,15 +320,64 @@ export function columnHeight(output: Output, config: StripConfig): number {
 }
 
 /**
- * Height of each window in a column of `count` windows.
+ * Divide a column's rectangle among the windows sharing it.
  *
- * Equal shares. niri allows per-window heights; that is a refinement and, like
- * column widths, every change is a `configure`, so equal shares keep it rare.
+ * # Why this is not a stack of equal slices
+ *
+ * It was, and that is only ever right when a column is tall and narrow. Give
+ * four windows a wide column and equal slices make four full-width bands a
+ * quarter tall each, so anything with an aspect ratio (a video, a photo, a
+ * document) fits itself to the height and wastes most of the width as black.
+ * On a landscape tablet that is roughly two thirds of the picture thrown away,
+ * and it is what a group of four videos actually looked like.
+ *
+ * # The rule, which is Hyprland's
+ *
+ * Split along whichever axis is longer, and recurse. Hyprland's dwindle
+ * documents it as "the split is determined dynamically with the W/H ratio of
+ * the parent node. If W > H, it's side-by-side. If H > W, it's top-and-bottom",
+ * which is what keeps every cell roughly square instead of letting one
+ * dimension collapse. Four windows in a wide column become quadrants; two
+ * windows in a tall one still stack, because there the long axis is vertical.
+ *
+ * # Balanced rather than a spiral
+ *
+ * Dwindle splits whichever window has *focus*, so opening four in a row gives
+ * a spiral and the arrangement depends on the order you built it in. Here the
+ * window set is halved at each split instead, so a group of four is always
+ * quadrants no matter how it was assembled. A group is a thing the user put
+ * together deliberately; it should look the same tomorrow.
+ *
+ * The first half takes the near side, so window order reads down-then-across
+ * in a wide column, matching the order the panel lists them in.
+ *
+ * Screen coordinates, not main/cross: the axis worth splitting is the longer
+ * one on screen, and that is the same question in portrait and landscape.
  */
-export function stackedHeight(count: number, output: Output, config: StripConfig): number {
-  if (count <= 1) return columnHeight(output, config)
-  const available = columnHeight(output, config) - config.gap * (count - 1)
-  return Math.max(Math.floor(available / count), 1)
+export function tile(box: Rect, count: number, gap: number): Rect[] {
+  if (count <= 0) return []
+  if (count <= 1) return [box]
+
+  const first = Math.floor(count / 2)
+  const rest = count - first
+
+  if (box.width >= box.height) {
+    // Floored, with the remainder going to the far side, so the halves add
+    // back up to the whole and no column drifts a pixel narrow.
+    const near = Math.max(Math.floor((box.width - gap) / 2), 1)
+    const far = Math.max(box.width - near - gap, 1)
+    return [
+      ...tile({ ...box, width: near }, first, gap),
+      ...tile({ ...box, x: box.x + near + gap, width: far }, rest, gap),
+    ]
+  }
+
+  const near = Math.max(Math.floor((box.height - gap) / 2), 1)
+  const far = Math.max(box.height - near - gap, 1)
+  return [
+    ...tile({ ...box, height: near }, first, gap),
+    ...tile({ ...box, y: box.y + near + gap, height: far }, rest, gap),
+  ]
 }
 
 /**
@@ -443,18 +492,24 @@ export function layout(state: StripState, output: Output, config: StripConfig): 
   // Computed once for the whole strip rather than per column: fitting is a
   // property of the workspace, not of any one column.
   const fitted = fitOverride(ws, output, config)
+  const breadth = columnHeight(output, config)
 
   ws.columns.forEach((column, index) => {
     const extent = columnWidth(column, output, config, fitted)
     const along = columnX(ws.columns, index, output, config, fitted) - offset
-    const slice = stackedHeight(column.windows.length, output, config)
 
-    column.windows.forEach((id, row) => {
-      const across = config.gap + row * (slice + config.gap)
-      const rect: Rect = vertical
-        ? { x: across, y: along, width: slice, height: extent }
-        : { x: along, y: across, width: extent, height: slice }
-      out.push({ id, rect, z: z++ })
+    // The column's own rectangle, in screen coordinates, which `tile` then
+    // divides among the windows sharing it. Handing it a screen rect rather
+    // than main/cross extents is what lets it ask the one question that
+    // matters, which axis is longer, without knowing about orientation.
+    const box: Rect = vertical
+      ? { x: config.gap, y: along, width: breadth, height: extent }
+      : { x: along, y: config.gap, width: extent, height: breadth }
+
+    const cells = tile(box, column.windows.length, config.gap)
+    column.windows.forEach((id, at) => {
+      const rect = cells[at]
+      if (rect) out.push({ id, rect, z: z++ })
     })
   })
 

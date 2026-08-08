@@ -91,21 +91,31 @@ export const ArrangeLayer = memo(function ArrangeLayer({
       const top = transform.oy + window.rect.y * transform.scale
       const bottom = top + window.rect.height * transform.scale
 
+      const cell = { id: window.id, left, right, top, bottom }
       const existing = byColumn.get(place.column)
       if (existing) {
         existing.left = Math.min(existing.left, left)
         existing.right = Math.max(existing.right, right)
-        existing.rows.push({ id: window.id, top, bottom })
+        existing.cells.push(cell)
       } else {
         byColumn.set(place.column, {
           index: place.column,
           left,
           right,
-          rows: [{ id: window.id, top, bottom }],
+          cells: [cell],
         })
       }
     }
-    for (const column of byColumn.values()) column.rows.sort((a, b) => a.top - b.top)
+    // Kept in the order the strip holds them, which is the order a drop index
+    // refers to. Sorting by position was fine while a group was a stack, where
+    // the two agreed; under two-dimensional tiling they do not, and sorting
+    // would silently renumber the slots a drop is resolved against.
+    for (const column of byColumn.values()) {
+      const order = new Map(
+        placed.map((w, at) => [w.id, places.get(w.id)?.row ?? at] as const),
+      )
+      column.cells.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    }
     return [...byColumn.values()].sort((a, b) => a.index - b.index)
   }, [placed, places, transform])
 
@@ -164,8 +174,12 @@ function NewColumnHint({ boxes, index }: { boxes: ColumnBox[]; index: number }) 
   const before = boxes[index - 1]
   const after = boxes[index]
   const x = after ? after.left : before ? before.right : 0
-  const top = (after ?? before)?.rows[0]?.top ?? 0
-  const bottom = (after ?? before)?.rows.at(-1)?.bottom ?? 0
+  // The column's full extent, taken across every cell rather than from the
+  // first and last in order. Those agreed while a group was a stack; tiled in
+  // two dimensions the last window can be the top-right one.
+  const cells = (after ?? before)?.cells ?? []
+  const top = cells.length ? Math.min(...cells.map((c) => c.top)) : 0
+  const bottom = cells.length ? Math.max(...cells.map((c) => c.bottom)) : 0
 
   return (
     <div
