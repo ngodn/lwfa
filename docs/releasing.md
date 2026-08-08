@@ -16,6 +16,30 @@ three `crates/*/Cargo.toml` and four `package.json`. `Cargo.lock` records the
 three workspace members and needs refreshing with them; `pnpm-lock.yaml` does
 not record an importer's own version and is untouched.
 
+## If a download in the image build dies
+
+Docker's bridge is 1500 bytes whatever the host can actually carry. Behind a
+VPN the way out is smaller, so a container sends full-size segments the tunnel
+cannot pass, and whether they arrive depends on the far end noticing and
+backing off. A CDN does. A single small web server may not, and then its
+packets disappear rather than erroring:
+
+```
+curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to ffmpeg.org:443
+```
+
+That reads like an outage and is not one. It cost a release: apt and GitHub
+were fine in the same build while ffmpeg.org's TLS handshake got zero bytes
+back, and the same fetch over a bridge at the tunnel's MTU worked first time.
+
+`package-portable.sh` now measures the MTU of the interface traffic actually
+leaves by and builds on a matching network, so this should not recur. Note it
+asks `ip route get` rather than reading the default route: a VPN usually leaves
+the default alone and adds `0.0.0.0/1` and `128.0.0.0/1` over the top, so the
+default route names the physical NIC and measures 1500 while nothing goes that
+way. Setting `"mtu"` in `/etc/docker/daemon.json` fixes it machine-wide if you
+would rather do it once.
+
 ## Why it builds in a container
 
 `scripts/package.sh` on its own produces a binary that runs on the machine that
