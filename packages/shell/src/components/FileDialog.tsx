@@ -26,6 +26,7 @@ import {
   Folder,
   FolderOpen,
   Loader2,
+  Search,
   TriangleAlert,
   Upload,
 } from "lucide-react"
@@ -51,7 +52,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 
@@ -154,10 +154,23 @@ function OpenDialog({ dialog, queued }: { dialog: DialogState; queued: number })
     <Dialog open onOpenChange={(open) => !open && cancel()}>
       <DialogContent
         className={cn(
-          "flex max-h-[85dvh] flex-col gap-4 overflow-hidden sm:max-w-xl",
-          // On a phone the dialog sits at the bottom like a sheet, full
-          // width, so the reachable half of the screen holds the buttons.
-          "max-sm:top-auto max-sm:bottom-0 max-sm:max-w-full max-sm:translate-y-0 max-sm:rounded-b-none max-sm:border-b-0",
+          "flex flex-col gap-4 overflow-hidden",
+          // Fits its content, capped at the viewport: four files should not
+          // produce a half-empty wall of a dialog, and a thousand should not
+          // produce one taller than the screen. This only works because the
+          // list below is a plain overflow box; Radix's ScrollArea needed a
+          // definite pixel height to resolve its viewport against and grew
+          // past the dialog without one.
+          "max-h-[90dvh]",
+          // Sized to the screen it is on. A file browser is a working
+          // surface, so on a desktop it takes a real share of the viewport
+          // rather than sitting in a 576px box with a scrollbar; the cap
+          // keeps it from becoming a stretched band on an ultrawide.
+          "w-[min(80rem,94vw)] sm:max-w-none",
+          // On a phone it is a bottom sheet: full width, anchored to the
+          // edge your thumb reaches, with the buttons at the bottom.
+          "max-sm:top-auto max-sm:bottom-0 max-sm:w-full max-sm:max-w-full",
+          "max-sm:translate-y-0 max-sm:rounded-b-none max-sm:border-b-0",
         )}
       >
         <DialogHeader className="shrink-0">
@@ -285,7 +298,10 @@ function UploadPane({ dialog }: { dialog: DialogState }) {
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div
         className={cn(
-          "flex shrink-0 flex-col items-center gap-2 rounded-lg border border-dashed p-4 transition-colors",
+          "flex shrink-0 flex-col items-center justify-center gap-3 rounded-lg border border-dashed transition-colors",
+          // Roomy when it is the whole pane, compact once files are listed
+          // below it and the list is what you are looking at.
+          dialog.uploads.length > 0 ? "p-4" : "flex-1 p-8",
           dragging ? "border-primary bg-primary/5" : "border-border",
         )}
         onDragOver={(event) => {
@@ -346,13 +362,20 @@ function UploadPane({ dialog }: { dialog: DialogState }) {
       </div>
 
       {dialog.uploads.length > 0 ? (
-        <ScrollArea className="min-h-0 flex-1 rounded-md border">
+        // A plain scrolling box rather than the shared ScrollArea. Radix's
+        // viewport sizes itself with `height: 100%`, which needs an ancestor
+        // whose height *property* is definite; a `flex-1` box has a used
+        // height but `height: auto`, so the viewport resolved to its content
+        // and the list ran straight out of the dialog. `min-h-0` plus a real
+        // overflow needs no percentage to resolve, and it keeps iOS momentum
+        // scrolling, which the custom scrollbar does not.
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border">
           <ul className="flex flex-col p-1">
             {dialog.uploads.map((row) => (
               <UploadRowView key={row.id} row={row} />
             ))}
           </ul>
-        </ScrollArea>
+        </div>
       ) : null}
 
       {dialog.uploads.length > 1 && totals.size > 0 ? (
@@ -444,6 +467,7 @@ function BrowsePane({
   const saveShaped = dialog.mode !== "open"
   const wantsDirs = dialog.mode === "open" && dialog.directory
   const extensions = useMemo(() => filterExtensions(dialog), [dialog])
+  const [query, setQuery] = useState("")
 
   if (listing === null) {
     return (
@@ -456,14 +480,22 @@ function BrowsePane({
 
   const parent = listing.path.replace(/\/[^/]+\/?$/, "") || "/"
   const atRoot = listing.path === "/"
-  const visible = listing.entries.filter((entry) => {
+  const matchesType = (entry: { name: string; dir: boolean }) => {
     if (entry.dir) return true
     if (saveShaped || wantsDirs) return true
     if (showAll || extensions.length === 0) return true
     const lower = entry.name.toLowerCase()
     return extensions.some((ext) => lower.endsWith(ext))
-  })
-  const hiddenByFilter = listing.entries.length - visible.length
+  }
+  const typed = listing.entries.filter(matchesType)
+  const needle = query.trim().toLowerCase()
+  // Filters this directory, rather than searching the whole disk: the engine
+  // sends one directory at a time, and a recursive search would be a walk of
+  // the machine's filesystem on someone else's behalf.
+  const visible = needle
+    ? typed.filter((entry) => entry.name.toLowerCase().includes(needle))
+    : typed
+  const hiddenByFilter = listing.entries.length - typed.length
 
   const toggle = (path: string) => {
     if (selected.includes(path)) {
@@ -491,6 +523,20 @@ function BrowsePane({
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" dir="rtl">
           {listing.path}
         </span>
+        <div className="relative w-40 shrink-0">
+          <Search
+            className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter"
+            aria-label="Filter this folder"
+            className="h-9 pl-7"
+            data-selectable
+          />
+        </div>
       </div>
 
       {listing.error ? (
@@ -498,11 +544,17 @@ function BrowsePane({
           {listing.error}
         </div>
       ) : (
-        <ScrollArea className="min-h-0 flex-1 rounded-md border">
-          <ul className="flex flex-col p-1">
+        // Plain overflow rather than the shared ScrollArea, for the reason
+        // spelled out in `UploadPane`: Radix's viewport needs a percentage
+        // height to resolve against and a flex child cannot give it one.
+        <div className="min-h-32 flex-1 overflow-y-auto overscroll-contain rounded-md border">
+          {/* Two columns once there is width for them. A home directory is
+              eighty entries; one long column on a wide screen is mostly
+              scrolling past empty space. */}
+          <ul className="grid grid-cols-1 gap-x-2 p-1 lg:grid-cols-2 2xl:grid-cols-3">
             {visible.length === 0 ? (
               <li className="px-3 py-6 text-center text-sm text-muted-foreground">
-                Nothing here.
+                {needle ? `Nothing here matches "${query.trim()}".` : "Nothing here."}
               </li>
             ) : (
               visible.map((entry) => {
@@ -526,7 +578,7 @@ function BrowsePane({
               })
             )}
           </ul>
-        </ScrollArea>
+        </div>
       )}
 
       <div className="flex shrink-0 items-center justify-between gap-2 text-xs text-muted-foreground">
