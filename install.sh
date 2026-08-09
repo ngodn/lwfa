@@ -600,6 +600,10 @@ Type=simple
 ExecStart=$ENGINE
 Restart=on-failure
 RestartSec=2
+# The engine handles SIGTERM itself so it can shut down cleanly, which means a
+# wedged one would sit there until the 90s default. Ten seconds is far longer
+# than a healthy teardown and short enough not to feel like a hang.
+TimeoutStopSec=10
 
 [Install]
 # Not default.target: that would start it outside a graphical session.
