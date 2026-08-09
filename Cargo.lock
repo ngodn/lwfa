@@ -378,6 +378,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4dbf9978365bac10f54d1d4b04f7ce4427e51f71d61f2fe15e3fed5166474df7"
 dependencies = [
  "bitflags 2.13.1",
+ "nix 0.31.3",
  "polling",
  "rustix 1.1.4",
  "slab",
@@ -1053,7 +1054,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7e8c4821c88b95582ca69234a1d233f87e44182c42e121f740efb0bec1142e0"
 dependencies = [
  "input-linux-sys",
- "nix",
+ "nix 0.29.0",
 ]
 
 [[package]]
@@ -1063,7 +1064,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b91b2248b0eaf0a576ef5e60b7f2107a749e705a876bc0b9fe952ac8d83a724"
 dependencies = [
  "libc",
- "nix",
+ "nix 0.29.0",
 ]
 
 [[package]]
@@ -1234,6 +1235,7 @@ name = "lwfa-engine"
 version = "1.1.3"
 dependencies = [
  "argon2",
+ "calloop 0.14.4",
  "ffmpeg-next",
  "futures-channel",
  "image",
@@ -1362,6 +1364,18 @@ name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.13.1",
  "cfg-if",

@@ -25,6 +25,12 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "xwayland",
 ] }
 
+# The same calloop smithay re-exports, named here only to turn on `signals`.
+# Features are additive, so this enables it on smithay's copy too. Without it
+# SIGTERM kills the process outright and nothing in the loop is ever dropped;
+# see `init_signals` in main.rs.
+calloop = { version = "0.14", features = ["signals"] }
+
 # Blocking WebSocket server for the shell protocol, run on its own thread and
 # bridged into calloop. No async runtime: one socket does not justify it.
 tungstenite = "0.30.0"

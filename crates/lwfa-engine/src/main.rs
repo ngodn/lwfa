@@ -59,6 +59,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut event_loop: EventLoop<'static, CalloopData> = EventLoop::try_new()?;
+    // Before anything else, because this only covers threads that do not exist
+    // yet. See `init_signals`.
+    init_signals(&mut event_loop)?;
     let display: Display<Lwfa> = Display::new()?;
     let mut data = Lwfa::new(&mut event_loop, display);
 
@@ -111,9 +114,98 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     data.ensure_persistent_gamepad();
 
-    event_loop.run(None, &mut data, |_| {})?;
+    // Kept because the socket has to be removed by name after `data` is gone.
+    let socket_name = data.socket_name.clone();
+
+    // Not `run(..)?`: a loop that fell over still leaves a socket behind, and
+    // that is exactly the case where nobody is around to tidy up afterwards.
+    let outcome = event_loop.run(None, &mut data, |_| {});
+    remove_socket(&socket_name);
+    outcome?;
 
     Ok(())
+}
+
+/// Make a shutdown signal an ordinary loop event rather than a process kill.
+///
+/// The default disposition for `SIGTERM` stops the process where it stands, so
+/// the loop never returns and nothing on the way out ever runs. Clients see the
+/// connection reset rather than closed, and the socket is left behind. Stopping
+/// the loop instead lets `main` return and finish properly, which is the same
+/// path `Alt+Q` already takes.
+///
+/// This uses `signalfd`, not a handler, so the crate needs none of the unsafe
+/// async-signal-safe code a real handler would. The trade is that the signals
+/// end up blocked process-wide, so an engine wedged inside a callback no
+/// longer dies to `SIGTERM`; `TimeoutStopSec` in the unit is the backstop, and
+/// `SIGKILL` was always the answer for a wedged compositor anyway.
+///
+/// It has to run before any thread is spawned. A thread inherits its parent's
+/// signal mask, so threads that already exist would keep the default
+/// disposition and one of them would take the signal and kill us.
+fn init_signals(
+    event_loop: &mut EventLoop<'static, CalloopData>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use smithay::reexports::calloop::signals::{Signal, Signals};
+
+    // SIGINT as well as SIGTERM: the first is Ctrl+C against a development
+    // engine in a terminal, and it deserves the same clean exit.
+    let signals = Signals::new(&[Signal::SIGTERM, Signal::SIGINT])
+        .map_err(|err| format!("failed to watch for shutdown signals: {err}"))?;
+
+    event_loop
+        .handle()
+        .insert_source(signals, |event, _, data| {
+            tracing::info!("caught {:?}, shutting down", event.signal());
+            data.loop_signal.stop();
+        })
+        .map_err(|err| format!("failed to insert the signal source: {err}"))?;
+
+    Ok(())
+}
+
+/// Unlink the Wayland socket and its lock file on the way out.
+///
+/// Dropping the listening source is meant to do this, and does when nothing
+/// stands in the way. Xwayland does: `X11Wm::start_wm` hands a `LoopHandle` to
+/// a source the loop itself owns, and that cycle keeps every source alive past
+/// the end of `main`. Measured both ways on the same build, with `SIGTERM` and
+/// a clean return either way: under `LWFA_NO_XWAYLAND=1` the socket disappears
+/// on its own, and with Xwayland running `wayland-N` and `wayland-N.lock` are
+/// still there afterwards.
+///
+/// A stale pair is not fatal, since the next start takes the lock and unlinks
+/// what it finds. It is just untidy, and untidy leftovers are what make a real
+/// leak hard to spot later. Removing a path that is already gone is not an
+/// error, so this is safe to call whether the drop happened or not.
+fn remove_socket(socket_name: &std::ffi::OsStr) {
+    let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else {
+        return;
+    };
+
+    for path in socket_paths(std::path::Path::new(&runtime), socket_name) {
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::debug!("removed {}", path.display()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => tracing::warn!("could not remove {}: {err}", path.display()),
+        }
+    }
+}
+
+/// The socket and the lock file that goes with it.
+///
+/// Split out from [`remove_socket`] because getting the lock's name wrong would
+/// leave half the pair behind, silently, in a function whose whole job is not
+/// to. `wayland-server` derives it with `with_extension("lock")`, so this does
+/// too rather than concatenating a suffix; the two agree for every name it can
+/// produce, including two-digit ones.
+fn socket_paths(
+    runtime: &std::path::Path,
+    socket_name: &std::ffi::OsStr,
+) -> [std::path::PathBuf; 2] {
+    let socket = runtime.join(socket_name);
+    let lock = socket.with_extension("lock");
+    [socket, lock]
 }
 
 /// Collect any children that have exited, without blocking.
@@ -1429,6 +1521,30 @@ mod tests {
         // with no VideoDecoder showing blank windows.
         assert!(!decides_h264(&[]));
         assert!(!decides_h264(&[None, None]));
+    }
+
+    #[test]
+    fn the_lock_file_sits_next_to_the_socket() {
+        let [socket, lock] = socket_paths(
+            std::path::Path::new("/run/user/1000"),
+            std::ffi::OsStr::new("wayland-2"),
+        );
+        assert_eq!(socket, std::path::Path::new("/run/user/1000/wayland-2"));
+        assert_eq!(lock, std::path::Path::new("/run/user/1000/wayland-2.lock"));
+    }
+
+    #[test]
+    fn a_two_digit_socket_keeps_its_number() {
+        // `with_extension` replaces whatever follows the last dot, and a name
+        // like `wayland-10` has none, so the number survives. Pinned because a
+        // machine that gets this far has ten compositors running and is the
+        // last place anyone would look for a naming bug.
+        let [socket, lock] = socket_paths(
+            std::path::Path::new("/run/user/1000"),
+            std::ffi::OsStr::new("wayland-10"),
+        );
+        assert_eq!(socket, std::path::Path::new("/run/user/1000/wayland-10"));
+        assert_eq!(lock, std::path::Path::new("/run/user/1000/wayland-10.lock"));
     }
 
     #[test]
