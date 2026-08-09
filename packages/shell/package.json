@@ -1,6 +1,6 @@
 {
   "name": "@lwfa/shell",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "private": true,
   "type": "module",
   "description": "The lwfa shell: owns layout policy, drives the engine over the shell protocol",
