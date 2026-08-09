@@ -827,7 +827,32 @@ export function App(): React.ReactElement {
       setStatus("connecting");
       conn.connect();
     });
+
+    // A reload is not an unmount, so the cleanup below never runs for one.
+    //
+    // React tears a component down when it leaves a live document; a document
+    // being replaced skips every effect cleanup there is. That abandoned a
+    // `VideoDecoder` per window and the `AudioContext` on every single reload,
+    // and neither is ordinary garbage: WebKit keeps decoders in a GPU process
+    // that outlives the page, and iOS Safari stops producing sound after about
+    // four contexts. So reloading to fix a stuttering stream quietly made it
+    // worse, and quitting the browser was the only thing that cleared it.
+    //
+    // `persisted` means the page is going into the back/forward cache and may
+    // be shown again, in which case it must keep what it has; `connection.ts`
+    // handles waking that up. Only a real teardown is torn down.
+    const onPageHide = (event: PageTransitionEvent) => {
+      if (event.persisted) return;
+      conn.close();
+      decoder.close();
+      clearFrames();
+      opusStream.close();
+      void audio.stop();
+    };
+    window.addEventListener("pagehide", onPageHide);
+
     return () => {
+      window.removeEventListener("pagehide", onPageHide);
       // Released before closing, so a waiting tab is promoted the moment this
       // one lets go rather than after its socket has finished dying.
       leadership.release();

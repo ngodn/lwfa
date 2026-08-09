@@ -723,6 +723,14 @@ impl Lwfa {
                 }
             });
             if changed {
+                // One line per transition, not per pass. This is the only way
+                // to see that a window was suspended before its first frame,
+                // which is a thing that happens to every window that maps: the
+                // set this reads from only changes when the shell answers.
+                tracing::debug!(
+                    "window {id:?} is now {}",
+                    if suspend { "suspended" } else { "awake" }
+                );
                 toplevel.send_pending_configure();
             }
         }

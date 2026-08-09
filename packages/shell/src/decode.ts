@@ -146,13 +146,44 @@ export class FrameDecoder {
     const codec = keyframe ? (hevc ? HEVC_CODEC : codecFromSps(frame.payload)) : null
     const wanted = codec ? `${width}x${height}:${codec}` : null
 
-    if (wanted !== null && this.#configured.get(id) !== wanted) {
-      // Resolution or profile changed, so the old decoder's reference frames
-      // and configuration are both useless.
-      this.#reset(id)
+    let decoder = this.#decoders.get(id)
+
+    if (codec !== null && wanted !== null && this.#configured.get(id) !== wanted) {
+      // Resolution or profile changed, so the old configuration is useless and
+      // its reference frames with it.
+      //
+      // Reconfigured rather than rebuilt. `close()` followed by `new
+      // VideoDecoder` is one decoder destroyed and another created on every
+      // resize, and WebKit runs decoders in its GPU process, which outlives
+      // the document: a reload cannot reclaim what that churn leaves behind,
+      // which is why quitting Safari was the only thing that ever helped.
+      // Reconfiguring a live decoder is the same state change without the
+      // churn, and is what the call is for. Measured before this: three window
+      // resizes produced three closes and three constructions.
+      if (decoder && decoder.state !== "closed") {
+        try {
+          decoder.configure({ codec, optimizeForLatency: true })
+          this.#configured.set(id, wanted)
+          // Reconfiguring throws the reference frames away, so this decoder is
+          // back to needing a keyframe. It has one: only a keyframe carries
+          // the parameter sets, so this branch only runs on one.
+          this.#awaitingKeyframe.add(id)
+          // The timestamp counter deliberately keeps running. It feeds one
+          // decoder, and handing that decoder a sequence that jumps backwards
+          // is a thing to avoid for no gain.
+        } catch (err) {
+          // A decoder that will not take the new configuration is no worse off
+          // for being replaced, which is what this did unconditionally before.
+          console.warn(`could not reconfigure the decoder for w${id}:`, err)
+          this.#reset(id)
+          decoder = undefined
+        }
+      } else {
+        this.#reset(id)
+        decoder = undefined
+      }
     }
 
-    let decoder = this.#decoders.get(id)
     if (!decoder) {
       if (!codec || wanted === null) {
         // No decoder and no SPS to build one from. Wait for a keyframe that
