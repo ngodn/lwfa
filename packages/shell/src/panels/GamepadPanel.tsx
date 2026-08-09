@@ -118,6 +118,28 @@ function GamepadPanel() {
         />
       </PanelSection>
 
+      <PanelSection
+        title="Stray taps"
+        description="Many games switch to mouse control the moment they see a click, and stop reading the pad until something switches them back. Blocking stops a near miss costing you the controller."
+      >
+        <FieldRow>
+          <Field
+            label="Block taps outside the pads"
+            hint={
+              prefs.gamepad.placement === "overlay"
+                ? "Only while the controller is up, and never while editing its layout."
+                : "Only applies to an overlay controller. Stacked has its own space, so nothing sits behind it."
+            }
+          />
+          <Switch
+            checked={prefs.gamepad.shield}
+            disabled={prefs.gamepad.placement !== "overlay"}
+            onCheckedChange={(shield) => patchPrefs("gamepad", { shield })}
+            aria-label="Block taps outside the pads"
+          />
+        </FieldRow>
+      </PanelSection>
+
       <PanelSection title="Feedback">
         <FieldRow>
           <Field label="Vibrate on press" {...hapticHintProp()} />
