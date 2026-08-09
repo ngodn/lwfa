@@ -143,6 +143,25 @@ export interface Prefs {
      * pixel. Both are now available to both.
      */
     placement: SurfacePlacement
+    /**
+     * Swallow taps that land between the pads instead of passing them through.
+     *
+     * A floating controller deliberately lets pointers through the gaps, so a
+     * tap on the game behind it still reaches the game. That is right for a
+     * desktop and wrong for the thing a controller is usually over.
+     *
+     * Many games switch input mode on the first mouse event they see: the
+     * gamepad prompts vanish, the pad stops being read, and it takes another
+     * click somewhere to switch back. Wuchang and Assassin's Creed Odyssey
+     * both do it. So one thumb landing a few millimetres wide of a pad does
+     * not merely miss the button, it takes the controller away mid-fight.
+     *
+     * On, the area under the pads absorbs everything the pads themselves do
+     * not take, and nothing reaches the window. Off is the old behaviour and
+     * stays the default, because silently eating input is a surprising thing
+     * for a desktop to do and only a game wants it.
+     */
+    shield: boolean
   }
   keyboard: {
     /** Keep modifiers latched until tapped again, for one-finger combos. */
@@ -273,6 +292,7 @@ export const DEFAULT_PREFS: Prefs = {
     haptics: true,
     mode: "controller",
     placement: "overlay",
+    shield: false,
   },
   keyboard: {
     stickyModifiers: true,

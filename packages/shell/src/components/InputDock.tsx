@@ -30,10 +30,11 @@
  */
 
 import { Suspense, lazy, memo, useCallback, useEffect, useRef } from "react"
-import { GripHorizontal, Settings2, X } from "lucide-react"
+import { GripHorizontal, Settings2, Shield, ShieldOff, X } from "lucide-react"
 import { setDock, useDock } from "@/lib/dock"
-import { usePrefSection } from "@/lib/prefs"
+import { patchPrefs, usePrefSection } from "@/lib/prefs"
 import { setGamepad, useGamepad, useSetPads } from "@/gamepad/store"
+import { shieldActive } from "@/gamepad/shield"
 import { useSessionActions, useSessionState } from "@/session"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -185,9 +186,41 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
           : ({ "--dock": DEFAULT_FRACTION, height: "calc(var(--dock) * 100%)" } as React.CSSProperties)
       }
     >
+      {/*
+       * The shield: everything the pads do not take, taken anyway.
+       *
+       * Only under a floating controller, because that is the only case where
+       * the dock is over the window at all; stacked gives the controller its
+       * own row and there is nothing behind it to protect.
+       *
+       * Never while editing. Dragging a pad is a pointer gesture over this
+       * exact area, and a full-area sibling sitting under the editor is a
+       * second thing wanting the same events. The editor is also the one time
+       * a stray tap costs nothing, since the game is not being played.
+       *
+       * `z-0` keeps it under the pads (`z-10`), and the header opposite is
+       * lifted above it. Everything outside this dock is untouched: the nav
+       * rail is `z-30` and the arrange bar `z-40`, both above the dock's
+       * `z-20`, so the way out of here is never behind the shield.
+       */}
+      {shieldActive({
+        dock,
+        placement: gamepadPrefs.placement,
+        shield: gamepadPrefs.shield,
+        editing: gamepad.editing,
+      }) ? (
+        <div
+          className="pointer-events-auto absolute inset-0 z-0 touch-none select-none"
+          aria-hidden
+        />
+      ) : null}
+
       <header
         className={cn(
           "flex shrink-0 items-center gap-1 px-2 py-1",
+          // Above the shield, so the controller's own controls keep working
+          // while everything around them is being swallowed.
+          isGamepad && "relative z-20",
           // Over a game this is a card sitting in the corner of the picture,
           // so it gets the pads' own treatment instead: small, dark, barely
           // there, and faded to whatever the pads are faded to. It is the
@@ -218,6 +251,40 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
             onClick={() => setGamepad({ editing: !gamepad.editing })}
           >
             {gamepad.editing ? "Done" : "Edit"}
+          </Button>
+        ) : null}
+        {/*
+          * Next to Edit rather than buried in settings, because the moment you
+          * want it is the moment it just cost you: a missed pad, the game
+          * switching to mouse, and the controller going quiet mid-fight. A
+          * setting you have to go and find is no use then.
+          *
+          * Hidden while editing, since the shield is off then anyway and a
+          * control that claims to be on while doing nothing is a lie.
+          */}
+        {isGamepad && !gamepad.editing ? (
+          <Button
+            size="icon"
+            variant={gamepadPrefs.shield ? "default" : "ghost"}
+            className={cn(HIT_AREA, "size-8", gamepadPrefs.shield ? "" : "text-white/90")}
+            aria-label={
+              gamepadPrefs.shield
+                ? "Let taps through to the window"
+                : "Block taps outside the pads"
+            }
+            aria-pressed={gamepadPrefs.shield}
+            title={
+              gamepadPrefs.shield
+                ? "Taps outside the pads are blocked"
+                : "Taps outside the pads reach the window"
+            }
+            onClick={() => patchPrefs("gamepad", { shield: !gamepadPrefs.shield })}
+          >
+            {gamepadPrefs.shield ? (
+              <Shield className="size-4" aria-hidden />
+            ) : (
+              <ShieldOff className="size-4" aria-hidden />
+            )}
           </Button>
         ) : null}
         <Button
