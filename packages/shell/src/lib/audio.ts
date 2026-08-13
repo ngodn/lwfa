@@ -99,15 +99,54 @@ function claimMediaChannel(): void {
   const element = document.createElement("audio")
   element.loop = true
   element.setAttribute("playsinline", "")
-  // A minimal silent WAV. Inline rather than a file, because it must be
-  // available before anything else loads and it is 200 bytes.
-  element.src =
-    "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA="
+  unmuterUrl = URL.createObjectURL(new Blob([silentWav()], { type: "audio/wav" }))
+  element.src = unmuterUrl
   element.volume = 0.001
   void element.play().catch(() => {
     // Blocked until a gesture, same as the context. `unlock` retries both.
   })
   unmuter = element
+}
+
+/** The blob URL behind the unmuter, revoked when the graph is torn down. */
+let unmuterUrl: string | null = null
+
+/**
+ * A tenth of a second of genuine silence, as a WAV.
+ *
+ * Generated rather than inlined because the inlined version this replaces
+ * was the worst bug in the project: its `data` chunk declared zero samples,
+ * and a media element looping zero-duration audio seeks forever as fast as
+ * the main thread allows. Enabling audio wedged the entire page within
+ * seconds, in every browser, which users experienced as "the stream is
+ * fine until I turn sound on, and only restarting the browser helps".
+ * Reproduced against a blank page with nothing but that element on it.
+ *
+ * 100ms looping ten times a second is inaudible and costs nothing, and the
+ * test suite now asserts the data chunk is never empty again.
+ */
+export function silentWav(): ArrayBuffer {
+  const rate = 8000
+  const samples = rate / 10
+  const wav = new DataView(new ArrayBuffer(44 + samples * 2))
+  const tag = (at: number, text: string) => {
+    for (let i = 0; i < text.length; i++) wav.setUint8(at + i, text.charCodeAt(i))
+  }
+  tag(0, "RIFF")
+  wav.setUint32(4, 36 + samples * 2, true)
+  tag(8, "WAVE")
+  tag(12, "fmt ")
+  wav.setUint32(16, 16, true) // fmt chunk length
+  wav.setUint16(20, 1, true) // PCM
+  wav.setUint16(22, 1, true) // mono
+  wav.setUint32(24, rate, true)
+  wav.setUint32(28, rate * 2, true) // bytes per second
+  wav.setUint16(32, 2, true) // bytes per frame
+  wav.setUint16(34, 16, true) // bits per sample
+  tag(36, "data")
+  wav.setUint32(40, samples * 2, true)
+  // The samples themselves stay zero: that is the silence.
+  return wav.buffer
 }
 
 /** Cushion to keep between the clock and the next chunk, in seconds. */
@@ -201,6 +240,10 @@ export async function stop(): Promise<void> {
   unmuter?.pause()
   unmuter?.remove()
   unmuter = null
+  if (unmuterUrl) {
+    URL.revokeObjectURL(unmuterUrl)
+    unmuterUrl = null
+  }
   await context?.close().catch(() => {})
   context = null
   node = null
