@@ -1066,10 +1066,11 @@ pub enum ToEngine {
         enabled: bool,
         /// Whether this connection can decode Opus.
         ///
-        /// Asked of the browser, like the video codecs: `AudioDecoder` is
-        /// secure-context only, so a page on plain HTTP cannot decode Opus
-        /// however new the browser is. One capture is fanned out to everyone,
-        /// so it is compressed only when *every* listener can take it.
+        /// Per listener: the engine encodes each format exactly when some
+        /// listener needs it and sends every client the one it can take, so
+        /// one client answering "no" costs only itself the compression. The
+        /// shell bundles a WASM decoder precisely so the answer is yes
+        /// everywhere; "no" is for older shells and headless tools.
         #[serde(default)]
         opus: bool,
         /// Whether the machine should also play the session's audio aloud.

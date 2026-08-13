@@ -190,6 +190,13 @@ struct Slot {
     /// Read on the capture thread, written on the compositor thread, same as
     /// `streams`.
     audio: AtomicBool,
+    /// Whether this client can decode Opus, from its `SetAudio`.
+    ///
+    /// Per client rather than negotiated across all of them, because one
+    /// browser without an `AudioDecoder` used to drag every other device onto
+    /// raw PCM at 1.5 Mbit/s. Each client now gets the best format it can
+    /// take; see [`FrameSink::send_audio`].
+    opus: AtomicBool,
     /// How far this client's RTT currently sits above its own baseline, in
     /// microseconds, or [`RTT_UNMEASURED`] before the first pong.
     ///
@@ -293,9 +300,12 @@ impl Clients {
         all
     }
 
-    /// Record whether one client wants to hear the machine.
-    pub fn set_audio(&self, id: SessionId, enabled: bool) {
-        self.with(id, |slot| slot.audio.store(enabled, Ordering::Relaxed));
+    /// Record whether one client wants to hear the machine, and how.
+    pub fn set_audio(&self, id: SessionId, enabled: bool, opus: bool) {
+        self.with(id, |slot| {
+            slot.audio.store(enabled, Ordering::Relaxed);
+            slot.opus.store(opus, Ordering::Relaxed);
+        });
     }
 
     /// Record what one client wants. Total, matching `SetStreams`.
@@ -344,6 +354,21 @@ impl Clients {
         });
         self.wake();
     }
+}
+
+/// Which of a chunk's payloads one client should be sent, if any.
+///
+/// An Opus client falls back to PCM (every client can play PCM, and the
+/// chunk header says which it got). The reverse would be handing a client
+/// bytes it cannot decode, so a PCM client whose payload is missing skips
+/// the chunk; the capture follows the listener mix within one 20ms beat, so
+/// the gap is one chunk long.
+fn audio_payload<'a, T>(
+    decodes_opus: bool,
+    opus: Option<&'a T>,
+    pcm: Option<&'a T>,
+) -> Option<&'a T> {
+    if decodes_opus { opus.or(pcm) } else { pcm }
 }
 
 /// A cloneable handle for queueing encoded frames.
@@ -407,15 +432,26 @@ impl FrameSink {
             .is_ok_and(|slots| slots.iter().any(|slot| slot.alive()))
     }
 
-    /// Hand a chunk of audio to everyone listening.
+    /// Hand a chunk of audio to everyone listening, each in its own format.
+    ///
+    /// A client that decodes Opus gets the Opus payload; one that cannot gets
+    /// PCM. The capture builds only the encodings somebody currently needs,
+    /// so the common case (every listener on Opus) never pays for PCM at all.
+    /// A listener whose format is missing this chunk (it just joined, or the
+    /// encoder hiccuped) takes whichever exists rather than silence: the
+    /// header on every chunk says what it is, so the client follows.
     ///
     /// Shares the video queue and its bound deliberately. Audio and pixels
     /// compete for the same socket, and a client so far behind that frames are
     /// being dropped is one where continuing to push audio would only widen the
     /// gap between what it hears and what it sees. Silence that recovers beats
     /// audio that drifts further out of sync every second.
-    pub fn send_audio(&self, chunk: Vec<u8>) {
-        let chunk = tungstenite::Bytes::from(chunk);
+    pub fn send_audio(&self, chunk: crate::audio::Chunk) {
+        let opus = chunk.opus.map(tungstenite::Bytes::from);
+        let pcm = chunk.pcm.map(tungstenite::Bytes::from);
+        if opus.is_none() && pcm.is_none() {
+            return;
+        }
         let Ok(slots) = self.clients.slots.lock() else {
             return;
         };
@@ -423,8 +459,11 @@ impl FrameSink {
             if !slot.audio.load(Ordering::Relaxed) || !slot.has_audio_room() {
                 continue;
             }
+            let wanted =
+                audio_payload(slot.opus.load(Ordering::Relaxed), opus.as_ref(), pcm.as_ref());
+            let Some(payload) = wanted else { continue };
             slot.audio_in_flight.fetch_add(1, Ordering::Relaxed);
-            if slot.outgoing.send(Outgoing::Audio(chunk.clone())).is_err() {
+            if slot.outgoing.send(Outgoing::Audio(payload.clone())).is_err() {
                 slot.audio_in_flight.fetch_sub(1, Ordering::Relaxed);
             }
         }
@@ -813,6 +852,7 @@ fn accept_loop(
                         connected: Arc::clone(&connected),
                         streams: Mutex::new(HashSet::new()),
                         audio: AtomicBool::new(false),
+                        opus: AtomicBool::new(false),
                         rtt_excess: Arc::clone(&rtt_excess),
                         superseded: Arc::clone(&superseded),
                         evict: Arc::clone(&evict),
@@ -1299,6 +1339,20 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_opus_client_gets_opus_and_falls_back_to_pcm() {
+        assert_eq!(audio_payload(true, Some(&"opus"), Some(&"pcm")), Some(&"opus"));
+        assert_eq!(audio_payload(true, None, Some(&"pcm")), Some(&"pcm"));
+    }
+
+    #[test]
+    fn a_pcm_client_never_gets_bytes_it_cannot_decode() {
+        // Handing Opus to a client without a decoder is bandwidth spent on
+        // guaranteed silence; skipping the chunk is the honest version.
+        assert_eq!(audio_payload(false, Some(&"opus"), Some(&"pcm")), Some(&"pcm"));
+        assert_eq!(audio_payload(false, Some(&"opus"), None), None::<&&str>);
+    }
 
     #[test]
     fn the_first_probe_sets_the_baseline() {

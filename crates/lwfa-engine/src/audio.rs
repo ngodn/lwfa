@@ -63,24 +63,41 @@ const CHUNK_MS: u32 = 20;
 const FRAMES_PER_CHUNK: usize = (SAMPLE_RATE as usize * CHUNK_MS as usize) / 1000;
 const BYTES_PER_CHUNK: usize = FRAMES_PER_CHUNK * BYTES_PER_FRAME;
 
+/// One captured chunk, in whichever encodings the listeners currently need.
+///
+/// Both can be present at once. The fan-out used to compress for everyone or
+/// nobody, so one browser without an Opus decoder silently put every other
+/// device on raw PCM at 1.5 Mbit/s, and on a congested link that fixed load
+/// was what dragged the whole stream down. Now each payload is built exactly
+/// when somebody needs it and each client is sent the one it can decode.
+pub struct Chunk {
+    /// Framed Opus message, when at least one listener decodes Opus.
+    pub opus: Option<Vec<u8>>,
+    /// Framed PCM message, when at least one listener cannot.
+    pub pcm: Option<Vec<u8>>,
+}
+
 /// A running capture. Dropping it stops the capture and reaps the process.
 pub struct Capture {
     child: Child,
     running: Arc<AtomicBool>,
-    /// Whether listeners want Opus. Read by the capture thread per chunk.
+    /// Whether any listener decodes Opus. Read by the capture thread per chunk.
     wants_opus: Arc<AtomicBool>,
+    /// Whether any listener needs raw PCM. Same cadence.
+    wants_pcm: Arc<AtomicBool>,
     /// Bits per second for Opus. Read by the capture thread per chunk.
     opus_bitrate: Arc<AtomicI32>,
 }
 
 impl Capture {
-    /// Compress from now on, or stop.
+    /// Which encodings the current listeners need, from the next chunk.
     ///
     /// Takes effect on the next 20ms chunk. Changing it mid-stream is safe:
     /// every chunk says what it is in its own header, so a client sees the
     /// format change and follows it without resynchronising.
-    pub fn set_opus(&self, yes: bool) {
-        self.wants_opus.store(yes, Ordering::Relaxed);
+    pub fn set_formats(&self, opus: bool, pcm: bool) {
+        self.wants_opus.store(opus, Ordering::Relaxed);
+        self.wants_pcm.store(pcm, Ordering::Relaxed);
     }
 
     /// Spend this many bits per second on the sound, from the next chunk.
@@ -117,7 +134,8 @@ impl Drop for Capture {
 pub fn start(
     device: Option<&str>,
     opus: bool,
-    on_chunk: impl Fn(Vec<u8>) + Send + 'static,
+    pcm: bool,
+    on_chunk: impl Fn(Chunk) + Send + 'static,
 ) -> Option<Capture> {
     let mut command = Command::new("parec");
     command
@@ -155,6 +173,8 @@ pub fn start(
     let thread_running = Arc::clone(&running);
     let wants_opus = Arc::new(AtomicBool::new(opus));
     let thread_opus = Arc::clone(&wants_opus);
+    let wants_pcm = Arc::new(AtomicBool::new(pcm));
+    let thread_pcm = Arc::clone(&wants_pcm);
     let opus_bitrate = Arc::new(AtomicI32::new(OPUS_BITRATE));
     let thread_bitrate = Arc::clone(&opus_bitrate);
 
@@ -172,6 +192,11 @@ pub fn start(
             let mut packet = vec![0u8; 4000];
             let mut samples = vec![0i16; FRAMES_PER_CHUNK * CHANNELS as usize];
             let mut applied_bitrate = OPUS_BITRATE;
+            // What the last chunk actually carried, so the log announces
+            // format changes once rather than fifty times a second. Raw PCM
+            // on the wire is a megabit and a half that no bitrate setting can
+            // shrink, which is exactly the sort of thing a log must not hide.
+            let mut sent = (false, false);
 
             while thread_running.load(Ordering::Relaxed) {
                 // Follow the requested rate. Checked per chunk because that
@@ -181,7 +206,12 @@ pub fn start(
                 if wanted_bitrate != applied_bitrate {
                     opus.set_bitrate(wanted_bitrate);
                     applied_bitrate = wanted_bitrate;
-                    tracing::info!("audio is now {} kbit/s", wanted_bitrate / 1000);
+                    // Only meaningful for Opus. PCM has no knob, and logging
+                    // a rate that nothing applies to reads as "adapting fine"
+                    // while the wire carries 1.5 Mbit/s regardless.
+                    if thread_opus.load(Ordering::Relaxed) {
+                        tracing::info!("Opus audio is now {} kbit/s", wanted_bitrate / 1000);
+                    }
                 }
                 // Whole chunks only. A short read mid-frame would shift every
                 // subsequent sample by a byte and turn the stream into noise
@@ -195,33 +225,51 @@ pub fn start(
                         return;
                     }
                 }
-                // Compressed when the listeners can take it, raw otherwise.
-                // Which one is asked for is decided per session; see
-                // `AudioFormat`.
-                let compress = thread_opus.load(Ordering::Relaxed);
-                let (format, payload): (AudioFormat, &[u8]) = if compress {
+                // Each encoding is built exactly when some listener needs it,
+                // and both can be needed at once: the fan-out sends every
+                // client the one it can decode. See `Chunk`.
+                let want_opus = thread_opus.load(Ordering::Relaxed);
+                let want_pcm = thread_pcm.load(Ordering::Relaxed);
+
+                let encoded = if want_opus {
                     for (sample, chunk) in samples.iter_mut().zip(buffer.chunks_exact(2)) {
                         *sample = i16::from_le_bytes([chunk[0], chunk[1]]);
                     }
-                    match opus.encode(&samples, &mut packet) {
-                        Some(len) => (AudioFormat::Opus, &packet[..len]),
-                        // Encoding failed, which should not happen at a fixed
-                        // rate and frame size. Sending the raw chunk keeps the
-                        // sound going rather than dropping it, and the header
-                        // says which it is, so the client copes either way.
-                        None => (AudioFormat::Pcm16, &buffer[..]),
-                    }
+                    // A failed encode should not happen at a fixed rate and
+                    // frame size; falling back to PCM below keeps the sound
+                    // going rather than dropping it.
+                    opus.encode(&samples, &mut packet)
                 } else {
-                    (AudioFormat::Pcm16, &buffer[..])
+                    None
                 };
 
-                let header = AudioHeader {
-                    format,
-                    channels: CHANNELS,
-                    sample_rate: SAMPLE_RATE,
-                    frames: FRAMES_PER_CHUNK as u32,
+                let chunk = Chunk {
+                    opus: encoded.map(|len| frame(AudioFormat::Opus, &packet[..len])),
+                    // Also the safety net: an Opus listener with no packet to
+                    // send gets PCM this chunk, and the header tells it so.
+                    pcm: (want_pcm || (want_opus && encoded.is_none()))
+                        .then(|| frame(AudioFormat::Pcm16, &buffer)),
                 };
-                on_chunk(header.encode_with_payload(payload));
+
+                let sending = (chunk.opus.is_some(), chunk.pcm.is_some());
+                if sending != sent {
+                    sent = sending;
+                    match sending {
+                        (true, true) => tracing::info!(
+                            "audio is Opus plus raw PCM (1.5 Mbit/s) for a listener that cannot decode Opus"
+                        ),
+                        (true, false) => tracing::info!(
+                            "audio is Opus at {} kbit/s",
+                            applied_bitrate / 1000
+                        ),
+                        (false, true) => tracing::info!(
+                            "audio is raw PCM at 1.5 Mbit/s; no listener decodes Opus"
+                        ),
+                        (false, false) => {}
+                    }
+                }
+
+                on_chunk(chunk);
             }
         })
     {
@@ -241,8 +289,20 @@ pub fn start(
         child,
         running,
         wants_opus,
+        wants_pcm,
         opus_bitrate,
     })
+}
+
+/// One payload, framed and ready for a socket.
+fn frame(format: AudioFormat, payload: &[u8]) -> Vec<u8> {
+    AudioHeader {
+        format,
+        channels: CHANNELS,
+        sample_rate: SAMPLE_RATE,
+        frames: FRAMES_PER_CHUNK as u32,
+    }
+    .encode_with_payload(payload)
 }
 
 /// An Opus encoder for this capture's fixed format.
