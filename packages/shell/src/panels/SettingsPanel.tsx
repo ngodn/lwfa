@@ -480,22 +480,7 @@ function StreamSettings() {
             />
           </FieldRow>
         ) : null}
-        {stream.audio ? (
-          <FieldRow>
-            <Field label="Volume" hint={`${Math.round(stream.volume * 100)}%`} />
-            <Slider
-              className="w-40"
-              min={0}
-              max={1}
-              step={0.05}
-              value={[stream.volume]}
-              onValueChange={([volume]) =>
-                patchPrefs("stream", { volume: volume ?? 1 })
-              }
-              aria-label="Volume"
-            />
-          </FieldRow>
-        ) : null}
+        {stream.audio ? <VolumeRow saved={stream.volume} /> : null}
         {stream.audio ? (
           <div className="space-y-1.5">
             <Field
@@ -582,6 +567,42 @@ function StreamSettings() {
 }
 
 /**
+ * The volume slider, with its persistence off the drag path.
+ *
+ * Dragging used to call `patchPrefs` per pointer event, which is a
+ * `JSON.stringify` of the whole prefs blob plus a synchronous localStorage
+ * write plus a re-render of everything subscribed to prefs, up to 120 times
+ * a second on the tablet this runs on. The ear needs `audio.setVolume` per
+ * event; the disk only needs the value you let go at.
+ */
+function VolumeRow({ saved }: { saved: number }) {
+  const [live, setLive] = useState<number | null>(null)
+  const volume = live ?? saved
+  return (
+    <FieldRow>
+      <Field label="Volume" hint={`${Math.round(volume * 100)}%`} />
+      <Slider
+        className="w-40"
+        min={0}
+        max={1}
+        step={0.05}
+        value={[volume]}
+        onValueChange={([value]) => {
+          const next = value ?? 1
+          setLive(next)
+          audio.setVolume(next)
+        }}
+        onValueCommit={([value]) => {
+          patchPrefs("stream", { volume: value ?? 1 })
+          setLive(null)
+        }}
+        aria-label="Volume"
+      />
+    </FieldRow>
+  )
+}
+
+/**
  * Whether this is an Apple mobile device, for the mute-switch note.
  *
  * An iPad in desktop mode reports itself as a Macintosh, so the touch count is
@@ -603,7 +624,21 @@ function isApple(): boolean {
 function AudioDiagnostics() {
   const [state, setState] = useState(() => audio.diagnostics())
   useEffect(() => {
-    const timer = setInterval(() => setState(audio.diagnostics()), 700)
+    // Bail when nothing moved: `diagnostics()` returns a fresh object every
+    // call, so setting it unconditionally re-rendered this panel every tick
+    // even while every number stood still.
+    const timer = setInterval(
+      () =>
+        setState((last) => {
+          const next = audio.diagnostics()
+          return (Object.keys(next) as (keyof typeof next)[]).every(
+            (key) => next[key] === last[key],
+          )
+            ? last
+            : next
+        }),
+      700,
+    )
     return () => clearInterval(timer)
   }, [])
 
@@ -620,9 +655,26 @@ function AudioDiagnostics() {
       <dl className="space-y-1">
         <Readout label="Audio context" value={state.contextState} />
         <Readout label="Playback path" value={state.path} />
+        <Readout
+          label="From the machine"
+          value={
+            state.wire === "none"
+              ? "nothing yet"
+              : state.wire === "opus"
+                ? `Opus, ${state.wireKbits > 0 ? `${state.wireKbits} kbit/s` : "measuring"}`
+                : "raw PCM, 1536 kbit/s"
+          }
+        />
         <Readout label="Chunks received" value={String(state.chunks)} />
         <Readout label="Dropouts" value={String(state.underruns)} />
       </dl>
+      {state.wire === "pcm" ? (
+        <p className="pt-1 text-muted-foreground">
+          Uncompressed audio. This costs more bandwidth than the whole video
+          stream at its floor and cannot adapt; it should only ever appear if
+          the Opus decoder failed to load.
+        </p>
+      ) : null}
       {stalled ? (
         <p className="pt-1 text-muted-foreground">
           The browser has not started audio. Tap anywhere on the page: it will

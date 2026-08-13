@@ -65,14 +65,17 @@ export interface ConnectionHandlers {
   onMessage: (message: ToShell) => void
   /** A window's pixels. Binary frames, not JSON. */
   onFrame: (frame: DecodedFrame) => void
-  /** One chunk of PCM. Interleaved 16-bit, at the header's rate. */
   /**
    * One chunk of audio, with what it is.
    *
-   * The format can change mid-stream: a listener joining who cannot decode
-   * Opus drops everyone back to PCM, and each chunk says which it is.
+   * The format can change mid-stream (the engine picks per listener and says
+   * so on every chunk), so each chunk declares which it is. The payload is a
+   * *view into the socket message*, not a copy: the handler may transfer the
+   * underlying buffer or read through the view, but must not assume the
+   * payload starts at byte zero. Copying 3840 bytes fifty times a second
+   * was pure garbage-collector feed, so nothing on this path copies.
    */
-  onAudio: (chunk: ArrayBuffer, format: AudioFormat, frames: number) => void
+  onAudio: (payload: Uint8Array, format: AudioFormat, frames: number) => void
   onStatus: (status: Status, detail?: string) => void
 }
 
@@ -204,17 +207,9 @@ export class Connection {
         // there are more audio chunks per second than video frames.
         const audio = decodeAudio(event.data)
         if (audio) {
-          // Sliced rather than passed whole, because the worklet takes
-          // ownership of the buffer it is given and the header is not part of
-          // what it should play.
-          this.#handlers.onAudio(
-            audio.payload.buffer.slice(
-              audio.payload.byteOffset,
-              audio.payload.byteOffset + audio.payload.byteLength,
-            ) as ArrayBuffer,
-            audio.header.format,
-            audio.header.frames,
-          )
+          // The view, not a copy. Nothing else reads this message after the
+          // handler, so the handler owns the buffer behind the view.
+          this.#handlers.onAudio(audio.payload, audio.header.format, audio.header.frames)
           return
         }
         const frame = decodeFrame(event.data)

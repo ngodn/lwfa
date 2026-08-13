@@ -134,53 +134,32 @@ describe("choosing for everyone at once", () => {
 })
 
 /**
- * Audio: one capture is fanned out to every listener, so it can only be
- * compressed when all of them can decode it. `AudioDecoder` is secure-context
- * only, exactly like `VideoDecoder`, so a page on plain HTTP cannot however new
- * the browser is.
+ * Audio: the shell bundles a WASM Opus decoder, so "can this client decode
+ * Opus" is a property of the bundle, not the browser. These tests pin that:
+ * the old environment-dependent answer is what silently put every listener
+ * on raw PCM at 1.5 Mbit/s whenever one browser lacked an `AudioDecoder`
+ * (any Safari before 26, or any page on plain HTTP).
  */
 describe("asking about Opus", () => {
   afterEach(() => {
     Object.defineProperty(globalThis, "AudioDecoder", { value: undefined, configurable: true })
   })
 
-  const withAudioDecoder = (supported: boolean | "throws" | null) => {
-    Object.defineProperty(globalThis, "AudioDecoder", {
-      value:
-        supported === null
-          ? undefined
-          : {
-              isConfigSupported: async () => {
-                if (supported === "throws") throw new TypeError("bad")
-                return { supported }
-              },
-            },
-      configurable: true,
-    })
-  }
-
-  it("says yes when the browser accepts it", async () => {
+  it("says yes even where there is no AudioDecoder at all", async () => {
+    // Plain HTTP over a LAN, which is exactly how a tablet reaches this. The
+    // WASM decoder needs no secure context, so the answer no longer depends
+    // on the origin.
     const { decodesOpus } = await import("../src/lib/codecs")
-    withAudioDecoder(true)
+    Object.defineProperty(globalThis, "AudioDecoder", { value: undefined, configurable: true })
     expect(await decodesOpus()).toBe(true)
   })
 
-  it("says no when the browser refuses it", async () => {
+  it("says yes with a native decoder present too", async () => {
     const { decodesOpus } = await import("../src/lib/codecs")
-    withAudioDecoder(false)
-    expect(await decodesOpus()).toBe(false)
-  })
-
-  it("says no where there is no AudioDecoder at all", async () => {
-    // Plain HTTP over a LAN, which is exactly how a tablet reaches this.
-    const { decodesOpus } = await import("../src/lib/codecs")
-    withAudioDecoder(null)
-    expect(await decodesOpus()).toBe(false)
-  })
-
-  it("says no rather than throwing", async () => {
-    const { decodesOpus } = await import("../src/lib/codecs")
-    withAudioDecoder("throws")
-    expect(await decodesOpus()).toBe(false)
+    Object.defineProperty(globalThis, "AudioDecoder", {
+      value: { isConfigSupported: async () => ({ supported: true }) },
+      configurable: true,
+    })
+    expect(await decodesOpus()).toBe(true)
   })
 })

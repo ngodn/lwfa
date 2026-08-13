@@ -781,19 +781,26 @@ export function App(): React.ReactElement {
 
     // One decoder for the session: Opus predicts from previous packets, so it
     // has to persist across them.
-    const opusStream = new OpusStream((pcm) => audio.play(pcm));
+    const opusStream = new OpusStream((left, right) => audio.playPlanar(left, right));
 
     const conn = new Connection(engineUrl(password), {
       onMessage: handleMessage,
       onFrame: handleFrame,
-      onAudio: (chunk, format, frames) => {
-        // Opus is decoded into the PCM the player already takes, rather than
-        // giving the player a second way to make sound. See `lib/opus`.
+      onAudio: (payload, format, frames) => {
+        // Opus is decoded into the float planes the player takes directly,
+        // rather than giving the player a second way to make sound. See
+        // `lib/opus`.
         if (format === AudioFormat.Opus) {
-          opusStream.push(chunk, frames);
+          audio.noteWire("opus", payload.byteLength);
+          opusStream.push(payload, frames);
           return;
         }
-        audio.play(chunk);
+        audio.noteWire("pcm", payload.byteLength);
+        // A view over an even byte offset: the wire header is 16 bytes, and
+        // Int16Array insists on alignment.
+        audio.play(
+          new Int16Array(payload.buffer, payload.byteOffset, payload.byteLength >> 1),
+        );
       },
       onStatus: (s, detail) => {
         setStatus(s);
@@ -1038,7 +1045,10 @@ export function App(): React.ReactElement {
         .filter((w) => intersectsViewport(w.rect, output, configRef.current))
         .map((w) => w.id),
     );
-  }, [streaming, placed, output.width]);
+    // Both dimensions: a height-only viewport change moves windows in and out
+    // of view exactly like a width change, and the deps used to say width
+    // alone, leaving the streamed set stale until something else nudged it.
+  }, [streaming, placed, output.width, output.height]);
 
   const focusedId = focusedWindow(strip);
 
