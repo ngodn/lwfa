@@ -99,10 +99,8 @@ function claimMediaChannel(): void {
   const element = document.createElement("audio")
   element.loop = true
   element.setAttribute("playsinline", "")
-  // A minimal silent WAV. Inline rather than a file, because it must be
-  // available before anything else loads and it is 200 bytes.
-  element.src =
-    "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA="
+  unmuterUrl = URL.createObjectURL(new Blob([silentWav()], { type: "audio/wav" }))
+  element.src = unmuterUrl
   element.volume = 0.001
   void element.play().catch(() => {
     // Blocked until a gesture, same as the context. `unlock` retries both.
@@ -110,18 +108,52 @@ function claimMediaChannel(): void {
   unmuter = element
 }
 
+/** The blob URL behind the unmuter, revoked when the graph is torn down. */
+let unmuterUrl: string | null = null
+
+/**
+ * A tenth of a second of genuine silence, as a WAV.
+ *
+ * Generated rather than inlined because the inlined version this replaces
+ * was the worst bug in the project: its `data` chunk declared zero samples,
+ * and a media element looping zero-duration audio seeks forever as fast as
+ * the main thread allows. Enabling audio wedged the entire page within
+ * seconds, in every browser, which users experienced as "the stream is
+ * fine until I turn sound on, and only restarting the browser helps".
+ * Reproduced against a blank page with nothing but that element on it.
+ *
+ * 100ms looping ten times a second is inaudible and costs nothing, and the
+ * test suite now asserts the data chunk is never empty again.
+ */
+export function silentWav(): ArrayBuffer {
+  const rate = 8000
+  const samples = rate / 10
+  const wav = new DataView(new ArrayBuffer(44 + samples * 2))
+  const tag = (at: number, text: string) => {
+    for (let i = 0; i < text.length; i++) wav.setUint8(at + i, text.charCodeAt(i))
+  }
+  tag(0, "RIFF")
+  wav.setUint32(4, 36 + samples * 2, true)
+  tag(8, "WAVE")
+  tag(12, "fmt ")
+  wav.setUint32(16, 16, true) // fmt chunk length
+  wav.setUint16(20, 1, true) // PCM
+  wav.setUint16(22, 1, true) // mono
+  wav.setUint32(24, rate, true)
+  wav.setUint32(28, rate * 2, true) // bytes per second
+  wav.setUint16(32, 2, true) // bytes per frame
+  wav.setUint16(34, 16, true) // bits per sample
+  tag(36, "data")
+  wav.setUint32(40, samples * 2, true)
+  // The samples themselves stay zero: that is the silence.
+  return wav.buffer
+}
+
 /** Cushion to keep between the clock and the next chunk, in seconds. */
 const CUSHION = 0.06
 
 /** Never let scheduled audio run further ahead than this, in seconds. */
 const MAX_LEAD = 0.25
-
-/** Listener for the underrun count, so the UI can say whether audio is healthy. */
-let onUnderrun: ((count: number) => void) | null = null
-
-export function watchUnderruns(listener: ((count: number) => void) | null): void {
-  onUnderrun = listener
-}
 
 /**
  * Build the graph, once.
@@ -165,10 +197,7 @@ export async function start(): Promise<boolean> {
           })
           player.port.onmessage = (event) => {
             const count = (event.data as { underruns?: number }).underruns
-            if (typeof count === "number") {
-              underruns = count
-              onUnderrun?.(count)
-            }
+            if (typeof count === "number") underruns = count
           }
           player.connect(volume)
           node = player
@@ -211,6 +240,10 @@ export async function stop(): Promise<void> {
   unmuter?.pause()
   unmuter?.remove()
   unmuter = null
+  if (unmuterUrl) {
+    URL.revokeObjectURL(unmuterUrl)
+    unmuterUrl = null
+  }
   await context?.close().catch(() => {})
   context = null
   node = null
@@ -218,38 +251,83 @@ export async function stop(): Promise<void> {
   playhead = 0
   underruns = 0
   chunksPlayed = 0
+  wireFormat = "none"
+  windowStart = 0
+  windowBytes = 0
+  wireKbits = 0
 }
 
-/** Hand a chunk of interleaved 16-bit PCM to whichever player is running. */
-export function play(pcm: ArrayBuffer): void {
+/**
+ * Hand a chunk of interleaved 16-bit PCM to whichever player is running.
+ *
+ * Takes a *view* rather than a buffer so the caller never has to copy the
+ * payload out from behind its wire header: the worklet is handed the whole
+ * underlying buffer plus the view's position in it, transferred, and the
+ * fallback reads through the view in place. Either way the samples cross
+ * zero times on the main thread.
+ */
+export function play(samples: Int16Array): void {
   chunksPlayed++
   if (node) {
-    // Transferred, not copied: this buffer came straight off the socket and
-    // nothing else refers to it, so moving it costs nothing and copying a
-    // hundred kilobytes a second would.
-    node.port.postMessage(pcm, [pcm])
+    const buffer = samples.buffer as ArrayBuffer
+    node.port.postMessage(
+      { pcm: buffer, at: samples.byteOffset, length: samples.length },
+      [buffer],
+    )
     return
   }
-  schedule(pcm)
+  schedule(samples)
+}
+
+/**
+ * Hand a decoded chunk over as float planes, one per ear.
+ *
+ * This is what the Opus path produces, and it is also exactly what both
+ * players store, so nothing here or downstream converts a sample. The old
+ * shape went float to int16 to float again, 96000 samples a second of loop
+ * work on the main thread for no gain at all.
+ */
+export function playPlanar(left: Float32Array, right: Float32Array): void {
+  chunksPlayed++
+  if (node) {
+    // Two distinct buffers by construction (see `PlanarSink`), so both can
+    // be transferred.
+    node.port.postMessage({ planes: [left, right] }, [
+      left.buffer as ArrayBuffer,
+      right.buffer as ArrayBuffer,
+    ])
+    return
+  }
+
+  const start = reserve(left.length)
+  if (start === null) return
+  const ctx = context!
+  const buffer = ctx.createBuffer(2, left.length, ctx.sampleRate)
+  // The casts only narrow ArrayBufferLike to ArrayBuffer: decoded planes are
+  // never SharedArrayBuffer-backed, but the decoder types cannot say so.
+  buffer.copyToChannel(left as Float32Array<ArrayBuffer>, 0)
+  buffer.copyToChannel(right as Float32Array<ArrayBuffer>, 1)
+  begin(buffer, start)
 }
 
 /**
  * The no-worklet path: turn a chunk into a buffer and start it at a known time.
  *
  * The times are computed, not measured, so consecutive chunks butt together
- * exactly and there is no seam. Everything else here is about keeping the
- * playhead in a sensible relationship with the clock.
+ * exactly and there is no seam.
  */
-function schedule(pcm: ArrayBuffer): void {
-  const ctx = context
-  const out = gain
-  if (!ctx || !out || ctx.state !== "running") return
-
-  const samples = new Int16Array(pcm)
+function schedule(samples: Int16Array): void {
   const channels = 2
   const frames = Math.floor(samples.length / channels)
   if (frames === 0) return
 
+  // Claim the slot *before* converting: a chunk this is about to discard
+  // (a burst after a stall, exactly when the main thread is already behind)
+  // should not pay for a buffer and two thousand loop iterations first.
+  const start = reserve(frames)
+  if (start === null) return
+
+  const ctx = context!
   const buffer = ctx.createBuffer(channels, frames, ctx.sampleRate)
   for (let c = 0; c < channels; c++) {
     const channel = buffer.getChannelData(c)
@@ -259,6 +337,18 @@ function schedule(pcm: ArrayBuffer): void {
       channel[i] = samples[i * channels + c]! / 32768
     }
   }
+  begin(buffer, start)
+}
+
+/**
+ * Where this many frames should start playing, or null to drop the chunk.
+ *
+ * Everything about keeping the playhead in a sensible relationship with the
+ * clock lives here, shared by the int16 and planar paths.
+ */
+function reserve(frames: number): number | null {
+  const ctx = context
+  if (!ctx || !gain || ctx.state !== "running") return null
 
   const now = ctx.currentTime
 
@@ -266,23 +356,25 @@ function schedule(pcm: ArrayBuffer): void {
   // immediately and overlaps whatever is already sounding, so re-anchor ahead
   // of the clock instead.
   if (playhead < now + 0.005) {
-    if (playhead !== 0) {
-      underruns++
-      onUnderrun?.(underruns)
-    }
+    if (playhead !== 0) underruns++
     playhead = now + CUSHION
   }
 
   // Too far ahead: a burst after a stall, or a producer faster than this
   // clock. Playing all of it would mean drifting further behind the picture
   // every second, so drop rather than queue.
-  if (playhead > now + MAX_LEAD) return
+  if (playhead > now + MAX_LEAD) return null
 
-  const source = ctx.createBufferSource()
-  source.buffer = buffer
-  source.connect(out)
-  source.start(playhead)
+  const start = playhead
   playhead += frames / ctx.sampleRate
+  return start
+}
+
+function begin(buffer: AudioBuffer, start: number): void {
+  const source = context!.createBufferSource()
+  source.buffer = buffer
+  source.connect(gain!)
+  source.start(start)
 }
 
 /** Drop anything buffered. Used when the stream stops, so it does not resume stale. */
@@ -321,6 +413,34 @@ export function underrunCount(): number {
 /** Chunks handed to a player since the graph was built. */
 let chunksPlayed = 0
 
+/** What the engine is sending: format of the last chunk, plus a rate window. */
+let wireFormat: "opus" | "pcm" | "none" = "none"
+let windowStart = 0
+let windowBytes = 0
+let wireKbits = 0
+
+/**
+ * Record one wire chunk, for the diagnostics readout.
+ *
+ * The format matters more than the number next to it: raw PCM is a fixed
+ * 1.5 Mbit/s that no quality setting or adaptive budget can shrink, and for
+ * a long time nothing anywhere reported which format a session was actually
+ * getting. This is the client half of making that visible; the engine logs
+ * the other half.
+ */
+export function noteWire(format: "opus" | "pcm", bytes: number): void {
+  wireFormat = format
+  const now = performance.now()
+  if (windowStart === 0) windowStart = now
+  windowBytes += bytes
+  const elapsed = now - windowStart
+  if (elapsed >= 1000) {
+    wireKbits = Math.round((windowBytes * 8) / elapsed)
+    windowStart = now
+    windowBytes = 0
+  }
+}
+
 /**
  * Everything needed to tell where audio stopped, without a debugger.
  *
@@ -336,6 +456,8 @@ export function diagnostics(): {
   chunks: number
   underruns: number
   sampleRate: number
+  wire: "opus" | "pcm" | "none"
+  wireKbits: number
 } {
   return {
     contextState: context?.state ?? "none",
@@ -343,6 +465,8 @@ export function diagnostics(): {
     chunks: chunksPlayed,
     underruns,
     sampleRate: context?.sampleRate ?? 0,
+    wire: wireFormat,
+    wireKbits,
   }
 }
 
@@ -365,11 +489,16 @@ async function resume(): Promise<void> {
 export function unlock(): () => void {
   const events = ["pointerdown", "keydown", "touchstart"] as const
   const handler = () => {
-    void resume()
+    // Checked after the resume settles, not on the same tick: `resume()` is
+    // async, so checking immediately always saw "suspended" and the
+    // listeners survived the very gesture that unlocked audio, then fired on
+    // every tap and drag until the next one.
+    void resume().then(() => {
+      if (context?.state === "running") remove()
+    })
     // The silent element is blocked by autoplay rules too, and it is the half
     // that decides whether anything is audible at all on a muted iPad.
     if (unmuter?.paused) void unmuter.play().catch(() => {})
-    if (context?.state === "running") remove()
   }
   const remove = () => {
     for (const event of events) document.removeEventListener(event, handler)

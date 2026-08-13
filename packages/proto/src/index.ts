@@ -1603,19 +1603,20 @@ export interface DecodedAudio {
  */
 export function decodeAudio(buffer: ArrayBuffer): DecodedAudio | null {
   if (buffer.byteLength < AUDIO_HEADER_LEN) return null
-  const bytes = new Uint8Array(buffer)
+  // One DataView for everything, and the byte wrapper only once the magic
+  // matches. This runs on every binary message, and for a video frame (the
+  // majority, times the number of streamed windows) the answer is "not
+  // audio" four bytes in; it should not cost allocations to say so.
+  const view = new DataView(buffer)
 
-  for (let i = 0; i < AUDIO_MAGIC.length; i++) {
-    if (bytes[i] !== AUDIO_MAGIC[i]) return null
-  }
-  if (bytes[4] !== FRAME_VERSION) return null
-  const format = bytes[5]
+  if (view.getUint32(0, true) !== AUDIO_MAGIC_LE) return null
+  if (view.getUint8(4) !== FRAME_VERSION) return null
+  const format = view.getUint8(5)
   if (format !== AudioFormat.Pcm16 && format !== AudioFormat.Opus) return null
 
-  const channels = bytes[6] ?? 0
+  const channels = view.getUint8(6)
   if (channels === 0 || channels > 8) return null
 
-  const view = new DataView(buffer)
   const sampleRate = view.getUint32(8, true)
   const frames = view.getUint32(12, true)
   if (sampleRate === 0 || frames === 0) return null
@@ -1637,29 +1638,27 @@ export function decodeAudio(buffer: ArrayBuffer): DecodedAudio | null {
 
   return {
     header: { format, channels, sampleRate, frames },
-    payload: bytes.subarray(AUDIO_HEADER_LEN),
+    payload: new Uint8Array(buffer, AUDIO_HEADER_LEN),
   }
 }
 
 export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
   if (buffer.byteLength < FRAME_HEADER_LEN) return null
-  const bytes = new Uint8Array(buffer)
+  // Same shape as `decodeAudio`, for the same hot-path reason.
+  const view = new DataView(buffer)
 
-  for (let i = 0; i < FRAME_MAGIC.length; i++) {
-    if (bytes[i] !== FRAME_MAGIC[i]) return null
-  }
-  if (bytes[4] !== FRAME_VERSION) return null
-  const format = bytes[5]
+  if (view.getUint32(0, true) !== FRAME_MAGIC_LE) return null
+  if (view.getUint8(4) !== FRAME_VERSION) return null
+  const format = view.getUint8(5)
   if (format !== FrameFormat.Jpeg && format !== FrameFormat.H264 && format !== FrameFormat.Hevc)
     return null
-  const keyframe = ((bytes[6] ?? 0) & FLAG_KEYFRAME) !== 0
+  const keyframe = (view.getUint8(6) & FLAG_KEYFRAME) !== 0
 
-  const view = new DataView(buffer)
   // Window ids are u64 on the wire. Reading as BigInt and narrowing keeps this
   // honest: ids beyond 2^53 would silently collide if read as a float, and
   // that would show pixels in the wrong window.
   const id = view.getBigUint64(8, true)
-  if (id > BigInt(Number.MAX_SAFE_INTEGER)) return null
+  if (id > MAX_SAFE_ID) return null
 
   const width = view.getUint32(16, true)
   const height = view.getUint32(20, true)
@@ -1667,6 +1666,17 @@ export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
 
   return {
     header: { window: Number(id), width, height, format, keyframe },
-    payload: bytes.subarray(FRAME_HEADER_LEN),
+    payload: new Uint8Array(buffer, FRAME_HEADER_LEN),
   }
+}
+
+/** Hoisted off the per-frame path: building a BigInt is an allocation. */
+const MAX_SAFE_ID = BigInt(Number.MAX_SAFE_INTEGER)
+
+/** The magics as little-endian u32s, so the reject path is one comparison. */
+const AUDIO_MAGIC_LE = magicLe(AUDIO_MAGIC)
+const FRAME_MAGIC_LE = magicLe(FRAME_MAGIC)
+
+function magicLe(magic: readonly [number, number, number, number]): number {
+  return (magic[0] | (magic[1] << 8) | (magic[2] << 16) | (magic[3] << 24)) >>> 0
 }

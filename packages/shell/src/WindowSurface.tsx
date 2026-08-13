@@ -88,6 +88,11 @@ export const WindowSurface = memo(function WindowSurface({
   onInput,
 }: WindowSurfaceProps): React.ReactElement {
   const canvas = useRef<HTMLCanvasElement>(null)
+  const ctx2d = useRef<CanvasRenderingContext2D | null>(null)
+  // Where each pointer last was, so an event that did not actually move it
+  // (pressure change, a finger resting) costs nothing. On a 120Hz tablet a
+  // drag is up to 120 serialized sends a second; the still ones are free.
+  const lastMove = useRef(new Map<number, { x: number; y: number }>())
   /** When this window was last measured, so the probe cannot flood the log. */
   const probedAt = useRef(0)
   /** Turns a held finger into a right click. See `lib/longPress`. */
@@ -180,7 +185,13 @@ export const WindowSurface = memo(function WindowSurface({
       el.height = frame.height
     }
 
-    const ctx = el.getContext("2d", { alpha: false })
+    // Looked up once per canvas, not per frame. The browser caches the
+    // context internally, but the lookup plus its options object were still
+    // paid thirty to sixty times a second per streamed window.
+    if (ctx2d.current?.canvas !== el) {
+      ctx2d.current = el.getContext("2d", { alpha: false })
+    }
+    const ctx = ctx2d.current
     if (!ctx) return
     try {
       ctx.drawImage(frame, 0, 0)
@@ -248,6 +259,7 @@ export const WindowSurface = memo(function WindowSurface({
         // Capture, so a drag that leaves the element still delivers its
         // release. Without this a client is left with a button stuck down.
         event.currentTarget.setPointerCapture(event.pointerId)
+        lastMove.current.set(event.pointerId, point)
 
         if (event.pointerType === "touch") {
           send({ kind: "touchDown", id: event.pointerId, ...point })
@@ -282,6 +294,9 @@ export const WindowSurface = memo(function WindowSurface({
         // further motion for it would reopen a gesture the client thinks is
         // over.
         if (event.pointerType === "touch" && longPress.current.fired) return
+        const last = lastMove.current.get(event.pointerId)
+        if (last && last.x === point.x && last.y === point.y) return
+        lastMove.current.set(event.pointerId, point)
         send(
           event.pointerType === "touch"
             ? { kind: "touchMotion", id: event.pointerId, ...point }
@@ -289,6 +304,7 @@ export const WindowSurface = memo(function WindowSurface({
         )
       }}
       onPointerUp={(event) => {
+        lastMove.current.delete(event.pointerId)
         if (event.pointerType === "touch") {
           // A press that became a right click already sent its release, and
           // sending the tap as well would open a menu and immediately choose
@@ -301,6 +317,7 @@ export const WindowSurface = memo(function WindowSurface({
         if (button !== null) send({ kind: "button", button, pressed: false })
       }}
       onPointerCancel={(event) => {
+        lastMove.current.delete(event.pointerId)
         if (event.pointerType !== "touch") return
         if (longPress.current.finish()) return
         send({ kind: "touchUp", id: event.pointerId })

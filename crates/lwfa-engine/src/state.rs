@@ -783,17 +783,18 @@ impl Lwfa {
                 let device = self.config.audio.device.clone().or_else(|| {
                     private.then(|| crate::sink::MONITOR.to_string())
                 });
-                let opus = self.everyone_decodes_opus();
-                self.audio = crate::audio::start(device.as_deref(), opus, move |chunk| {
+                let (opus, pcm) = self.audio_formats();
+                self.audio = crate::audio::start(device.as_deref(), opus, pcm, move |chunk| {
                     clients.send_audio(chunk);
                 });
             }
             (true, true) => {
                 // Already capturing. A listener joining or leaving can change
-                // whether compression is safe, and that takes effect on the
+                // which encodings are needed, and that takes effect on the
                 // next chunk rather than needing the capture restarted.
                 if let Some(capture) = self.audio.as_ref() {
-                    capture.set_opus(self.everyone_decodes_opus());
+                    let (opus, pcm) = self.audio_formats();
+                    capture.set_formats(opus, pcm);
                 }
             }
             (false, true) => {
@@ -858,15 +859,27 @@ impl Lwfa {
     /// nothing. Sessions that have not yet said are ignored rather than
     /// assumed, since assuming either way is wrong for one of them. See
     /// [`lwfa_proto::Codec::best_for_all`].
-    /// Can every listener decode Opus?
+    /// Which audio encodings the current listeners need: `(opus, pcm)`.
     ///
-    /// One capture is fanned out to all of them, so compressing it when one
-    /// cannot decode it would leave that one in silence. Only sessions that
-    /// are actually listening are asked: somebody with audio switched off has
-    /// no say in what the listeners get.
-    pub fn everyone_decodes_opus(&self) -> bool {
-        let mut listening = self.sessions.values().filter(|s| s.audio).peekable();
-        listening.peek().is_some() && listening.all(|s| s.opus)
+    /// Per listener, not negotiated across them. This used to be "Opus only
+    /// if everyone decodes it", which let a single browser without an
+    /// `AudioDecoder` (any Safari before 26, or any page on plain HTTP) drag
+    /// every other device onto raw PCM at 1.5 Mbit/s, a load no bitrate
+    /// setting could shrink. Now the capture builds each encoding exactly
+    /// when some listener needs it and each client is sent its own. Only
+    /// sessions actually listening are counted: somebody with audio switched
+    /// off has no say in what the listeners get.
+    pub fn audio_formats(&self) -> (bool, bool) {
+        let mut opus = false;
+        let mut pcm = false;
+        for session in self.sessions.values().filter(|s| s.audio) {
+            if session.opus {
+                opus = true;
+            } else {
+                pcm = true;
+            }
+        }
+        (opus, pcm)
     }
 
     pub fn codec_for_all(&self) -> Option<lwfa_proto::Codec> {

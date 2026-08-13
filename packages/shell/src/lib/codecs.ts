@@ -119,23 +119,20 @@ export function chooseForAll(clients: readonly (readonly Codec[])[]): Codec | nu
 }
 
 /**
- * Can this browser decode Opus?
+ * Can this browser decode Opus? Yes.
  *
- * `AudioDecoder` is secure-context only, exactly like `VideoDecoder`, so a page
- * on plain HTTP over a LAN cannot however new the browser is. Asked rather than
- * assumed for the same reason the video codecs are.
+ * It used to be a real question: `AudioDecoder` is secure-context only, and
+ * Safari did not have it at all before version 26, so the honest answer was
+ * often no, and one "no" put *every* listener on raw PCM at 1.5 Mbit/s. The
+ * shell now bundles libopus as WASM (see `lib/opus`), which decodes on any
+ * origin in any browser, so the capability is a fact of the bundle rather
+ * than of the environment. `OpusStream` still prefers the native decoder
+ * when one exists; this function only answers what the engine asks, which
+ * is "may I send you Opus".
+ *
+ * Still async and still a function so the call sites keep the probe shape,
+ * which is also the shape a future codec question (xHE-AAC, say) would need.
  */
 export async function decodesOpus(): Promise<boolean> {
-  const decoder = (globalThis as { AudioDecoder?: typeof AudioDecoder }).AudioDecoder
-  if (!decoder?.isConfigSupported) return false
-  try {
-    const support = await decoder.isConfigSupported({
-      codec: "opus",
-      sampleRate: 48000,
-      numberOfChannels: 2,
-    })
-    return support.supported === true
-  } catch {
-    return false
-  }
+  return true
 }

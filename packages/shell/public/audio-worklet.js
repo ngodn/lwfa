@@ -67,21 +67,55 @@ class PcmPlayer extends AudioWorkletProcessor {
         this.priming = true
         return
       }
+      // Decoded Opus arrives as float planes, which is what the ring already
+      // stores, so it goes straight in with no per-sample conversion.
+      if (data.planes) {
+        this.#pushPlanes(data.planes[0], data.planes[1])
+        return
+      }
+      // Wire PCM arrives as the whole socket message, transferred, with the
+      // sample view's position in it. Sent that way so the main thread never
+      // has to copy the payload out from behind the header.
+      if (data.pcm) {
+        this.#push(new Int16Array(data.pcm, data.at, data.length))
+        return
+      }
       if (data instanceof ArrayBuffer) this.#push(new Int16Array(data))
     }
   }
 
-  /** Convert interleaved 16-bit samples into the planar ring. */
-  #push(samples) {
-    const frames = Math.floor(samples.length / this.channels)
-
-    // Too far behind: drop the oldest rather than grow the delay without
-    // bound. See the note on latency above.
+  /** Make room for this many frames, dropping the oldest when too far behind. */
+  #reserve(frames) {
+    // See the note on latency above: bounded, not minimised.
     if (this.available + frames > MAX_FRAMES) {
       const drop = this.available + frames - MAX_FRAMES
       this.read = (this.read + drop) % CAPACITY
       this.available -= drop
     }
+  }
+
+  #commit(frames) {
+    this.write = (this.write + frames) % CAPACITY
+    this.available += frames
+    if (this.priming && this.available >= PREBUFFER_FRAMES) this.priming = false
+  }
+
+  /** Copy float planes into the planar ring. Already the ring's own format. */
+  #pushPlanes(left, right) {
+    const frames = left.length
+    this.#reserve(frames)
+    for (let i = 0; i < frames; i++) {
+      const at = (this.write + i) % CAPACITY
+      this.ring[0][at] = left[i]
+      this.ring[1][at] = right[i]
+    }
+    this.#commit(frames)
+  }
+
+  /** Convert interleaved 16-bit samples into the planar ring. */
+  #push(samples) {
+    const frames = Math.floor(samples.length / this.channels)
+    this.#reserve(frames)
 
     for (let i = 0; i < frames; i++) {
       const at = (this.write + i) % CAPACITY
@@ -92,10 +126,7 @@ class PcmPlayer extends AudioWorkletProcessor {
         this.ring[c][at] = samples[i * this.channels + c] / 32768
       }
     }
-    this.write = (this.write + frames) % CAPACITY
-    this.available += frames
-
-    if (this.priming && this.available >= PREBUFFER_FRAMES) this.priming = false
+    this.#commit(frames)
   }
 
   process(_inputs, outputs) {

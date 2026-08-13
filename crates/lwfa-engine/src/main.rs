@@ -1151,7 +1151,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             // speakers, so the last session to express a preference wins.
             state.audio_sink.set_local_playback(local);
             if let Some(shell) = state.shell.as_ref() {
-                shell.clients().set_audio(session, enabled);
+                shell.clients().set_audio(session, enabled, opus);
             }
             state.sync_audio_capture();
             state.sync_audio_bitrate();
