@@ -91,6 +91,22 @@ const MAX_CLIMB_WAIT: Duration = Duration::from_secs(120);
 /// evening cautious.
 const BACKOFF_RESET: Duration = Duration::from_secs(300);
 
+/// How many of its own waits a link must stay quiet before the wait shrinks.
+///
+/// The backoff doubles per episode and, until this existed, only ever came
+/// back through [`BACKOFF_RESET`]: five unbroken minutes with no congestion
+/// at all. A link that hiccups every couple of minutes never gets five, so
+/// the wait ratcheted to [`MAX_CLIMB_WAIT`] and stayed there for the session,
+/// and a budget that had fallen to the floor took a quarter of an hour to
+/// climb out. Observed doing exactly that: 24 Mbit/s down to 500 kbit/s in
+/// two and a half minutes, then eleven minutes at or near the floor.
+///
+/// Three, not two, and measured against the wait itself rather than a fixed
+/// period. Doubling fires on one episode; this needs three consecutive
+/// climbs to have survived, so the two cannot cancel out and a link that
+/// really does fail at a level still backs away from it.
+const PATIENCE_DECAY: u32 = 3;
+
 /// Probe delay above a connection's baseline that counts as congestion.
 ///
 /// The probes ride the same stream as the frames, so this is time a byte
@@ -106,6 +122,46 @@ pub const QUEUE_DELAY_LIMIT: Duration = Duration::from_millis(75);
 /// burst of traffic, so reacting to the congestion your own last change caused
 /// is a feedback loop.
 const SETTLE: Duration = Duration::from_secs(2);
+
+/// The longest a single cut may wait for its own queue to drain.
+///
+/// Without a bound, a pathologically buffered path (a wifi access point with
+/// seconds of queue, which is a real thing) would stall the controller
+/// entirely.
+const MAX_HOLD: Duration = Duration::from_secs(10);
+
+/// What the connection looks like on one pass.
+#[derive(Clone, Copy, Debug)]
+pub struct Signal {
+    /// Whether the link is behind, by either measure.
+    pub congested: bool,
+    /// How deep the queue is believed to be.
+    ///
+    /// Not used to decide anything, only to pace the deciding. A cut cannot
+    /// show up in the measurement until the queue that already exists has
+    /// drained, so a controller that cuts again before then is reacting to
+    /// the same event twice. That is how a 5 Mbit/s link with three seconds
+    /// of buffer in front of it walked the budget four steps past the level
+    /// it should have stopped at.
+    pub queueing: Duration,
+}
+
+impl Signal {
+    /// A link with nothing wrong with it.
+    pub fn clear() -> Self {
+        Self { congested: false, queueing: Duration::ZERO }
+    }
+
+    /// A link that is behind, with no queue measurement to pace cuts by.
+    pub fn congested() -> Self {
+        Self { congested: true, queueing: Duration::ZERO }
+    }
+
+    /// The same, with the queue depth that was measured.
+    pub fn with_queue(self, queueing: Duration) -> Self {
+        Self { queueing, ..self }
+    }
+}
 
 /// Tracks one connection's bitrate.
 pub struct Controller {
@@ -151,6 +207,11 @@ pub struct Controller {
     /// measure a stretch longer than `climb_wait` and cannot answer "has this
     /// link been quiet for a long time".
     congested_at: Instant,
+    /// How long to sit still after the last change.
+    ///
+    /// [`SETTLE`] plus however deep the queue was when the cut was made. See
+    /// [`Signal::queueing`].
+    hold: Duration,
 }
 
 impl Controller {
@@ -162,6 +223,7 @@ impl Controller {
             climb_wait: EAGER_CLIMB,
             was_congested: false,
             congested_at: now,
+            hold: SETTLE,
         }
     }
 
@@ -175,7 +237,8 @@ impl Controller {
     /// `congested` means the engine had a frame ready and nowhere to put it.
     /// Returns `Some` only on a change, so the caller can rebuild the encoder
     /// exactly when it has to.
-    pub fn observe(&mut self, congested: bool, now: Instant) -> Option<u32> {
+    pub fn observe(&mut self, signal: Signal, now: Instant) -> Option<u32> {
+        let congested = signal.congested;
         // The start of an episode, not every observation inside one. See
         // `climb_wait`.
         let episode_started = congested && !self.was_congested;
@@ -193,13 +256,17 @@ impl Controller {
         }
 
         // Nothing changes during the settling period, in either direction.
-        if now.duration_since(self.changed_at) < SETTLE {
+        if now.duration_since(self.changed_at) < self.hold {
             return None;
         }
 
         if congested && self.step > 0 {
             self.step -= 1;
             self.changed_at = now;
+            // Wait out the queue that already exists before judging the cut,
+            // or the same backlog is counted once per settling period and the
+            // budget falls far past where it should have stopped.
+            self.hold = SETTLE + signal.queueing.min(MAX_HOLD);
             return Some(self.bitrate());
         }
 
@@ -217,8 +284,24 @@ impl Controller {
 
         let clear_for = now.duration_since(self.clear_since);
         if !congested && self.step + 1 < STEPS.len() && clear_for >= self.climb_wait {
+            // Confidence has to return as well as leave. Checked here, at the
+            // moment of a climb, so it can fire at most once per climb rather
+            // than sixty times a second while the condition holds.
+            //
+            // Only ever shortens a wait that congestion lengthened. The floor
+            // here is `CLIMB_AFTER`, which is *longer* than the eager schedule
+            // a fresh link starts on, so without this guard the first climb of
+            // every clean session promoted 2s to 8s and the ramp to the
+            // ceiling took half a minute instead of eight seconds.
+            if self.climb_wait > CLIMB_AFTER
+                && now.duration_since(self.congested_at) >= self.climb_wait * PATIENCE_DECAY
+            {
+                self.climb_wait = (self.climb_wait / 2).max(CLIMB_AFTER);
+            }
             self.step += 1;
             self.changed_at = now;
+            // A climb adds no backlog, so it only owes the plain settle.
+            self.hold = SETTLE;
             // Reset, so the next climb waits the full period again rather than
             // stepping up every tick once the timer has expired once.
             self.clear_since = now;
@@ -252,7 +335,7 @@ mod tests {
         let base = Instant::now();
         let mut controller = Controller::new(base);
         let before = controller.bitrate();
-        let after = controller.observe(true, at(base, 3)).expect("should have dropped");
+        let after = controller.observe(Signal::congested(), at(base, 3)).expect("should have dropped");
         assert!(after < before, "{after} is not below {before}");
     }
 
@@ -260,8 +343,8 @@ mod tests {
     fn keeps_dropping_while_it_stays_congested() {
         let base = Instant::now();
         let mut controller = Controller::new(base);
-        let first = controller.observe(true, at(base, 3)).unwrap();
-        let second = controller.observe(true, at(base, 6)).unwrap();
+        let first = controller.observe(Signal::congested(), at(base, 3)).unwrap();
+        let second = controller.observe(Signal::congested(), at(base, 6)).unwrap();
         assert!(second < first);
     }
 
@@ -271,7 +354,7 @@ mod tests {
         let base = Instant::now();
         let mut controller = Controller::new(base);
         for i in 1..20 {
-            controller.observe(true, at(base, i * 3));
+            controller.observe(Signal::congested(), at(base, i * 3));
         }
         assert_eq!(controller.bitrate(), STEPS[0]);
     }
@@ -283,19 +366,19 @@ mod tests {
         // feedback loop.
         let base = Instant::now();
         let mut controller = Controller::new(base);
-        assert!(controller.observe(true, at(base, 3)).is_some());
-        assert!(controller.observe(true, at(base, 4)).is_none());
+        assert!(controller.observe(Signal::congested(), at(base, 3)).is_some());
+        assert!(controller.observe(Signal::congested(), at(base, 4)).is_none());
     }
 
     #[test]
     fn climbs_back_when_the_connection_stays_clear() {
         let base = Instant::now();
         let mut controller = Controller::new(base);
-        let dropped = controller.observe(true, at(base, 3)).unwrap();
+        let dropped = controller.observe(Signal::congested(), at(base, 3)).unwrap();
         // Clear from here on.
         let mut recovered = None;
         for i in 4..30 {
-            if let Some(rate) = controller.observe(false, at(base, i)) {
+            if let Some(rate) = controller.observe(Signal::clear(), at(base, i)) {
                 recovered = Some(rate);
                 break;
             }
@@ -312,14 +395,14 @@ mod tests {
         // overshooting up costs a stalled picture.
         let base = Instant::now();
         let mut controller = Controller::new(base);
-        controller.observe(true, at(base, 3)).expect("drops");
+        controller.observe(Signal::congested(), at(base, 3)).expect("drops");
 
         // A second drop needs one settling period.
         let mut fell_again = None;
         for i in 4..40 {
             let mut probe = Controller::new(base);
-            probe.observe(true, at(base, 3)).expect("drops");
-            if probe.observe(true, at(base, i)).is_some() {
+            probe.observe(Signal::congested(), at(base, 3)).expect("drops");
+            if probe.observe(Signal::congested(), at(base, i)).is_some() {
                 fell_again = Some(i - 3);
                 break;
             }
@@ -327,7 +410,7 @@ mod tests {
         // A climb after that drop waits much longer than a settle.
         let mut rose = None;
         for i in 4..40 {
-            if controller.observe(false, at(base, i)).is_some() {
+            if controller.observe(Signal::clear(), at(base, i)).is_some() {
                 rose = Some(i - 3);
                 break;
             }
@@ -346,7 +429,7 @@ mod tests {
         let base = Instant::now();
         let mut controller = Controller::new(base);
         for i in 1..=30 {
-            controller.observe(false, at(base, i));
+            controller.observe(Signal::clear(), at(base, i));
         }
         assert_eq!(controller.bitrate(), STEPS[STEPS.len() - 1]);
     }
@@ -357,15 +440,15 @@ mod tests {
         // upwards, which is exactly the connection that cannot afford it.
         let base = Instant::now();
         let mut controller = Controller::new(base);
-        controller.observe(true, at(base, 3)).unwrap();
+        controller.observe(Signal::congested(), at(base, 3)).unwrap();
 
         for i in 4..10 {
-            controller.observe(false, at(base, i));
+            controller.observe(Signal::clear(), at(base, i));
         }
         // A single congested tick just before the climb would have happened.
-        controller.observe(true, at(base, 10));
+        controller.observe(Signal::congested(), at(base, 10));
         // And now clear again, but the timer restarted, so nothing yet.
-        assert!(controller.observe(false, at(base, 13)).is_none());
+        assert!(controller.observe(Signal::clear(), at(base, 13)).is_none());
     }
 
     /// The oscillation seen in a real log: 8 to 16 Mbit/s, congested, back to
@@ -375,13 +458,13 @@ mod tests {
     fn does_not_climb_straight_back_into_the_level_that_just_failed() {
         let base = Instant::now();
         let mut controller = Controller::new(base);
-        controller.observe(true, at(base, 3)).expect("drops");
+        controller.observe(Signal::congested(), at(base, 3)).expect("drops");
 
         // Clear from here. The first climb must wait the full patient period
         // rather than the eager one a fresh connection gets.
         let mut climbed = None;
         for i in 4..20 {
-            if controller.observe(false, at(base, i)).is_some() {
+            if controller.observe(Signal::clear(), at(base, i)).is_some() {
                 climbed = Some(i);
                 break;
             }
@@ -403,7 +486,7 @@ mod tests {
             // Congest until it drops.
             loop {
                 clock += 3;
-                if controller.observe(true, at(base, clock)).is_some() {
+                if controller.observe(Signal::congested(), at(base, clock)).is_some() {
                     break;
                 }
             }
@@ -411,7 +494,7 @@ mod tests {
             // Then stay clear until it climbs.
             loop {
                 clock += 2;
-                if controller.observe(false, at(base, clock)).is_some() {
+                if controller.observe(Signal::clear(), at(base, clock)).is_some() {
                     break;
                 }
                 assert!(clock < 4000, "never climbed back");
@@ -437,7 +520,7 @@ mod tests {
         let mut clock = 0u64;
         while controller.bitrate() < STEPS[STEPS.len() - 1] {
             clock += 3;
-            controller.observe(false, at(base, clock));
+            controller.observe(Signal::clear(), at(base, clock));
             assert!(clock < 200, "never reached the ceiling");
         }
 
@@ -445,7 +528,7 @@ mod tests {
         let download_start = clock;
         while clock < download_start + 20 {
             clock += 1;
-            controller.observe(true, at(base, clock));
+            controller.observe(Signal::congested(), at(base, clock));
         }
         assert!(
             controller.bitrate() < STEPS[STEPS.len() - 1],
@@ -456,7 +539,7 @@ mod tests {
         let recovery_start = clock;
         while controller.bitrate() < STEPS[STEPS.len() - 1] {
             clock += 1;
-            controller.observe(false, at(base, clock));
+            controller.observe(Signal::clear(), at(base, clock));
             assert!(clock - recovery_start < 3600, "never recovered");
         }
         let recovery = clock - recovery_start;
@@ -481,11 +564,11 @@ mod tests {
         for _ in 0..4 {
             for _ in 0..8 {
                 clock += 3;
-                controller.observe(true, at(base, clock));
+                controller.observe(Signal::congested(), at(base, clock));
             }
             for _ in 0..40 {
                 clock += 3;
-                controller.observe(false, at(base, clock));
+                controller.observe(Signal::clear(), at(base, clock));
             }
         }
 
@@ -493,7 +576,7 @@ mod tests {
         let quiet_start = clock;
         while clock - quiet_start < BACKOFF_RESET.as_secs() + 60 {
             clock += 3;
-            controller.observe(false, at(base, clock));
+            controller.observe(Signal::clear(), at(base, clock));
         }
 
         // Optimism restored means the next climb comes quickly rather than
@@ -501,7 +584,7 @@ mod tests {
         let before = controller.bitrate();
         if before < STEPS[STEPS.len() - 1] {
             let waiting_from = clock;
-            while controller.observe(false, at(base, clock)).is_none() {
+            while controller.observe(Signal::clear(), at(base, clock)).is_none() {
                 clock += 1;
                 assert!(clock - waiting_from < 60, "still on the patient schedule");
             }
@@ -522,7 +605,7 @@ mod tests {
 
         while controller.bitrate() < STEPS[STEPS.len() - 1] {
             clock += 3;
-            controller.observe(false, at(base, clock));
+            controller.observe(Signal::clear(), at(base, clock));
             assert!(clock < 200, "never reached the ceiling");
         }
         let before = controller.bitrate();
@@ -532,12 +615,280 @@ mod tests {
         clock += 45;
 
         // The client comes back and the link is fine.
-        controller.observe(false, at(base, clock));
+        controller.observe(Signal::clear(), at(base, clock));
         assert_eq!(
             controller.bitrate(),
             before,
             "an absence should not have cost the session its budget"
         );
+    }
+
+    #[test]
+    fn patience_comes_back_on_a_link_that_keeps_working() {
+        // The eleven-minute recovery this was written for. The backoff used to
+        // return only through BACKOFF_RESET's five unbroken clear minutes,
+        // which a link that hiccups every couple of minutes never gets, so it
+        // ratcheted to the ceiling and stayed there for the session.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        let mut clock = 0u64;
+
+        // Three separate episodes, because the doubling is per episode: one
+        // long congested spell counts once, by design.
+        for _ in 0..3 {
+            clock += 3;
+            controller.observe(Signal::congested(), at(base, clock));
+            clock += 3;
+            controller.observe(Signal::clear(), at(base, clock));
+        }
+        let patient = controller.climb_wait;
+        assert!(patient > CLIMB_AFTER, "the bad spell should have cost patience");
+
+        // Then a link that simply works, but never for the five unbroken
+        // minutes BACKOFF_RESET wants.
+        let start = clock;
+        while controller.climb_wait >= patient {
+            clock += 1;
+            controller.observe(Signal::clear(), at(base, clock));
+            assert!(
+                clock - start < BACKOFF_RESET.as_secs(),
+                "still fully patient after {}s, so only BACKOFF_RESET can save it",
+                clock - start,
+            );
+        }
+    }
+
+    #[test]
+    fn a_clean_link_keeps_its_eager_climb() {
+        // The decay must never lengthen a wait. Its floor is CLIMB_AFTER,
+        // which is longer than the eager schedule a fresh link starts on, so
+        // an unguarded decay quadrupled the ramp on every clean session.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        let mut clock = 0u64;
+        let mut climbs = 0;
+        while clock < 20 {
+            clock += 1;
+            if controller.observe(Signal::clear(), at(base, clock)).is_some() {
+                climbs += 1;
+            }
+        }
+        assert_eq!(
+            controller.bitrate(),
+            STEPS[STEPS.len() - 1],
+            "a clean link should be at the ceiling within twenty seconds \
+             ({climbs} climbs so far)",
+        );
+    }
+
+    #[test]
+    fn patience_still_grows_faster_than_it_decays() {
+        // The decay must not cancel the doubling, or a link that fails
+        // repeatedly at one level goes back to oscillating across it.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        let mut clock = 0u64;
+        let mut waits = Vec::new();
+
+        for _ in 0..3 {
+            loop {
+                clock += 3;
+                if controller.observe(Signal::congested(), at(base, clock)).is_some() {
+                    break;
+                }
+            }
+            let dropped_at = clock;
+            loop {
+                clock += 2;
+                if controller.observe(Signal::clear(), at(base, clock)).is_some() {
+                    break;
+                }
+                assert!(clock < 4000, "never climbed back");
+            }
+            waits.push(clock - dropped_at);
+        }
+        assert!(
+            waits[1] > waits[0] && waits[2] > waits[1],
+            "repeated failure should still cost patience: {waits:?}",
+        );
+    }
+
+    #[test]
+    fn one_backlog_is_cut_for_once_not_once_per_settle() {
+        // A 5 Mbit/s path with three seconds of buffer in front of it. The
+        // cut cannot show up in the measurement until that backlog drains, so
+        // a controller on a fixed settle counts the same event again and
+        // again and lands four steps below where it should have stopped.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        let deep = Signal::congested().with_queue(Duration::from_secs(3));
+
+        let mut cuts = 0;
+        for secs in 1..=6 {
+            if controller.observe(deep, at(base, secs)).is_some() {
+                cuts += 1;
+            }
+        }
+        assert_eq!(cuts, 1, "one backlog should cost one step, not {cuts}");
+    }
+
+    #[test]
+    fn a_shallow_queue_is_still_cut_for_promptly() {
+        // The hold must scale with the backlog, not replace the settle: a
+        // link that is behind with nothing buffered still needs a quick
+        // answer.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        let shallow = Signal::congested().with_queue(Duration::from_millis(80));
+
+        assert!(controller.observe(shallow, at(base, 3)).is_some());
+        assert!(
+            controller.observe(shallow, at(base, 6)).is_some(),
+            "a shallow queue should not buy three seconds of grace",
+        );
+    }
+
+    #[test]
+    fn a_stale_window_is_not_judged_on_one_pass() {
+        // The window open when a client connects started whenever the last one
+        // left, so its first pass is already "a window old". Judging it means
+        // judging the link on the single pass that lands in the opening burst
+        // of keyframes.
+        let base = Instant::now();
+        let mut pressure = Pressure::new(base);
+        assert!(
+            !pressure.observe(true, at(base, 60)),
+            "one full pass after a long gap is not congestion",
+        );
+    }
+
+    #[test]
+    fn a_busy_socket_is_not_a_congested_one() {
+        // A socket carrying video is full a lot of the time by design. Only a
+        // path refusing half of what the engine offers is evidence the budget
+        // is too high.
+        let base = Instant::now();
+        let mut pressure = Pressure::new(base);
+        let mut clock = 0u64;
+        // Three passes in ten find the queue full, over several windows.
+        for i in 0..600u64 {
+            clock += 16;
+            pressure.observe(i % 10 < 3, base + Duration::from_millis(clock));
+        }
+        assert!(
+            !pressure.observe(false, base + Duration::from_millis(clock)),
+            "a third full should not read as congestion",
+        );
+    }
+
+    #[test]
+    fn a_path_refusing_most_frames_is() {
+        let base = Instant::now();
+        let mut pressure = Pressure::new(base);
+        let mut clock = 0u64;
+        let mut verdict = false;
+        for _ in 0..200u64 {
+            clock += 16;
+            verdict = pressure.observe(true, base + Duration::from_millis(clock));
+        }
+        assert!(verdict, "a path that is always full is congestion");
+    }
+
+    #[test]
+    fn the_verdict_holds_steady_inside_a_window() {
+        // Otherwise it flickers pass to pass and the budget follows it.
+        let base = Instant::now();
+        let mut pressure = Pressure::new(base);
+        let mut clock = 0u64;
+        for _ in 0..200u64 {
+            clock += 16;
+            pressure.observe(true, base + Duration::from_millis(clock));
+        }
+        // One clear pass must not undo a full window's worth of evidence.
+        clock += 16;
+        assert!(pressure.observe(false, base + Duration::from_millis(clock)));
+    }
+
+    #[test]
+    fn the_queue_is_the_same_span_of_time_at_every_budget() {
+        // The whole point: four frames meant 66ms at the ceiling and almost
+        // nothing at the floor, so the delay the probe measured grew with the
+        // bitrate and every climb refuted itself.
+        for budget in STEPS {
+            let drain = Duration::from_secs_f64(
+                queue_bytes(budget) as f64 * 8.0 / f64::from(budget),
+            );
+            let off_by = drain.abs_diff(QUEUE_TARGET);
+            assert!(
+                off_by <= Duration::from_millis(1),
+                "{budget} queues {drain:?} of video, not {QUEUE_TARGET:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn the_queue_stays_well_inside_the_delay_threshold() {
+        // Otherwise the engine's own buffer eats the budget the threshold was
+        // meant to give the network.
+        assert!(
+            QUEUE_TARGET * 2 < QUEUE_DELAY_LIMIT,
+            "a full queue would read as congestion on its own",
+        );
+    }
+
+    /// The compositor's tick, from `[render] tick_ms`. The pacing is polled on
+    /// it, so it is the unit these thresholds are really measured in.
+    const TICK: Duration = Duration::from_millis(16);
+
+    #[test]
+    fn a_small_budget_buys_fewer_frames_rather_than_worse_ones() {
+        // 500 kbit/s over sixty frames is a kilobyte each, which is not a
+        // desktop. Over ten frames it is six kilobytes each, which is.
+        assert!(
+            capture_interval(STEPS[0]) > TICK * 2,
+            "the floor should be paced well below the tick rate",
+        );
+        assert!(capture_interval(500_000) > capture_interval(4_000_000));
+    }
+
+    #[test]
+    fn a_healthy_budget_is_not_throttled_at_all() {
+        // Where a normal session lives. The threshold has to fall *inside* one
+        // tick, or the poll skips every other one and 60 fps becomes 30.
+        for rate in [8_000_000, 16_000_000, 24_000_000, 32_000_000] {
+            assert!(
+                capture_interval(rate) < TICK,
+                "{rate} would lose every other tick",
+            );
+        }
+    }
+
+    #[test]
+    fn every_rate_lands_on_the_tick_it_should() {
+        // The quantisation this is really about: with a 16ms poll, a threshold
+        // must sit just under the tick that is meant to carry the frame, not
+        // just over it.
+        for rate in STEPS {
+            let interval = capture_interval(rate);
+            let fps = (rate / BITS_PER_FRAME).clamp(MIN_FPS, MAX_FPS);
+            let ticks = (interval.as_micros() / TICK.as_micros()) + 1;
+            let actual = 1_000_000.0 / (ticks as f64 * TICK.as_micros() as f64);
+            assert!(
+                actual >= f64::from(fps) * 0.9,
+                "{rate} wanted {fps} fps but the tick grid gives {actual:.1}",
+            );
+        }
+    }
+
+    #[test]
+    fn the_frame_rate_never_leaves_its_bounds() {
+        let slowest = Duration::from_micros(1_000_000 * 3 / (4 * u64::from(MIN_FPS)));
+        let fastest = Duration::from_micros(1_000_000 * 3 / (4 * u64::from(MAX_FPS)));
+        for rate in [0, 1, 1_000, STEPS[0], u32::MAX] {
+            let interval = capture_interval(rate);
+            assert!(interval <= slowest, "{rate} paced slower than {MIN_FPS} fps");
+            assert!(interval >= fastest, "{rate} paced faster than {MAX_FPS} fps");
+        }
     }
 
     #[test]
@@ -549,7 +900,7 @@ mod tests {
         let mut clock = 0u64;
         for _ in 0..12 {
             clock += 3;
-            controller.observe(true, at(base, clock));
+            controller.observe(Signal::congested(), at(base, clock));
         }
         // Now clear. It must come back within the ceiling, not exponentially
         // beyond it.
@@ -557,7 +908,7 @@ mod tests {
         let mut climbed = None;
         while clock < start + 400 {
             clock += 5;
-            if controller.observe(false, at(base, clock)).is_some() {
+            if controller.observe(Signal::clear(), at(base, clock)).is_some() {
                 climbed = Some(clock - start);
                 break;
             }
@@ -573,18 +924,18 @@ mod tests {
         let mut clock = 0u64;
         for _ in 0..4 {
             clock += 3;
-            controller.observe(true, at(base, clock));
+            controller.observe(Signal::congested(), at(base, clock));
         }
         // A long clear stretch at the bottom, where no climb is pending yet.
         clock += 400;
-        controller.observe(false, at(base, clock));
+        controller.observe(Signal::clear(), at(base, clock));
 
         // From here a climb should come at the base interval again.
         let start = clock;
         let mut climbed = None;
         while clock < start + 100 {
             clock += 2;
-            if controller.observe(false, at(base, clock)).is_some() {
+            if controller.observe(Signal::clear(), at(base, clock)).is_some() {
                 climbed = Some(clock - start);
                 break;
             }
@@ -599,10 +950,10 @@ mod tests {
         let mut last = base;
         for i in 1..200 {
             last = at(base, i * 2);
-            controller.observe(false, last);
+            controller.observe(Signal::clear(), last);
         }
         assert_eq!(controller.bitrate(), STEPS[STEPS.len() - 1]);
-        assert!(controller.observe(false, last + Duration::from_secs(60)).is_none());
+        assert!(controller.observe(Signal::clear(), last + Duration::from_secs(60)).is_none());
     }
 }
 
@@ -638,6 +989,158 @@ const FOCUS_SETTLE: Duration = Duration::from_millis(1500);
 /// Without a deadband, a window opening or closing changes every other window's
 /// share by a few percent and rebuilds all of them for no visible gain.
 pub const DEADBAND: f64 = 0.25;
+
+/// How long the send path is watched before judging how full it has been.
+const PRESSURE_WINDOW: Duration = Duration::from_secs(1);
+
+/// What share of that window must be full to count as congestion.
+///
+/// Three quarters. Half was tried and is too eager: a socket carrying video
+/// is busy much of the time by design, and the burst of keyframes every
+/// session opens with filled it for long enough to count as an episode of
+/// congestion. That cost nothing visible but it quadrupled the ramp, because
+/// one episode ends the eager climb, and the budget then took half a minute
+/// to reach the ceiling instead of eight seconds. At three quarters the
+/// engine really is being refused most of what it offers.
+const PRESSURE_NUM: u32 = 3;
+const PRESSURE_DEN: u32 = 4;
+
+/// Passes a window needs before its verdict means anything.
+///
+/// A third of a second at the compositor's tick rate.
+const MIN_PASSES: u32 = 20;
+
+/// How often the send path has been full lately.
+///
+/// # Why a rate and not the flag itself
+///
+/// `can_accept_frame` is a snapshot taken sixty times a second, and at any
+/// instant it is close to a coin toss: the queue fills and drains constantly
+/// by design. Feeding the raw flag to the controller meant the budget moved on
+/// whichever way the coin happened to land when the pass ran.
+///
+/// What matters is the *share* of passes that found nowhere to put a frame,
+/// because that is the share of frames the link refused. When it is high, the
+/// budget is above what the path can carry, and the fix is to encode smaller
+/// frames rather than to send fewer of them. Without this the engine sat on a
+/// 5 Mbit/s link with a 32 Mbit/s budget, filling the link exactly but at
+/// sixteen frames a second, when the same bytes at a truthful budget buy
+/// fifty.
+pub struct Pressure {
+    passes: u32,
+    full: u32,
+    since: Instant,
+    verdict: bool,
+}
+
+impl Pressure {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            passes: 0,
+            full: 0,
+            since: now,
+            verdict: false,
+        }
+    }
+
+    /// Record one pass, and say whether the path has been full often enough.
+    ///
+    /// The verdict holds between windows rather than being recomputed per
+    /// pass, so it cannot flicker within one.
+    pub fn observe(&mut self, full: bool, now: Instant) -> bool {
+        self.passes += 1;
+        if full {
+            self.full += 1;
+        }
+        if now.duration_since(self.since) >= PRESSURE_WINDOW {
+            // A window holding almost no passes is a gap rather than evidence.
+            // This only runs while somebody is connected, so the window open
+            // when a client arrives began whenever the last one left, and
+            // judging it would mean judging the link on a single pass: the
+            // one during the burst of keyframes every session opens with.
+            // That counted as an episode of congestion, which ends the eager
+            // climb, so every session took half a minute to reach the ceiling
+            // instead of eight seconds.
+            self.verdict = self.passes >= MIN_PASSES
+                && self.full * PRESSURE_DEN >= self.passes * PRESSURE_NUM;
+            self.passes = 0;
+            self.full = 0;
+            self.since = now;
+        }
+        self.verdict
+    }
+}
+
+/// How much video may sit in one client's queue, as a span of time.
+///
+/// The queue exists to keep the socket busy across a slow encode, so it needs
+/// to be about a couple of frames. It must also stay well under
+/// [`QUEUE_DELAY_LIMIT`], because the delay probe is queued behind exactly
+/// this and its wait is what the budget reacts to. Thirty against seventy-five
+/// leaves the threshold measuring the *network's* queue rather than the
+/// engine's own.
+const QUEUE_TARGET: Duration = Duration::from_millis(30);
+
+/// How many bytes of video a client may have queued at this budget.
+///
+/// The old bound was a frame count, which meant a completely different span
+/// of time at either end of the range: four frames is a few kilobytes at the
+/// floor and a quarter of a megabyte at the ceiling. Since the delay probe
+/// waits behind the queue, that made the measured delay grow with the
+/// bitrate, so every climb manufactured the congestion that undid it.
+pub fn queue_bytes(budget: u32) -> usize {
+    let per_second = budget as u64 / 8;
+    (per_second * QUEUE_TARGET.as_millis() as u64 / 1000) as usize
+}
+
+/// The most frames a second any window is captured at.
+///
+/// The compositor's own tick, so this is a statement about the ceiling rather
+/// than a throttle.
+pub const MAX_FPS: u32 = 60;
+
+/// The fewest.
+///
+/// Below this the picture stops reading as motion and starts reading as a
+/// series of stills, which is worse than a soft one.
+pub const MIN_FPS: u32 = 10;
+
+/// Bits a frame needs before it is a picture rather than a smear.
+///
+/// Roughly eight kilobytes, measured against the window sizes this actually
+/// runs at (about 1200x900). It is a rule of thumb, not a law; the point is
+/// only that there is *some* point below which more frames stop being the
+/// right way to spend the budget.
+const BITS_PER_FRAME: u32 = 65_536;
+
+/// How often to capture a window allocated `rate` bits per second.
+///
+/// # Why the frame rate moves at all
+///
+/// Encoding at a fixed 60 fps means the bits per frame fall with the budget,
+/// and quality falls with them. At the floor that produced a 1200x900 window
+/// encoded at 500 kbit/s across sixty frames a second: about a kilobyte each,
+/// which is not a readable desktop by any measure. The same 500 kbit/s across
+/// ten frames is six kilobytes each, which is soft but legible, and legible
+/// beats smooth when only one of them is available.
+///
+/// So the budget buys frames until a frame is worth having, and buys quality
+/// after that. Above about 4 Mbit/s per window this comes out below the
+/// compositor's tick and nothing changes at all, which is where a normal
+/// session lives.
+///
+/// # Why it is short of the nominal interval
+///
+/// The caller polls this on the compositor's own ~16ms tick, so the value has
+/// to be a threshold rather than a period. An exact 16.67ms for 60 fps would
+/// be just *above* the tick, so every other tick would fail the test and the
+/// frame rate would halve to 30. Three quarters of the period puts the
+/// threshold safely inside the tick that ought to carry the frame, at every
+/// rate rather than only at the top.
+pub fn capture_interval(rate: u32) -> Duration {
+    let fps = (rate / BITS_PER_FRAME).clamp(MIN_FPS, MAX_FPS);
+    Duration::from_micros(1_000_000 * 3 / (4 * u64::from(fps)))
+}
 
 /// Divide a total budget between the windows being streamed.
 ///

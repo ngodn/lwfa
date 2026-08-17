@@ -120,10 +120,18 @@ pub struct Lwfa {
     pub audio: Option<crate::audio::Capture>,
     /// Chooses the total bitrate from how the connection is coping.
     pub bitrate: crate::bitrate::Controller,
+    /// How full the send path has been lately, which is the signal for "the
+    /// budget is above what this link carries". See `bitrate::Pressure`.
+    pressure: crate::bitrate::Pressure,
+    /// For the one debug line that says which signal moved the budget.
+    was_congested: bool,
     /// Holds focus still before the budget follows it. See `bitrate`.
     pub attention: crate::bitrate::Attention,
     /// What was last allocated, so the division is only recomputed on a change.
     streamed_last: Vec<WindowId>,
+    /// The last allocation, so each window can be paced by its own share
+    /// of the budget rather than by the total. See `capture_interval`.
+    rates_last: std::collections::HashMap<WindowId, u32>,
     attended_last: Option<WindowId>,
     /// The session's own audio device, so the machine stays quiet. See `sink.rs`.
     pub audio_sink: crate::sink::PrivateSink,
@@ -314,8 +322,11 @@ impl Lwfa {
             last_layout: Vec::new(),
             audio: None,
             bitrate: crate::bitrate::Controller::new(std::time::Instant::now()),
+            pressure: crate::bitrate::Pressure::new(std::time::Instant::now()),
+            was_congested: false,
             attention: crate::bitrate::Attention::new(std::time::Instant::now()),
             streamed_last: Vec::new(),
+            rates_last: std::collections::HashMap::new(),
             attended_last: None,
             audio_sink: crate::sink::PrivateSink::default(),
             gamepads: std::collections::HashMap::new(),
@@ -1661,21 +1672,53 @@ impl Lwfa {
         // about one. See `ShellLink::has_clients`.
         let listening = shell.has_clients();
         // Two congestion signals, and delay is the earlier one. Backpressure
-        // (`can_accept_frame`) only fires once the send path is actually
-        // full; the probe RTT rises as soon as a queue starts to form, the
-        // way WebRTC's congestion control reads the network. Reacting to the
-        // gradient keeps the queue, and therefore the glass-to-glass delay,
-        // from building in the first place.
-        let delayed = shell
-            .queue_delay()
-            .is_some_and(|excess| excess >= crate::bitrate::QUEUE_DELAY_LIMIT);
-        let congested = listening && (delayed || !shell.can_accept_frame());
-        let skip = !listening || congested || !worker.has_capacity();
+        // only fires once the send path is actually full; the probe RTT rises
+        // as soon as a queue starts to form, the way WebRTC's congestion
+        // control reads the network. Reacting to the gradient keeps the
+        // queue, and therefore the glass-to-glass delay, from building in the
+        // first place.
+        //
+        // What it must not do is react to *jitter*, which is why this asks
+        // whether the link is queueing rather than reading a raw RTT excess.
+        // See `DelayEstimate`: a queue lifts the floor under every sample,
+        // where jitter only scatters individual ones above it.
+        let delayed = listening && shell.delay_congested();
+        // Backpressure is the only thing that withholds a frame.
+        //
+        // The delay signal used to do it as well, and that was the single
+        // worst thing in this file. It is a *rate* signal: it says the budget
+        // is too high, which is answered by encoding smaller frames, not by
+        // sending none. Wired into `skip` it stopped capture outright, and
+        // because the measurement is latched between probes one unlucky
+        // sample froze the picture for as long as the latch held. Backpressure
+        // is different in kind: the queue is genuinely full, there is nowhere
+        // to put a frame, and skipping is the only available answer.
+        let backpressured = !shell.can_accept_frame();
         let now = std::time::Instant::now();
+        // The budget reacts to how *often* the path was full, not to whether
+        // it happened to be full on this pass; the flag alone is close to a
+        // coin toss at sixty hertz. Skipping still uses the raw flag, because
+        // that is a question about this frame and nothing else.
+        let squeezed = listening && self.pressure.observe(backpressured, now);
+        let congested = listening && (delayed || squeezed);
+        if congested && !self.was_congested {
+            tracing::debug!(
+                "link went congested (delay {delayed}, pressure {squeezed}, queueing {}ms)",
+                shell.queue_delay().map(|d| d.as_millis()).unwrap_or(0),
+            );
+        }
+        self.was_congested = congested;
+        let skip = !listening || backpressured || !worker.has_capacity();
         // Not observed at all rather than observed as clear: an absent client
         // is not evidence the link is good either, and a stretch of invented
         // calm would let the budget climb into a level nothing has tested.
-        let budget_changed = listening && self.bitrate.observe(congested, now).is_some();
+        // The queue depth rides along so the controller can wait out a backlog
+        // it has already caused rather than cutting again into the same one.
+        let signal = crate::bitrate::Signal {
+            congested,
+            queueing: shell.queue_delay().unwrap_or_default(),
+        };
+        let budget_changed = listening && self.bitrate.observe(signal, now).is_some();
 
         // Divide the budget between the windows actually being streamed, giving
         // the focused one the larger share.
@@ -1696,22 +1739,36 @@ impl Lwfa {
             // The one place the budget moves, so the one log line that tells
             // the whole adaptation story for a session.
             tracing::info!(
-                "stream budget is now {} kbit/s ({})",
+                "stream budget is now {} kbit/s ({}, queueing {}ms)",
                 self.bitrate.bitrate() / 1000,
-                match (delayed, congested) {
+                match (delayed, squeezed) {
                     // Which signal moved the budget, so a log alone can tell
                     // "the path is queueing" from "the socket is full".
                     (true, _) => "delay rising",
                     (false, true) => "socket backpressure",
                     (false, false) => "link clear",
                 },
+                // The measurement behind the verdict, so a log can say how
+                // close to the threshold a session actually ran. Without it,
+                // "delay rising" is a claim with nothing to check it against.
+                shell
+                    .queue_delay()
+                    .map(|excess| excess.as_millis())
+                    .unwrap_or(0),
             );
             // Auto-quality audio follows the same budget.
             self.sync_audio_bitrate();
         }
+        let budget = self.bitrate.bitrate();
         if budget_changed || streamed != self.streamed_last || attended != self.attended_last {
-            let budget = self.bitrate.bitrate();
             let rates = crate::bitrate::allocate(budget, &streamed, attended);
+            // How much may sit in a client's queue, so the queue is a fixed
+            // span of time rather than a fixed frame count. See
+            // `bitrate::queue_bytes`.
+            shell
+                .clients()
+                .set_queue_bytes(crate::bitrate::queue_bytes(budget));
+            self.rates_last.clone_from(&rates);
             worker.set_rates(rates, budget);
             self.streamed_last = streamed;
             self.attended_last = attended;
@@ -1746,14 +1803,21 @@ impl Lwfa {
                 return;
             }
 
-            // The unfocused capture cap. See `capture_pacing` on the struct.
+            // How often this window is worth capturing. Two caps, whichever
+            // is slower: what its share of the budget can pay for, and the
+            // flat one an unfocused window gets regardless. See
+            // `bitrate::capture_interval` and `capture_pacing` on the struct.
+            //
             // Skipping costs nothing: damage keeps its commit counters, so
             // whatever changed is picked up whole on the next eligible pass.
+            let rate = self.rates_last.get(&id).copied().unwrap_or(budget);
+            let mut interval = crate::bitrate::capture_interval(rate);
             if Some(id) != self.focused {
-                if let Some(last) = self.capture_pacing.get(&id) {
-                    if now.duration_since(*last) < UNFOCUSED_CAPTURE_INTERVAL {
-                        continue;
-                    }
+                interval = interval.max(UNFOCUSED_CAPTURE_INTERVAL);
+            }
+            if let Some(last) = self.capture_pacing.get(&id) {
+                if now.duration_since(*last) < interval {
+                    continue;
                 }
             }
 

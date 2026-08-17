@@ -146,6 +146,13 @@ encoder_queue_depth = 2
 
 # How many encoded frames may be queued for the socket before capture stops.
 # This is the backpressure that keeps a slow link from costing GPU read-back.
+#
+# A backstop rather than the real bound. The queue is bounded by *bytes*
+# derived from the current budget, so it is always about the same span of time
+# (see `queue_bytes` in crates/lwfa-engine/src/bitrate.rs); a frame count alone
+# meant a few kilobytes at the floor and a quarter of a megabyte at the
+# ceiling, and since the delay probe waits behind that queue, raising the
+# bitrate manufactured the congestion that then lowered it again.
 max_frames_in_flight = 4
 
 # ---------------------------------------------------------------------------

@@ -174,6 +174,17 @@ struct Slot {
     /// they are also the only honest signal of how the network is coping,
     /// which is exactly what the bitrate controller adapts to.
     in_flight: Arc<AtomicUsize>,
+    /// The same queue measured in bytes rather than frames.
+    ///
+    /// A frame count means completely different things at either end of the
+    /// budget: four frames is four kilobytes at 500 kbit/s and a quarter of a
+    /// megabyte at 32 Mbit/s. Since the probe ping is queued behind exactly
+    /// this, a count-bounded queue makes the delay the engine measures grow
+    /// with its own bitrate, so raising quality manufactured the congestion
+    /// that then lowered it again. Bounding the bytes bounds the *time* the
+    /// queue represents, which is the thing that must stay small. See
+    /// [`Clients::set_queue_bytes`].
+    in_flight_bytes: Arc<AtomicUsize>,
     /// Audio chunks in the same position. Counted apart from video because
     /// the two must not starve each other: fifty small audio chunks a second
     /// were able to occupy every video slot, which showed up as "the audio is
@@ -205,6 +216,12 @@ struct Slot {
     /// the raw RTT, so a client on a naturally slow path (a relay, another
     /// continent) is not read as permanently congested.
     rtt_excess: Arc<AtomicU64>,
+    /// Whether that excess has been over the limit for [`SUSTAINED_PROBES`]
+    /// probes in a row, which is the signal the budget actually reacts to.
+    ///
+    /// Kept apart from `rtt_excess` because they answer different questions:
+    /// the number is what to show a human, this is whether to believe it.
+    delay_congested: Arc<AtomicBool>,
     /// Whether the eviction is this client reconnecting rather than a kick.
     superseded: Arc<AtomicBool>,
     /// Set when the owner has asked for this connection to go away.
@@ -227,8 +244,16 @@ impl Slot {
         self.connected.load(Ordering::Relaxed)
     }
 
-    fn has_room(&self, max_in_flight: usize) -> bool {
-        self.alive() && self.in_flight.load(Ordering::Relaxed) < max_in_flight
+    /// Room for another frame: under both the frame count and the byte budget.
+    ///
+    /// `max_bytes` of zero means no budget has been published yet, in which
+    /// case the count alone applies. The check is `<`, so an empty queue
+    /// always admits one frame however small the budget is: at the bottom of
+    /// the range that degrades to one frame at a time, which is the intent.
+    fn has_room(&self, max_in_flight: usize, max_bytes: usize) -> bool {
+        self.alive()
+            && self.in_flight.load(Ordering::Relaxed) < max_in_flight
+            && (max_bytes == 0 || self.in_flight_bytes.load(Ordering::Relaxed) < max_bytes)
     }
 
     fn has_audio_room(&self) -> bool {
@@ -241,6 +266,10 @@ pub struct Clients {
     slots: Mutex<Vec<Arc<Slot>>>,
     /// `[stream].max_frames_in_flight`, per client.
     max_in_flight: usize,
+    /// How many bytes of video may be queued per client, from the budget.
+    ///
+    /// Zero until the compositor publishes one. See [`Self::set_queue_bytes`].
+    queue_bytes: AtomicUsize,
     next_id: AtomicU64,
     /// Rung after anything is queued, so the connection thread's `poll` wakes
     /// now rather than at its backstop. An eventfd: writes add to a counter,
@@ -254,10 +283,23 @@ impl Clients {
         Self {
             slots: Mutex::new(Vec::new()),
             max_in_flight: max_in_flight.max(1),
+            queue_bytes: AtomicUsize::new(0),
             // Ids start at 1 so 0 can mean "nobody" in logs and tests.
             next_id: AtomicU64::new(1),
             wake,
         }
+    }
+
+    /// Publish how many bytes of video each client may have queued.
+    ///
+    /// Derived from the current budget so the queue is a fixed span of *time*
+    /// rather than a fixed number of frames; see [`Slot::in_flight_bytes`].
+    pub fn set_queue_bytes(&self, bytes: usize) {
+        self.queue_bytes.store(bytes, Ordering::Relaxed);
+    }
+
+    fn queue_bytes(&self) -> usize {
+        self.queue_bytes.load(Ordering::Relaxed)
     }
 
     /// Wake the connection thread. Failure means only a backstop-length delay.
@@ -391,9 +433,35 @@ impl FrameSink {
         let Ok(slots) = self.clients.slots.lock() else {
             return false;
         };
+        let max_bytes = self.clients.queue_bytes();
         slots
             .iter()
-            .any(|slot| slot.has_room(self.clients.max_in_flight))
+            .any(|slot| slot.has_room(self.clients.max_in_flight, max_bytes))
+    }
+
+    /// Whether every measured client has been queueing for long enough to
+    /// believe it.
+    ///
+    /// "Every", to match the "any" in [`Self::can_accept_frame`]: the budget
+    /// follows the healthiest link and the fan-out already skips whoever is
+    /// behind, so one device on bad wifi must not throttle the rest. False
+    /// when nobody has answered a probe yet, because an unmeasured link is
+    /// not evidence of anything.
+    pub fn delay_congested(&self) -> bool {
+        let Ok(slots) = self.clients.slots.lock() else {
+            return false;
+        };
+        let mut measured = false;
+        for slot in slots.iter().filter(|slot| slot.alive()) {
+            if slot.rtt_excess.load(Ordering::Relaxed) == RTT_UNMEASURED {
+                continue;
+            }
+            measured = true;
+            if !slot.delay_congested.load(Ordering::Relaxed) {
+                return false;
+            }
+        }
+        measured
     }
 
     /// The healthiest connected client's queueing delay.
@@ -484,8 +552,10 @@ impl FrameSink {
             return;
         };
         let max = self.clients.max_in_flight;
+        let max_bytes = self.clients.queue_bytes();
+        let size = bytes.len();
         for slot in slots.iter() {
-            if !slot.has_room(max) {
+            if !slot.has_room(max, max_bytes) {
                 continue;
             }
             let wanted = slot
@@ -497,8 +567,10 @@ impl FrameSink {
                 continue;
             }
             slot.in_flight.fetch_add(1, Ordering::Relaxed);
+            slot.in_flight_bytes.fetch_add(size, Ordering::Relaxed);
             if slot.outgoing.send(Outgoing::Frame(bytes.clone())).is_err() {
                 slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+                slot.in_flight_bytes.fetch_sub(size, Ordering::Relaxed);
             }
         }
         drop(slots);
@@ -603,6 +675,11 @@ impl ShellLink {
     pub fn queue_delay(&self) -> Option<Duration> {
         self.sink().queue_delay()
     }
+
+    /// See [`FrameSink::delay_congested`].
+    pub fn delay_congested(&self) -> bool {
+        self.sink().delay_congested()
+    }
 }
 
 /// A connection the accept thread is serving.
@@ -611,6 +688,7 @@ struct Live {
     socket: tungstenite::WebSocket<TcpStream>,
     outgoing: Receiver<Outgoing>,
     in_flight: Arc<AtomicUsize>,
+    in_flight_bytes: Arc<AtomicUsize>,
     audio_in_flight: Arc<AtomicUsize>,
     connected: Arc<AtomicBool>,
     evict: Arc<AtomicBool>,
@@ -627,6 +705,8 @@ struct Live {
     /// this used to, meant a slow link could buffer *seconds* of video inside
     /// the socket with the engine convinced everything was fine.
     unacked_video: usize,
+    /// The same frames measured in bytes. See [`Slot::in_flight_bytes`].
+    unacked_bytes: usize,
     /// Audio chunks in the same position.
     unacked_audio: usize,
     /// When anything last arrived from the far end. See `heartbeat`.
@@ -637,10 +717,15 @@ struct Live {
     probe_sent: Option<std::time::Instant>,
     /// When a probe was last transmitted, for the cadence.
     last_probe: std::time::Instant,
-    /// The least RTT seen, creeping per [`advance_baseline`].
-    min_rtt: Option<Duration>,
+    /// How much of this connection's delay is queue. See [`DelayEstimate`].
+    delay: DelayEstimate,
+    /// Consecutive probes whose excess was over the limit. See
+    /// [`SUSTAINED_PROBES`].
+    over_limit: u32,
     /// Where the measured excess is published for the compositor.
     rtt_excess: Arc<AtomicU64>,
+    /// Where the verdict on that excess is published.
+    delay_congested: Arc<AtomicBool>,
     /// An unanswered ping, when one is out. See `heartbeat`.
     ping_sent: Option<std::time::Instant>,
 }
@@ -664,23 +749,102 @@ const PONG_GRACE: Duration = Duration::from_secs(15);
 /// below JavaScript, so page jank cannot pollute the number. This is the
 /// delay signal congestion controllers like WebRTC's GCC are built on:
 /// delay rises as queues form, long before anything blocks or drops.
-const PROBE_INTERVAL: Duration = Duration::from_secs(1);
-
-/// How much the RTT baseline may rise per probe.
 ///
-/// The baseline is the least RTT seen, which is the path with empty queues.
-/// A strict minimum never recovers if the route genuinely changes (wifi to
-/// DERP relay, say), so it is allowed to creep upward slowly: about a
-/// millisecond a second. During congestion the creep is dwarfed by the
-/// excess it is measuring, and after a route change the baseline re-learns
-/// in under a minute.
-const BASELINE_CREEP: Duration = Duration::from_millis(1);
+/// Four times a second rather than once. The measurement is latched between
+/// probes, so at one hertz a single unlucky sample described the link for a
+/// whole second and the compositor read that stale value sixty times before
+/// it could change. One small frame four times a second is nothing against
+/// megabits of video, and it is what makes [`SUSTAINED_PROBES`] affordable.
+const PROBE_INTERVAL: Duration = Duration::from_millis(250);
 
-/// The delay baseline for one connection, fed by the probes above.
-fn advance_baseline(baseline: Option<Duration>, rtt: Duration) -> Duration {
-    match baseline {
-        None => rtt,
-        Some(base) => rtt.min(base + BASELINE_CREEP),
+/// How long to wait for an answer before giving up on one probe.
+///
+/// Only one probe is ever in the air, because a second one sent before the
+/// first was answered would be matched against the wrong pong and measure a
+/// fraction of the real delay. This bounds the wait, so a single dropped
+/// pong cannot stop the measurement for the rest of the session.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How much recent RTT history the floor is drawn from.
+///
+/// The floor is the least RTT in this window: the path as it is now, with
+/// empty queues. It used to be the least RTT *ever* seen, allowed to creep up
+/// by a millisecond a second, which on wifi is not a floor at all. A window
+/// this long follows a link that genuinely changes (wifi roaming, tailscale
+/// falling back to a relay) within half a minute, while still being far
+/// longer than any queue it is trying to measure.
+const BASELINE_WINDOW: Duration = Duration::from_secs(30);
+
+/// The recent window whose own floor is compared against that one.
+///
+/// See [`DelayEstimate`]. Long enough to hold several probes, so one lucky
+/// low sample is likely in it, and short enough that a queue which forms is
+/// reflected within a couple of seconds.
+const QUEUE_WINDOW: Duration = Duration::from_secs(2);
+
+/// Consecutive over-limit estimates before the delay is believed.
+///
+/// The estimate is already smoothed, so this is belt and braces rather than
+/// the main defence: half a second of agreement before a keyframe is spent.
+const SUSTAINED_PROBES: u32 = 2;
+
+/// How much of a connection's delay is queue rather than the path itself.
+///
+/// # Why a minimum against a minimum
+///
+/// The obvious estimate is "this sample, less the floor", and it does not
+/// work. It cannot tell a queue from jitter, because both raise individual
+/// samples, and a link with tens of milliseconds of ordinary spread (any
+/// wifi, anything over a relay) then reports congestion constantly. That is
+/// what walked the budget from 24 Mbit/s to the floor on links that were
+/// perfectly healthy, and then left it there for eleven minutes.
+///
+/// The distinction jitter cannot fake is this: when a queue forms, *every*
+/// packet waits behind it. Jitter scatters samples upward from a floor that
+/// stays put; a queue lifts the floor itself. So the estimate is the least
+/// RTT of the last couple of seconds, less the least RTT of the last half
+/// minute. Random spread barely moves the first, because some recent sample
+/// is always near the bottom of the spread. A standing queue moves it by the
+/// whole depth of the queue.
+///
+/// This is the same idea as the one-way delay estimators in LEDBAT and Copa,
+/// reduced to what a WebSocket ping can actually see.
+#[derive(Default)]
+struct DelayEstimate {
+    samples: std::collections::VecDeque<(std::time::Instant, Duration)>,
+}
+
+impl DelayEstimate {
+    /// Record one round trip and return how much of it is queue.
+    fn observe(&mut self, rtt: Duration, now: std::time::Instant) -> Duration {
+        self.samples.push_back((now, rtt));
+        while let Some(&(at, _)) = self.samples.front() {
+            if now.duration_since(at) > BASELINE_WINDOW {
+                self.samples.pop_front();
+            } else {
+                break;
+            }
+        }
+        // Both passes are bounded by the window over the probe interval, so a
+        // hundred-odd entries scanned four times a second per client.
+        let floor = self.floor();
+        let recent = self
+            .samples
+            .iter()
+            .filter(|(at, _)| now.duration_since(*at) <= QUEUE_WINDOW)
+            .map(|(_, rtt)| *rtt)
+            .min()
+            .unwrap_or(rtt);
+        recent.saturating_sub(floor)
+    }
+
+    /// The least RTT seen across the whole window.
+    fn floor(&self) -> Duration {
+        self.samples
+            .iter()
+            .map(|(_, rtt)| *rtt)
+            .min()
+            .unwrap_or_default()
     }
 }
 
@@ -701,7 +865,18 @@ fn heartbeat(client: &mut Live) -> bool {
     {
         return false;
     }
-    if now.duration_since(client.last_probe) >= PROBE_INTERVAL {
+    // Retire a probe nobody answered, so one lost pong does not end the
+    // measurement for the rest of the session.
+    if client
+        .probe_sent
+        .is_some_and(|sent| now.duration_since(sent) > PROBE_TIMEOUT)
+    {
+        client.probe_sent = None;
+    }
+    // One probe in the air at a time. Sending a second before the first is
+    // answered would pair it with the wrong pong and report a fraction of the
+    // real round trip, which at a 250ms cadence is any path slower than that.
+    if client.probe_sent.is_none() && now.duration_since(client.last_probe) >= PROBE_INTERVAL {
         // Failures are left to the read path, which already knows how to
         // declare a socket dead; this only asks the question.
         let _ = client
@@ -839,21 +1014,25 @@ fn accept_loop(
                     let id = clients.allocate();
                     let (outgoing_tx, outgoing_rx) = channel::<Outgoing>();
                     let in_flight = Arc::new(AtomicUsize::new(0));
+                    let in_flight_bytes = Arc::new(AtomicUsize::new(0));
                     let audio_in_flight = Arc::new(AtomicUsize::new(0));
                     let connected = Arc::new(AtomicBool::new(true));
                     let evict = Arc::new(AtomicBool::new(false));
                     let superseded = Arc::new(AtomicBool::new(false));
                     let rtt_excess = Arc::new(AtomicU64::new(RTT_UNMEASURED));
+                    let delay_congested = Arc::new(AtomicBool::new(false));
                     clients.add(Arc::new(Slot {
                         id,
                         outgoing: outgoing_tx,
                         in_flight: Arc::clone(&in_flight),
+                        in_flight_bytes: Arc::clone(&in_flight_bytes),
                         audio_in_flight: Arc::clone(&audio_in_flight),
                         connected: Arc::clone(&connected),
                         streams: Mutex::new(HashSet::new()),
                         audio: AtomicBool::new(false),
                         opus: AtomicBool::new(false),
                         rtt_excess: Arc::clone(&rtt_excess),
+                        delay_congested: Arc::clone(&delay_congested),
                         superseded: Arc::clone(&superseded),
                         evict: Arc::clone(&evict),
                     }));
@@ -862,6 +1041,7 @@ fn accept_loop(
                         socket,
                         outgoing: outgoing_rx,
                         in_flight,
+                        in_flight_bytes,
                         audio_in_flight,
                         connected,
                         evict,
@@ -869,9 +1049,12 @@ fn accept_loop(
                         write_blocked: false,
                         probe_sent: None,
                         last_probe: std::time::Instant::now(),
-                        min_rtt: None,
+                        delay: DelayEstimate::default(),
+                        over_limit: 0,
                         rtt_excess,
+                        delay_congested,
                         unacked_video: 0,
+                        unacked_bytes: 0,
                         unacked_audio: 0,
                         last_read: std::time::Instant::now(),
                         ping_sent: None,
@@ -1238,13 +1421,23 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                 // connection's own floor is the queue: how long a byte sent
                 // now would wait behind everything already in flight.
                 if let Some(sent) = client.probe_sent.take() {
-                    let rtt = std::time::Instant::now().duration_since(sent);
-                    let baseline = advance_baseline(client.min_rtt, rtt);
-                    client.min_rtt = Some(baseline);
-                    let excess = rtt.saturating_sub(baseline);
+                    let now = std::time::Instant::now();
+                    let rtt = now.duration_since(sent);
+                    let excess = client.delay.observe(rtt, now);
                     client
                         .rtt_excess
                         .store(excess.as_micros().min(u64::MAX as u128) as u64, Ordering::Relaxed);
+                    // The verdict, not the sample. One probe over the limit is
+                    // a hiccup; a run of them is a queue. See
+                    // `SUSTAINED_PROBES`.
+                    if excess >= crate::bitrate::QUEUE_DELAY_LIMIT {
+                        client.over_limit = client.over_limit.saturating_add(1);
+                    } else {
+                        client.over_limit = 0;
+                    }
+                    client
+                        .delay_congested
+                        .store(client.over_limit >= SUSTAINED_PROBES, Ordering::Relaxed);
                 }
             }
             Ok(tungstenite::Message::Close(frame)) => {
@@ -1281,6 +1474,7 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                     Outgoing::Control(json) => tungstenite::Message::Text(json),
                     Outgoing::Frame(bytes) => {
                         client.unacked_video += 1;
+                        client.unacked_bytes += bytes.len();
                         tungstenite::Message::Binary(bytes)
                     }
                     Outgoing::Audio(bytes) => {
@@ -1314,7 +1508,11 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                 client
                     .in_flight
                     .fetch_sub(client.unacked_video, Ordering::Relaxed);
+                client
+                    .in_flight_bytes
+                    .fetch_sub(client.unacked_bytes, Ordering::Relaxed);
                 client.unacked_video = 0;
+                client.unacked_bytes = 0;
             }
             if client.unacked_audio > 0 {
                 client
@@ -1354,42 +1552,143 @@ mod tests {
         assert_eq!(audio_payload(false, Some(&"opus"), None), None::<&&str>);
     }
 
-    #[test]
-    fn the_first_probe_sets_the_baseline() {
-        let rtt = Duration::from_millis(12);
-        assert_eq!(advance_baseline(None, rtt), rtt);
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
     }
 
     #[test]
-    fn a_faster_probe_lowers_it_immediately() {
-        let base = Some(Duration::from_millis(30));
-        assert_eq!(
-            advance_baseline(base, Duration::from_millis(9)),
-            Duration::from_millis(9)
-        );
+    fn a_link_with_no_queue_reports_none() {
+        let now = std::time::Instant::now();
+        let mut delay = DelayEstimate::default();
+        assert_eq!(delay.observe(ms(12), now), Duration::ZERO);
     }
 
     #[test]
-    fn a_slow_probe_only_creeps_it() {
-        // Congestion is exactly "RTT far above baseline", and a baseline that
-        // jumped to meet it would erase the signal being measured.
-        let base = Some(Duration::from_millis(10));
-        assert_eq!(
-            advance_baseline(base, Duration::from_millis(400)),
-            Duration::from_millis(10) + BASELINE_CREEP
-        );
+    fn a_faster_probe_lowers_the_floor_immediately() {
+        let now = std::time::Instant::now();
+        let mut delay = DelayEstimate::default();
+        delay.observe(ms(30), now);
+        assert_eq!(delay.observe(ms(9), now + PROBE_INTERVAL), Duration::ZERO);
     }
 
     #[test]
-    fn a_route_change_is_relearned_rather_than_permanent() {
-        // The path genuinely got slower (wifi roamed, tailscale fell back to
-        // a relay). The floor climbs one creep per probe until the excess it
-        // reports is honest again.
-        let mut base = Some(Duration::from_millis(5));
-        let new_path = Duration::from_millis(60);
-        for _ in 0..60 {
-            base = Some(advance_baseline(base, new_path));
+    fn one_slow_probe_is_not_a_queue() {
+        // The single most important property. A spike raises one sample; a
+        // queue raises the floor. Only the second is congestion.
+        let start = std::time::Instant::now();
+        let mut delay = DelayEstimate::default();
+        let mut at = start;
+        for _ in 0..20 {
+            at += PROBE_INTERVAL;
+            delay.observe(ms(10), at);
         }
-        assert_eq!(base.unwrap(), new_path);
+        at += PROBE_INTERVAL;
+        assert_eq!(delay.observe(ms(400), at), Duration::ZERO);
+    }
+
+    #[test]
+    fn ordinary_jitter_does_not_read_as_a_queue() {
+        // The case this was rewritten for: a link whose floor is a few
+        // milliseconds and whose samples scatter by a hundred. Every one of
+        // those used to be reported as "the queue is 80ms deep".
+        let start = std::time::Instant::now();
+        let mut delay = DelayEstimate::default();
+        let spread = [3u64, 60, 40, 90, 15, 70, 55, 80, 25, 65, 5, 95];
+        let mut at = start;
+        let mut worst = Duration::ZERO;
+        for round in 0..12 {
+            for rtt in spread {
+                at += PROBE_INTERVAL;
+                let queueing = delay.observe(ms(rtt), at);
+                if round > 0 {
+                    worst = worst.max(queueing);
+                }
+            }
+        }
+        assert!(
+            worst < crate::bitrate::QUEUE_DELAY_LIMIT,
+            "jitter of 3-95ms reported {worst:?} of queueing, so the budget \
+             would still collapse on a healthy link",
+        );
+    }
+
+    #[test]
+    fn a_real_queue_still_shows_up() {
+        // The signal has to survive the rewrite. Everything waits behind a
+        // real queue, so the recent floor rises with it.
+        let start = std::time::Instant::now();
+        let mut delay = DelayEstimate::default();
+        let mut at = start;
+        for _ in 0..40 {
+            at += PROBE_INTERVAL;
+            delay.observe(ms(10), at);
+        }
+        let mut queueing = Duration::ZERO;
+        // Every probe now waits behind 200ms of video.
+        for _ in 0..(QUEUE_WINDOW.as_millis() / PROBE_INTERVAL.as_millis()) + 1 {
+            at += PROBE_INTERVAL;
+            queueing = delay.observe(ms(210), at);
+        }
+        assert!(
+            queueing >= crate::bitrate::QUEUE_DELAY_LIMIT,
+            "a standing 200ms queue reported only {queueing:?}",
+        );
+    }
+
+    #[test]
+    fn a_route_change_is_relearned_within_the_window() {
+        // The path genuinely got slower (wifi roamed, tailscale fell back to
+        // a relay). Once the old samples age out, the new path is the floor
+        // and it stops being reported as congestion forever.
+        let start = std::time::Instant::now();
+        let mut delay = DelayEstimate::default();
+        delay.observe(ms(5), start);
+
+        let mut at = start;
+        let mut queueing = Duration::ZERO;
+        for _ in 0..(BASELINE_WINDOW.as_millis() / PROBE_INTERVAL.as_millis()) + 2 {
+            at += PROBE_INTERVAL;
+            queueing = delay.observe(ms(60), at);
+        }
+        assert_eq!(queueing, Duration::ZERO, "the old floor should have aged out");
+    }
+
+    #[test]
+    fn a_client_with_room_is_bounded_by_bytes_as_well_as_frames() {
+        // The bug this closes: four frames means four kilobytes at the bottom
+        // of the budget and a quarter of a megabyte at the top, so the queue
+        // the delay probe sits behind grew with the bitrate.
+        let slot = test_slot();
+        assert!(slot.has_room(4, 100_000));
+        slot.in_flight_bytes.store(120_000, Ordering::Relaxed);
+        assert!(!slot.has_room(4, 100_000), "over the byte budget");
+        assert!(slot.has_room(4, 0), "no budget published means frames only");
+    }
+
+    #[test]
+    fn an_empty_queue_always_admits_one_frame() {
+        // Otherwise a budget smaller than a single frame stops the stream
+        // outright instead of degrading it to one frame at a time.
+        let slot = test_slot();
+        assert!(slot.has_room(4, 1));
+    }
+
+    fn test_slot() -> Slot {
+        let (outgoing, _rx) = channel::<Outgoing>();
+        Slot {
+            id: 1,
+            outgoing,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            in_flight_bytes: Arc::new(AtomicUsize::new(0)),
+            audio_in_flight: Arc::new(AtomicUsize::new(0)),
+            connected: Arc::new(AtomicBool::new(true)),
+            streams: Mutex::new(HashSet::new()),
+            audio: AtomicBool::new(false),
+            opus: AtomicBool::new(false),
+            rtt_excess: Arc::new(AtomicU64::new(RTT_UNMEASURED)),
+            delay_congested: Arc::new(AtomicBool::new(false)),
+            superseded: Arc::new(AtomicBool::new(false)),
+            evict: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
