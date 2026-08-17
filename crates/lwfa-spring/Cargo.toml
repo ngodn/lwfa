@@ -1,6 +1,6 @@
 [package]
 name = "lwfa-spring"
-version = "1.1.7"
+version = "1.1.8"
 description = "Motion-compatible spring integrator shared by the lwfa engine and shell"
 edition.workspace = true
 rust-version.workspace = true

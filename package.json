@@ -1,6 +1,6 @@
 {
   "name": "lwfa",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "private": true,
   "type": "module",
   "description": "literally work from anywhere: a Wayland compositor with a browser-native shell",
