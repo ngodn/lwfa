@@ -232,6 +232,37 @@ impl Controller {
         STEPS[self.step]
     }
 
+    /// Somebody attached after a stretch with nobody connected.
+    ///
+    /// The controller otherwise has no idea a session ever ended, and two
+    /// things go wrong because of it.
+    ///
+    /// The first is that an absence reads as good news. `clear_since` is only
+    /// moved by congestion or by a climb, and neither happens while nothing is
+    /// observed, so it ages for the whole disconnection and the first climb
+    /// after a reconnect fires immediately on evidence nobody gathered. Seen
+    /// in the journal: a session rejoined and stepped up 1.6 seconds later,
+    /// against a `climb_wait` of sixteen.
+    ///
+    /// The second is that a budget beaten down by the link that *caused* the
+    /// disconnection is inherited by the connection that replaces it. That
+    /// used to cost sharpness alone; since the budget also paces capture it
+    /// costs frame rate, and a session returning at the floor comes back at
+    /// ten frames a second. So the step is floored back to where a brand new
+    /// connection starts, on the grounds that a client nothing has measured is
+    /// exactly as unknown as a first one and has earned neither more optimism
+    /// nor less.
+    ///
+    /// Only ever a floor, never a raise: a session that was happily at the
+    /// ceiling keeps it, because there the evidence really was gathered.
+    pub fn attach(&mut self, now: Instant) {
+        self.step = self.step.max(START);
+        self.clear_since = now;
+        self.changed_at = now;
+        self.hold = SETTLE;
+        self.was_congested = false;
+    }
+
     /// Report how the connection is doing, and get the new bitrate if it moved.
     ///
     /// `congested` means the engine had a frame ready and nowhere to put it.
@@ -659,6 +690,80 @@ mod tests {
     }
 
     #[test]
+    fn a_returning_client_does_not_inherit_the_floor() {
+        // The link that beat the budget down is the one that dropped the
+        // connection. Handing its verdict to whatever attaches next means the
+        // new client starts at the floor, which since the budget also paces
+        // capture is ten frames a second.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        for i in 1..20 {
+            controller.observe(Signal::congested(), at(base, i * 3));
+        }
+        assert_eq!(controller.bitrate(), STEPS[0], "should be on the floor");
+
+        controller.attach(at(base, 100));
+        assert_eq!(
+            controller.bitrate(),
+            STEPS[START],
+            "a client nothing has measured should start where a first one does",
+        );
+    }
+
+    #[test]
+    fn a_returning_client_does_not_cost_a_healthy_session_its_ceiling() {
+        // The floor is a floor, not a reset. A session sitting at the top has
+        // genuinely earned it, and knocking it back down on every reconnect
+        // would make a flapping link permanently worse than a dead one.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        for i in 1..40 {
+            controller.observe(Signal::clear(), at(base, i));
+        }
+        let earned = controller.bitrate();
+        assert!(earned > STEPS[START], "{earned} should be above the start");
+
+        controller.attach(at(base, 100));
+        assert_eq!(controller.bitrate(), earned);
+    }
+
+    #[test]
+    fn time_with_nobody_connected_is_not_evidence_the_link_was_clear() {
+        // `clear_since` only moves on congestion or on a climb, so an absence
+        // ages it exactly like a good connection would. Observed: a session
+        // rejoined and climbed 1.6 seconds later against a sixteen second
+        // wait, on a link the engine had not measured once.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        // One episode, so the patient schedule is in force.
+        controller.observe(Signal::congested(), at(base, 3));
+        controller.observe(Signal::clear(), at(base, 4));
+
+        // Nobody connected for a long while, then somebody arrives.
+        controller.attach(at(base, 300));
+
+        // The very next pass must not be enough to climb.
+        assert!(
+            controller.observe(Signal::clear(), at(base, 302)).is_none(),
+            "climbed on a link it has watched for two seconds",
+        );
+    }
+
+    #[test]
+    fn a_returning_client_still_settles_before_anything_moves() {
+        // Attaching is a change like any other: the opening burst of keyframes
+        // is not evidence about the link, and reacting to it is the feedback
+        // loop `SETTLE` exists to break.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        controller.attach(at(base, 10));
+        assert!(
+            controller.observe(Signal::congested(), at(base, 11)).is_none(),
+            "cut inside the settling period",
+        );
+    }
+
+    #[test]
     fn a_clean_link_keeps_its_eager_climb() {
         // The decay must never lengthen a wait. Its floor is CLIMB_AFTER,
         // which is longer than the eager schedule a fresh link starts on, so
@@ -1041,6 +1146,20 @@ impl Pressure {
             since: now,
             verdict: false,
         }
+    }
+
+    /// Start a fresh window for a newly attached client.
+    ///
+    /// `MIN_PASSES` already stops the stale window a disconnection leaves open
+    /// from being judged, so this changes no verdict. It exists so the first
+    /// real window of a session is a whole window wide rather than whatever
+    /// was left of the last one, which is the difference between the first
+    /// judgement arriving after a second and after a few milliseconds.
+    pub fn attach(&mut self, now: Instant) {
+        self.passes = 0;
+        self.full = 0;
+        self.since = now;
+        self.verdict = false;
     }
 
     /// Record one pass, and say whether the path has been full often enough.

@@ -803,6 +803,13 @@ export function App(): React.ReactElement {
         );
       },
       onStatus: (s, detail) => {
+        // A socket that has just come up may have delivered its backlog in one
+        // burst, and both audio players absorb a burst as permanent delay
+        // rather than as a moment of catching up. Dropping what is held costs
+        // a few tens of milliseconds of sound nobody was going to enjoy and
+        // saves a fifth of a second of lag for the rest of the session. See
+        // `lib/audio.flush`.
+        if (s === "connected") audio.flush();
         setStatus(s);
         setStatusDetail(detail);
         log(

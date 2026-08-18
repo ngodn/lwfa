@@ -125,6 +125,10 @@ pub struct Lwfa {
     pressure: crate::bitrate::Pressure,
     /// For the one debug line that says which signal moved the budget.
     was_congested: bool,
+    /// Whether anybody was connected on the previous pass, so the arrival of
+    /// the first one can be told apart from the sixtieth frame of a session.
+    /// See `bitrate::Controller::attach`.
+    was_listening: bool,
     /// Holds focus still before the budget follows it. See `bitrate`.
     pub attention: crate::bitrate::Attention,
     /// What was last allocated, so the division is only recomputed on a change.
@@ -324,6 +328,7 @@ impl Lwfa {
             bitrate: crate::bitrate::Controller::new(std::time::Instant::now()),
             pressure: crate::bitrate::Pressure::new(std::time::Instant::now()),
             was_congested: false,
+            was_listening: false,
             attention: crate::bitrate::Attention::new(std::time::Instant::now()),
             streamed_last: Vec::new(),
             rates_last: std::collections::HashMap::new(),
@@ -1671,6 +1676,16 @@ impl Lwfa {
         // With nobody connected there is no link, so there is nothing to learn
         // about one. See `ShellLink::has_clients`.
         let listening = shell.has_clients();
+        let now = std::time::Instant::now();
+        // Somebody arrived after a stretch with nobody here. The controller is
+        // otherwise blind to session boundaries, which makes an absence read
+        // as a clear link and hands a returning client a budget that the link
+        // which disconnected it beat down. See `bitrate::Controller::attach`.
+        if listening && !self.was_listening {
+            self.bitrate.attach(now);
+            self.pressure.attach(now);
+        }
+        self.was_listening = listening;
         // Two congestion signals, and delay is the earlier one. Backpressure
         // only fires once the send path is actually full; the probe RTT rises
         // as soon as a queue starts to form, the way WebRTC's congestion
@@ -1694,12 +1709,29 @@ impl Lwfa {
         // is different in kind: the queue is genuinely full, there is nowhere
         // to put a frame, and skipping is the only available answer.
         let backpressured = !shell.can_accept_frame();
-        let now = std::time::Instant::now();
         // The budget reacts to how *often* the path was full, not to whether
         // it happened to be full on this pass; the flag alone is close to a
         // coin toss at sixty hertz. Skipping still uses the raw flag, because
         // that is a question about this frame and nothing else.
-        let squeezed = listening && self.pressure.observe(backpressured, now);
+        // Only from a client that is still talking back.
+        //
+        // A full socket means "there is nowhere to put a frame" and nothing
+        // more. On a struggling link that is congestion; on a client that has
+        // closed its laptop, walked out of range, or navigated away, it is a
+        // corpse whose queue will never drain, and the two are identical from
+        // here. The one thing that separates them is that a congested link
+        // still answers probes, just slowly.
+        //
+        // Measured before this existed: a page navigating away held its socket
+        // open and walked the budget from 32 Mbit/s to the 500 kbit/s floor in
+        // twelve seconds, every step logged as "socket backpressure" with the
+        // queueing measurement reading zero, because no pong was coming back
+        // to measure. The session that replaced it started at the floor, which
+        // since the budget also paces capture is ten frames a second. That is
+        // the "it comes back laggy after a reconnect" everyone could feel and
+        // nothing could explain. See `shell::Slot::answering`.
+        let answering = listening && shell.answering();
+        let squeezed = answering && self.pressure.observe(backpressured, now);
         let congested = listening && (delayed || squeezed);
         if congested && !self.was_congested {
             tracing::debug!(

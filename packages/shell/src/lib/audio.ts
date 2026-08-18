@@ -68,6 +68,16 @@ let loading: Promise<void> | null = null
 let underruns = 0
 
 /**
+ * Frames of sound the player is holding, as of the last report.
+ *
+ * This is latency you can hear and nothing else measures it. The worklet's
+ * ring is meant to sit around 60ms; a session that has ridden out a stall used
+ * to leave it pinned at its 250ms ceiling for good, and from the outside that
+ * is indistinguishable from a slow network. See `audio-worklet.js`.
+ */
+let buffered = 0
+
+/**
  * Where the next scheduled chunk starts, on the context clock. Fallback only.
  *
  * Zero means "not scheduling yet", which is also the state after an underrun.
@@ -196,8 +206,9 @@ export async function start(): Promise<boolean> {
             outputChannelCount: [2],
           })
           player.port.onmessage = (event) => {
-            const count = (event.data as { underruns?: number }).underruns
-            if (typeof count === "number") underruns = count
+            const message = event.data as { underruns?: number; buffered?: number }
+            if (typeof message.underruns === "number") underruns = message.underruns
+            if (typeof message.buffered === "number") buffered = message.buffered
           }
           player.connect(volume)
           node = player
@@ -250,6 +261,7 @@ export async function stop(): Promise<void> {
   gain = null
   playhead = 0
   underruns = 0
+  buffered = 0
   chunksPlayed = 0
   wireFormat = "none"
   windowStart = 0
@@ -377,9 +389,23 @@ function begin(buffer: AudioBuffer, start: number): void {
   source.start(start)
 }
 
-/** Drop anything buffered. Used when the stream stops, so it does not resume stale. */
+/**
+ * Drop anything buffered, and start the cushion again from empty.
+ *
+ * Call this whenever the stream has been interrupted, which in practice means
+ * on every reconnect. A socket that stalls and recovers delivers its backlog
+ * in one burst, and both players absorb that burst as *permanent* delay: the
+ * worklet's ring fills to its ceiling and stays there, because sound is
+ * produced and consumed at exactly the same rate and nothing was ever removing
+ * the excess. The result was a fifth of a second of lag added by every network
+ * hiccup, for the rest of the session, which sounded exactly like a slow
+ * connection and was not one.
+ *
+ * This existed and was called from nowhere, which is how that survived.
+ */
 export function flush(): void {
   node?.port.postMessage("reset")
+  buffered = 0
   // Scheduled sources already started cannot be unscheduled without tracking
   // every one of them, which for 20ms chunks means fifty objects a second of
   // bookkeeping to save 60ms of audio. Re-anchoring the playhead is enough:
@@ -458,15 +484,24 @@ export function diagnostics(): {
   sampleRate: number
   wire: "opus" | "pcm" | "none"
   wireKbits: number
+  /** How far behind the sound is, in milliseconds, or -1 if not measurable. */
+  bufferedMs: number
 } {
+  // Asking costs one message to the audio thread and is answered before the
+  // next call; the value read here is the previous answer. Perfectly good for
+  // a readout that updates a few times a second, and it keeps the audio
+  // thread from posting a message nobody is looking at fifty times a second.
+  node?.port.postMessage("report")
+  const rate = context?.sampleRate ?? 0
   return {
     contextState: context?.state ?? "none",
     path: playbackPath(),
     chunks: chunksPlayed,
     underruns,
-    sampleRate: context?.sampleRate ?? 0,
+    sampleRate: rate,
     wire: wireFormat,
     wireKbits,
+    bufferedMs: node && rate > 0 ? Math.round((buffered / rate) * 1000) : -1,
   }
 }
 

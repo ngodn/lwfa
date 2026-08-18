@@ -92,6 +92,26 @@ const RECONNECT_MAX_MS = 5_000
  */
 const RESUME_PROBE_MS = 2_000
 
+/**
+ * How long the shell will sit in silence before asking whether it is alone.
+ *
+ * The resume probe above only runs when the page is brought back, which covers
+ * the iPad that was put down and picked up again and nothing else. Somebody
+ * watching a session the whole time gets no probe at all, so a link that dies
+ * under them is noticed only when the *engine* gives up on it, which takes
+ * fifteen seconds of frozen picture.
+ *
+ * Chosen against what a healthy session sounds like rather than against the
+ * network. Frames, audio and the engine's own replies arrive continuously, so
+ * three seconds of complete silence never happens on a working connection, and
+ * a session with the picture paused and the sound off still has this to fall
+ * back on because the engine answers a ping with a pong.
+ */
+const IDLE_PROBE_MS = 3_000
+
+/** How often to check the clock against {@link IDLE_PROBE_MS}. */
+const WATCHDOG_MS = 1_000
+
 export class Connection {
   #url: string
   #handlers: ConnectionHandlers
@@ -101,6 +121,10 @@ export class Connection {
   #closed = false
   /** The deadline on an unanswered resume probe. See `#onResume`. */
   #probe: ReturnType<typeof setTimeout> | null = null
+  /** The repeating check for a socket that has gone quiet. See `#watch`. */
+  #watchdog: ReturnType<typeof setInterval> | null = null
+  /** When anything last arrived from the engine. */
+  #lastInbound = 0
   /** Bound once so `close()` can remove exactly what was added. */
   #onResumeBound = () => this.#onResume()
   /**
@@ -131,11 +155,32 @@ export class Connection {
       document.addEventListener("visibilitychange", this.#onResumeBound)
       globalThis.addEventListener("pageshow", this.#onResumeBound)
     }
+    // Covers the case the two events above cannot: a page nobody has
+    // backgrounded, watching a link that has silently died. See
+    // `IDLE_PROBE_MS`.
+    this.#watchdog = setInterval(() => this.#watch(), WATCHDOG_MS)
+  }
+
+  /** Notice a socket that has stopped delivering, without waiting to be asked. */
+  #watch(): void {
+    if (this.#closed) return
+    if (this.#socket?.readyState !== WebSocket.OPEN) return
+    // A probe is already outstanding, and it has its own deadline.
+    if (this.#probe !== null) return
+    // Never had a chance to hear anything yet.
+    if (this.#lastInbound === 0) return
+    if (Date.now() - this.#lastInbound < IDLE_PROBE_MS) return
+    // Exactly the question `#onResume` asks, and answered the same way: by
+    // anything at all arriving. Reusing it keeps one definition of what a
+    // dead socket is and one path for replacing it.
+    this.#onResume()
   }
 
   /** Prove the socket is alive, or replace it. See the constructor. */
   #onResume(): void {
     if (this.#closed) return
+    // A hidden page is not one anybody is staring at, and browsers throttle
+    // background timers anyway, so there is nothing here worth proving.
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return
 
     const socket = this.#socket
@@ -187,6 +232,9 @@ export class Connection {
 
     const socket = new WebSocket(this.#url)
     this.#socket = socket
+    // Nothing has arrived on *this* socket yet, and the previous one's clock
+    // must not make a fresh connection look overdue on its first tick.
+    this.#lastInbound = 0
 
     socket.onopen = () => {
       this.#retryMs = RECONNECT_MIN_MS
@@ -201,6 +249,7 @@ export class Connection {
     socket.onmessage = (event) => {
       // Anything arriving proves the socket is alive, which is all the resume
       // probe wanted to know. The pong itself needs no handling of its own.
+      this.#lastInbound = Date.now()
       this.#probeAnswered()
       if (event.data instanceof ArrayBuffer) {
         // Audio first: it is the cheaper check, and on a session with sound
@@ -346,6 +395,10 @@ export class Connection {
   close(): void {
     this.#closed = true
     if (this.#timer !== null) clearTimeout(this.#timer)
+    if (this.#watchdog !== null) {
+      clearInterval(this.#watchdog)
+      this.#watchdog = null
+    }
     this.#probeAnswered()
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", this.#onResumeBound)
