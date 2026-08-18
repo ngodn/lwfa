@@ -45,6 +45,7 @@ import { AudioFormat } from "@lwfa/proto";
 import type { Codec } from "@lwfa/proto";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
 import { clearFormat } from "@/lib/streamFormat"
+import { clearStats } from "@/lib/streamStats"
 import { setPrefs, usePrefSection } from "@/lib/prefs"
 import {
   appsRequested,
@@ -803,6 +804,13 @@ export function App(): React.ReactElement {
         );
       },
       onStatus: (s, detail) => {
+        // A socket that has just come up may have delivered its backlog in one
+        // burst, and both audio players absorb a burst as permanent delay
+        // rather than as a moment of catching up. Dropping what is held costs
+        // a few tens of milliseconds of sound nobody was going to enjoy and
+        // saves a fifth of a second of lag for the rest of the session. See
+        // `lib/audio.flush`.
+        if (s === "connected") audio.flush();
         setStatus(s);
         setStatusDetail(detail);
         log(
@@ -870,6 +878,7 @@ export function App(): React.ReactElement {
       // The old answer would otherwise linger and claim a codec is in use
       // after the stream has stopped.
       clearFormat();
+      clearStats();
       // Another machine has a different set of applications and accounts.
       clearApps();
       clearAccounts();

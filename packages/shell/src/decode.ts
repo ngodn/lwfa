@@ -30,6 +30,7 @@
 
 import { FrameFormat, type DecodedFrame, type WindowId } from "@lwfa/proto"
 import { noteFormat } from "@/lib/streamFormat"
+import { noteFrame } from "@/lib/streamStats"
 
 /**
  * Derive the WebCodecs codec string from the stream's own SPS.
@@ -104,6 +105,15 @@ export class FrameDecoder {
     // than reporting what the browser is merely capable of. Free unless it
     // changes; see `lib/streamFormat`.
     noteFormat(frame.header.format)
+    // How much and how often, which is what separates "the engine lowered the
+    // quality" from "the engine lowered the frame rate" from "nothing is
+    // arriving at all". See `lib/streamStats`.
+    noteFrame(
+      frame.payload.byteLength,
+      frame.header.width,
+      frame.header.height,
+      frame.header.keyframe,
+    )
 
     if (frame.header.format === FrameFormat.Jpeg) {
       await this.#handleJpeg(frame)

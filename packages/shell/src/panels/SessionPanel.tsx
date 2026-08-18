@@ -1,23 +1,48 @@
 /**
  * What the session is actually doing.
  *
- * The panel you open when something looks wrong: is it connected, is it
- * decoding in hardware, how many windows are being streamed, and what has
- * happened recently. Everything here is observed by the shell itself rather
- * than reported by the engine, so it keeps working when the engine does not.
+ * The panel you open when something looks wrong. Everything here is *observed*
+ * rather than chosen, which is the line that decides what belongs here and what
+ * belongs in settings: if it is a number the shell measured or a state it found
+ * itself in, it is here; if it is a switch, it is in Settings > Stream.
+ *
+ * That line used to be blurred. A "Status" block and a set of audio
+ * diagnostics lived at the bottom of the settings tab, next to the switches
+ * that caused them, which meant the readings were filed under the one place
+ * nobody looks when the picture goes wrong. Two of them had also drifted into
+ * being untrue, which is the failure mode of a readout kept away from the thing
+ * it measures: one reported "uncompressed" sound while Opus was being decoded,
+ * and one decided which *audio* path was running by asking whether the browser
+ * could decode *video*.
+ *
+ * Almost all of it is measured by the shell itself rather than reported by the
+ * engine, so it keeps working when the engine does not, which is exactly when
+ * it is wanted.
  */
 
 import { memo } from "react"
-import { Activity, AppWindow, Cpu, Gamepad2, Layers, LogOut, Radio } from "lucide-react"
+import {
+  Activity,
+  AppWindow,
+  Cpu,
+  Gamepad2,
+  Gauge,
+  Layers,
+  LogOut,
+  Radio,
+} from "lucide-react"
 import { useSessionActions, useSessionState } from "@/session"
 import { useLog } from "@/lib/log"
 import { supportsH264 } from "@/decode"
 import { currentWorkspace, focusedWindow } from "@/strip"
+import { usePrefs } from "@/lib/prefs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { PanelSection } from "@/panels/parts"
 import { describeStatus, type Tone } from "@/lib/status"
 import { describeFormat, useStreamFormat } from "@/lib/streamFormat"
+import { useStreamStats } from "@/lib/streamStats"
+import { AudioReadout } from "@/panels/AudioReadout"
 import { cn } from "@/lib/utils"
 
 function SessionPanel() {
@@ -26,6 +51,7 @@ function SessionPanel() {
   const actions = useSessionActions()
   const entries = useLog()
   const workspace = currentWorkspace(strip)
+  const { stream: streamPrefs } = usePrefs()
 
   // The title of whatever has focus.
   //
@@ -40,6 +66,7 @@ function SessionPanel() {
   // happening in words rather than showing the internal name of a state.
   const report = describeStatus(status, statusDetail)
   const format = useStreamFormat()
+  const stats = useStreamStats()
 
   return (
     <div className="space-y-6 pt-2">
@@ -50,12 +77,13 @@ function SessionPanel() {
             * picks the codec from what every connected client reports, so it
             * is not knowable here in advance; the frames are the only honest
             * source. See `lib/streamFormat`. */}
-          <Stat icon={Cpu} label="Decode" value={describeFormat(format)} />
+          <Stat icon={Cpu} label="Decode" value={describeFormat(format)} verbatim />
           <Stat icon={Layers} label="Windows" value={String(windows.size)} />
           <Stat
             icon={Activity}
             label="Viewport"
             value={output.width > 0 ? `${output.width}×${output.height}` : "—"}
+            verbatim
           />
         </div>
         {report.tone === "good" ? null : (
@@ -66,6 +94,74 @@ function SessionPanel() {
             Using JPEG. Serve the shell over HTTPS to enable H.264.
           </p>
         ) : null}
+      </PanelSection>
+
+      {/*
+        * The three numbers that tell "it feels laggy" apart from itself.
+        *
+        * A stream can be poor in three unrelated ways and they are
+        * indistinguishable by eye: fewer frames, smaller frames, or none at
+        * all. The engine's budget paces both quality and capture rate, so a
+        * link it has given up on shows here as a low frame rate rather than a
+        * soft picture, and a link that is genuinely saturated shows as a high
+        * rate at a low bitrate. Neither was visible anywhere before.
+        */}
+      <PanelSection
+        title="Video"
+        description="Measured from the frames themselves."
+      >
+        {!streamPrefs.enabled ? (
+          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+            Paused. The connection is still open; turn the picture back on in
+            Settings.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <Stat
+                icon={Gauge}
+                label="Frame rate"
+                value={stats.fps > 0 ? `${stats.fps}/s` : "—"}
+                tone={rateTone(stats.fps)}
+                verbatim
+              />
+              <Stat
+                icon={Activity}
+                label="Bitrate"
+                value={describeRate(stats.kbits)}
+                verbatim
+              />
+            </div>
+            <dl className="space-y-1.5 text-xs">
+              <Row label="Largest frame" value={stats.size ?? "—"} />
+              {/* An all-keyframe stream is JPEG by another name, and the ratio
+                * is the cheapest way to notice an encoder rebuilding itself
+                * over and over: every rebuild costs one. */}
+              <Row
+                label="Keyframes"
+                value={stats.fps > 0 ? `${stats.keyframes} of ${stats.fps}` : "—"}
+              />
+            </dl>
+            {stats.fps > 0 && stats.fps < 20 ? (
+              <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                Few frames rather than soft ones. The engine sends fewer when it
+                has decided the connection cannot carry more, so this is the
+                link rather than this device.
+              </p>
+            ) : null}
+          </>
+        )}
+      </PanelSection>
+
+      {/* Moved here whole from Settings > Stream, where the switches are. */}
+      <PanelSection title="Sound" description="Where silence would come from.">
+        {streamPrefs.audio ? (
+          <AudioReadout />
+        ) : (
+          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+            Muted. Turn sound on in Settings.
+          </p>
+        )}
       </PanelSection>
 
       <PanelSection title="Session">
@@ -153,16 +249,51 @@ function titleOf(info: { title?: string | null; appId?: string | null } | undefi
   return info?.title || info?.appId || `Window ${id}`
 }
 
+/**
+ * Kilobits into something a person can hold in their head.
+ *
+ * Zero is "nothing is arriving", which is a different statement from
+ * "0 Mbit/s" and worth making differently.
+ */
+function describeRate(kbits: number): string {
+  if (kbits <= 0) return "—"
+  if (kbits < 1000) return `${kbits} kbit/s`
+  return `${(kbits / 1000).toFixed(1)} Mbit/s`
+}
+
+/**
+ * Whether a frame rate is worth colouring.
+ *
+ * The engine's floor is ten a second, so anything near it means the budget has
+ * bottomed out. Amber rather than red: it is a degraded picture, not a broken
+ * session, and colouring it the same as a dropped connection is what makes
+ * every readout look alarming and therefore ignorable.
+ */
+function rateTone(fps: number): Tone | undefined {
+  if (fps === 0) return undefined
+  if (fps < 20) return "busy"
+  return "good"
+}
+
 const Stat = memo(function Stat({
   icon: Icon,
   label,
   value,
   tone,
+  verbatim,
 }: {
   icon: typeof Radio
   label: string
   value: string
-  tone?: Tone
+  tone?: Tone | undefined
+  /**
+   * Show the value exactly as given.
+   *
+   * The status words ("connected", "waiting") are written lower case and
+   * capitalised here, which is wrong for anything with a unit in it: it
+   * rendered "218 kbit/s" as "218 Kbit/S".
+   */
+  verbatim?: boolean | undefined
 }) {
   return (
     <div className="rounded-lg border bg-card p-2.5">
@@ -172,7 +303,8 @@ const Stat = memo(function Stat({
       </div>
       <p
         className={cn(
-          "mt-0.5 truncate text-sm font-medium capitalize",
+          "mt-0.5 truncate text-sm font-medium",
+          !verbatim && "capitalize",
           tone === "good" && "text-success",
           // Amber rather than red: something in progress is not a failure, and
           // colouring a reconnect the same as a refused password is what made

@@ -40,6 +40,35 @@ const PREBUFFER_FRAMES = 2880
  */
 const MAX_FRAMES = 12000
 
+/**
+ * Above this the cushion is bigger than it needs to be. About 120ms.
+ *
+ * The ceiling above is an emergency brake, and for a long time it was also the
+ * only thing that ever removed a frame. That is not a jitter buffer, it is a
+ * ratchet: a burst (the backlog arriving all at once when a stalled connection
+ * comes back) fills the ring to the ceiling, and because sound is produced and
+ * consumed at exactly the same rate, it then *stays* at the ceiling for the
+ * rest of the session. Every recovered stall permanently added a fifth of a
+ * second between what you press and what you hear.
+ *
+ * So there is a second, much lower mark that the buffer is actively brought
+ * back down to. Twice the cushion, so ordinary jitter never reaches it.
+ */
+const DRIFT_CEILING = PREBUFFER_FRAMES * 2
+
+/**
+ * How loud a block may be and still be a place to drop samples.
+ *
+ * Discarding audio makes a click, unless it is discarded where there is
+ * nothing to hear. A desktop is quiet most of the time (between keystrokes,
+ * between notification sounds, in every gap in speech), so waiting for a
+ * quiet block costs nothing and this converges within a second or two of
+ * real use. If sound genuinely never stops, the extra cushion stays, which
+ * is the right trade: continuous audio is also the case where a click is
+ * most obvious.
+ */
+const QUIET_PEAK = 0.02
+
 /** Capacity. Comfortably above the ceiling so the ring never wraps onto itself. */
 const CAPACITY = 48000
 
@@ -65,6 +94,13 @@ class PcmPlayer extends AudioWorkletProcessor {
         this.write = 0
         this.available = 0
         this.priming = true
+        return
+      }
+      // What the ring is holding, so the page can show a number rather than
+      // leaving somebody to guess whether the delay they can hear is the
+      // network or this buffer. See `lib/audio`.
+      if (data === "report") {
+        this.port.postMessage({ buffered: this.available, underruns: this.underruns })
         return
       }
       // Decoded Opus arrives as float planes, which is what the ring already
@@ -129,10 +165,41 @@ class PcmPlayer extends AudioWorkletProcessor {
     this.#commit(frames)
   }
 
+  /**
+   * Drop the excess cushion, if the next block is quiet enough to hide it.
+   *
+   * Peak rather than RMS: a single loud sample either side of the cut is what
+   * makes the click, and an average happily reports "quiet" for a block with
+   * one spike in it.
+   */
+  #shed(frames) {
+    let peak = 0
+    for (let i = 0; i < frames; i++) {
+      const at = (this.read + i) % CAPACITY
+      for (let c = 0; c < this.channels; c++) {
+        const sample = this.ring[c][at]
+        const size = sample < 0 ? -sample : sample
+        if (size > peak) peak = size
+      }
+    }
+    if (peak > QUIET_PEAK) return
+
+    // Only ever back to the mark, never below: dropping to the prime level
+    // would leave nothing in hand for the next late chunk.
+    const drop = Math.min(this.available - DRIFT_CEILING, frames)
+    if (drop <= 0) return
+    this.read = (this.read + drop) % CAPACITY
+    this.available -= drop
+  }
+
   process(_inputs, outputs) {
     const output = outputs[0]
     if (!output || output.length === 0) return true
     const frames = output[0].length
+
+    // Give back any cushion that is not being used, when it can be done
+    // silently. See `DRIFT_CEILING`.
+    if (!this.priming && this.available > DRIFT_CEILING) this.#shed(frames)
 
     if (this.priming || this.available < frames) {
       // Silence, not stale audio. Repeating the last buffer to cover a gap is

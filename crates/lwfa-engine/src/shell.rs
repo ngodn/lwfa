@@ -222,6 +222,23 @@ struct Slot {
     /// Kept apart from `rtt_excess` because they answer different questions:
     /// the number is what to show a human, this is whether to believe it.
     delay_congested: Arc<AtomicBool>,
+    /// Whether this client has answered a probe recently enough to be
+    /// treated as a link rather than as a corpse.
+    ///
+    /// A departing client is the single most misleading thing the engine
+    /// sees. Its socket stops draining, so the queue fills and stays full,
+    /// and until the heartbeat gives up on it (up to [`PONG_GRACE`]) that is
+    /// indistinguishable from a link that cannot keep up. Measured: a page
+    /// navigating away walked the budget from the ceiling to the floor, all
+    /// twelve seconds of it blamed on "socket backpressure", with the
+    /// queueing measurement reading zero the whole way down because no pong
+    /// was coming back to measure. The client that connected next inherited
+    /// the floor.
+    ///
+    /// A genuinely congested link keeps answering, just slowly, and the delay
+    /// signal is what reads it. So this gates only the backpressure half; see
+    /// [`FrameSink::answering`].
+    answering: Arc<AtomicBool>,
     /// Whether the eviction is this client reconnecting rather than a kick.
     superseded: Arc<AtomicBool>,
     /// Set when the owner has asked for this connection to go away.
@@ -464,6 +481,24 @@ impl FrameSink {
         measured
     }
 
+    /// Whether anybody on the other end is still answering probes.
+    ///
+    /// "Any", to match [`Self::can_accept_frame`]: the budget follows the
+    /// healthiest link, so one device that has gone quiet must not silence
+    /// the signal for the rest. False when nobody is connected at all, and
+    /// false for the first probe interval of a session, which costs nothing
+    /// because the controller is settling then anyway.
+    ///
+    /// This exists to stop a *departing* client being read as a congested
+    /// one. See [`Slot::answering`].
+    pub fn answering(&self) -> bool {
+        self.clients.slots.lock().is_ok_and(|slots| {
+            slots
+                .iter()
+                .any(|slot| slot.alive() && slot.answering.load(Ordering::Relaxed))
+        })
+    }
+
     /// The healthiest connected client's queueing delay.
     ///
     /// Excess RTT over each connection's own baseline, minimised across
@@ -680,6 +715,11 @@ impl ShellLink {
     pub fn delay_congested(&self) -> bool {
         self.sink().delay_congested()
     }
+
+    /// Whether anybody is still answering probes. See [`FrameSink::answering`].
+    pub fn answering(&self) -> bool {
+        self.sink().answering()
+    }
 }
 
 /// A connection the accept thread is serving.
@@ -726,6 +766,12 @@ struct Live {
     rtt_excess: Arc<AtomicU64>,
     /// Where the verdict on that excess is published.
     delay_congested: Arc<AtomicBool>,
+    /// Where "this client is still talking to us" is published. See
+    /// [`Slot::answering`].
+    answering: Arc<AtomicBool>,
+    /// When a probe was last answered, which is what `answering` is derived
+    /// from. `None` until the first pong.
+    last_pong: Option<std::time::Instant>,
     /// An unanswered ping, when one is out. See `heartbeat`.
     ping_sent: Option<std::time::Instant>,
 }
@@ -781,6 +827,15 @@ const BASELINE_WINDOW: Duration = Duration::from_secs(30);
 /// low sample is likely in it, and short enough that a queue which forms is
 /// reflected within a couple of seconds.
 const QUEUE_WINDOW: Duration = Duration::from_secs(2);
+
+/// How long since a pong before a client stops counting as a link.
+///
+/// Probes go out four times a second, so a working connection answers well
+/// inside this however slow the path is. Deliberately far longer than the
+/// delay the controller cares about: a link genuinely queueing this much is
+/// one the delay signal has already condemned, so nothing is lost by the
+/// backpressure half falling silent at the same time. See [`Slot::answering`].
+const ANSWER_GRACE: Duration = Duration::from_secs(3);
 
 /// Consecutive over-limit estimates before the delay is believed.
 ///
@@ -873,6 +928,15 @@ fn heartbeat(client: &mut Live) -> bool {
     {
         client.probe_sent = None;
     }
+    // Whether this is still a conversation. Checked here rather than only on
+    // a pong, because the case that matters is the one where no pong is ever
+    // coming: a client that has gone away answers nothing, and its full
+    // socket must stop being read as a struggling network. See
+    // `Slot::answering`.
+    let answering = client
+        .last_pong
+        .is_some_and(|at| now.duration_since(at) <= ANSWER_GRACE);
+    client.answering.store(answering, Ordering::Relaxed);
     // One probe in the air at a time. Sending a second before the first is
     // answered would pair it with the wrong pong and report a fraction of the
     // real round trip, which at a 250ms cadence is any path slower than that.
@@ -930,6 +994,30 @@ fn accept_loop(
         loop {
             match listener.accept() {
                 Ok((stream, peer)) => {
+                    // Bound every peek below, before any of them runs.
+                    //
+                    // `accept(2)` returns a *blocking* socket however the
+                    // listener was configured, and the routing sniffers peek
+                    // at the request to decide where a connection goes. So a
+                    // client that connects and says nothing blocked this
+                    // thread in `recvfrom` with no timeout and no way out, and
+                    // this is the thread that also reads every live socket,
+                    // answers every probe and drains every frame queue.
+                    //
+                    // Browsers open speculative connections and send nothing
+                    // on them constantly, so a single page load could stop the
+                    // engine servicing anybody. Frames then piled up undrained,
+                    // which the bitrate controller correctly read as a full
+                    // socket and incorrectly read as a congested link: measured
+                    // walking the budget from 32 Mbit/s to the 500 kbit/s floor
+                    // and staying there, with every step logged as "socket
+                    // backpressure". See `http::SNIFF_TIMEOUT`.
+                    //
+                    // A timeout rather than non-blocking mode, so the handlers
+                    // this hands off to still get the blocking socket they are
+                    // written against; each sets its own timeouts anyway.
+                    let _ = stream.set_read_timeout(Some(crate::http::SNIFF_TIMEOUT));
+
                     // One port, split by request rather than by number: an
                     // upgrade is the protocol, anything else is the page. See
                     // `crate::http`.
@@ -1021,6 +1109,9 @@ fn accept_loop(
                     let superseded = Arc::new(AtomicBool::new(false));
                     let rtt_excess = Arc::new(AtomicU64::new(RTT_UNMEASURED));
                     let delay_congested = Arc::new(AtomicBool::new(false));
+                    // Silent until proven otherwise: a client that has not
+                    // answered anything yet is exactly the case this is for.
+                    let answering = Arc::new(AtomicBool::new(false));
                     clients.add(Arc::new(Slot {
                         id,
                         outgoing: outgoing_tx,
@@ -1033,6 +1124,7 @@ fn accept_loop(
                         opus: AtomicBool::new(false),
                         rtt_excess: Arc::clone(&rtt_excess),
                         delay_congested: Arc::clone(&delay_congested),
+                        answering: Arc::clone(&answering),
                         superseded: Arc::clone(&superseded),
                         evict: Arc::clone(&evict),
                     }));
@@ -1053,6 +1145,8 @@ fn accept_loop(
                         over_limit: 0,
                         rtt_excess,
                         delay_congested,
+                        answering,
+                        last_pong: None,
                         unacked_video: 0,
                         unacked_bytes: 0,
                         unacked_audio: 0,
@@ -1174,6 +1268,91 @@ type Accepted = (
     String,
 );
 
+/// How many bytes the kernel may hold *unsent* before it refuses more.
+///
+/// The socket buffer is a queue the engine cannot see. `in_flight` counts a
+/// frame only until `flush` hands it over, so anything the kernel accepts is
+/// latency the viewer will feel and the controller will not know about.
+///
+/// 64KB is the low end of the range everyone who has fought this settles on
+/// (Cloudflare and Chrome both use 16KB to 128KB): a couple of frames at the
+/// ceiling, well under one at the floor, and always far less than the
+/// 75ms the delay signal reacts to.
+const UNSENT_LIMIT: u32 = 64 * 1024;
+
+/// The fallback bound, for a kernel without `TCP_NOTSENT_LOWAT`.
+///
+/// This is what the socket used to be capped at unconditionally, and capping
+/// the send buffer is the blunt version of the same idea: it bounds the queue
+/// by also bounding the congestion window, so it costs throughput on any path
+/// with a real round trip. Kept only for where the better option is missing.
+const SEND_BUFFER_FALLBACK: usize = 256 * 1024;
+
+/// Keep the kernel from hiding a queue behind a successful `flush`.
+///
+/// Sizing the send buffer was the previous answer and it is a poor trade: the
+/// buffer has to be at least the bandwidth-delay product or throughput
+/// collapses, and anything that large is also large enough to hold a visible
+/// amount of video. `TCP_NOTSENT_LOWAT` separates the two. It bounds only the
+/// bytes the kernel has *not yet put on the wire*, leaving the congestion
+/// window free to grow to whatever the path can carry, so the socket reports
+/// "no room" within a frame or two of the link slowing down instead of after
+/// half a megabyte of it. See `Slot::in_flight_bytes`.
+///
+/// The one `unsafe` is a single `setsockopt` with an integer value, which
+/// rustix has no wrapper for. Same shape as the other exceptions in this
+/// crate: one FFI call, all arguments owned locals, nothing to get wrong.
+#[allow(unsafe_code)]
+fn bound_the_hidden_queue(stream: &TcpStream) {
+    let limit = UNSENT_LIMIT;
+    // SAFETY: `stream` outlives the call, `limit` is a live `u32` local and
+    // the length passed is its own `size_of_val`, which is what the option
+    // expects.
+    let set = unsafe {
+        libc::setsockopt(
+            std::os::fd::AsRawFd::as_raw_fd(stream),
+            libc::IPPROTO_TCP,
+            libc::TCP_NOTSENT_LOWAT,
+            std::ptr::from_ref(&limit).cast(),
+            std::mem::size_of_val(&limit) as libc::socklen_t,
+        )
+    };
+    if set == 0 {
+        return;
+    }
+    tracing::debug!(
+        "TCP_NOTSENT_LOWAT is unavailable ({}); capping the send buffer instead",
+        std::io::Error::last_os_error(),
+    );
+    if let Err(err) =
+        rustix::net::sockopt::set_socket_send_buffer_size(stream, SEND_BUFFER_FALLBACK)
+    {
+        tracing::debug!("could not shrink the socket send buffer either: {err}");
+    }
+}
+
+/// Give up on a peer whose kernel has stopped acknowledging anything.
+///
+/// The application heartbeat ([`PONG_GRACE`]) is the backstop for a client
+/// that is alive but not answering. This is for the commoner and nastier
+/// case: an iPad carried out of range, or a home-screen app swiped away, where
+/// the far end is simply gone and nothing will ever arrive again. Without it
+/// Linux retransmits for minutes before reporting the socket dead, so the only
+/// thing that ends the session is the heartbeat, and the viewer spends every
+/// second of that looking at a still picture.
+///
+/// Matched to `PONG_GRACE` so the two cannot drift into disagreeing about how
+/// long a dead connection lives. The probe runs four times a second, so there
+/// is always unacknowledged data for this to measure against; on a genuinely
+/// idle socket the option would never fire, which is why it is a companion to
+/// the heartbeat rather than a replacement for it.
+fn give_up_on_a_silent_peer(stream: &TcpStream) {
+    let millis = u32::try_from(PONG_GRACE.as_millis()).unwrap_or(u32::MAX);
+    if let Err(err) = rustix::net::sockopt::set_tcp_user_timeout(stream, millis) {
+        tracing::debug!("could not set the TCP user timeout: {err}");
+    }
+}
+
 fn handshake(
     stream: TcpStream,
     token: &str,
@@ -1182,19 +1361,8 @@ fn handshake(
     // Nagle would add up to 40ms to a small layout message, which is a visible
     // hitch on something the user just triggered.
     let _ = stream.set_nodelay(true);
-    // A small kernel send buffer, because that buffer is an invisible queue.
-    //
-    // Left to auto-tuning, Linux grows it to megabytes, and `in_flight`
-    // counts a frame only until `flush` hands it to the kernel. So the
-    // 4-frame cap was being measured against a queue that could hold seconds
-    // of video: congestion was only visible after all of it filled, and the
-    // client then had to play through it, which is what a "laggy but not
-    // adapting" session was. Sized to sustain the 32 Mbit/s ceiling out to
-    // ~130ms of RTT (the kernel doubles the requested value), while capping
-    // the hidden queue at fractions of a second instead of several.
-    if let Err(err) = rustix::net::sockopt::set_socket_send_buffer_size(&stream, 256 * 1024) {
-        tracing::debug!("could not shrink the socket send buffer: {err}");
-    }
+    bound_the_hidden_queue(&stream);
+    give_up_on_a_silent_peer(&stream);
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
 
@@ -1422,6 +1590,8 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                 // now would wait behind everything already in flight.
                 if let Some(sent) = client.probe_sent.take() {
                     let now = std::time::Instant::now();
+                    client.last_pong = Some(now);
+                    client.answering.store(true, Ordering::Relaxed);
                     let rtt = now.duration_since(sent);
                     let excess = client.delay.observe(rtt, now);
                     client
@@ -1653,6 +1823,55 @@ mod tests {
         assert_eq!(queueing, Duration::ZERO, "the old floor should have aged out");
     }
 
+    /// A registry holding one slot, for the `FrameSink` questions.
+    fn sink_with(slot: Slot) -> (FrameSink, Arc<Slot>) {
+        let wake = rustix::event::eventfd(0, rustix::event::EventfdFlags::NONBLOCK).unwrap();
+        let clients = Arc::new(Clients::new(4, wake));
+        let slot = Arc::new(slot);
+        clients.add(Arc::clone(&slot));
+        (FrameSink { clients }, slot)
+    }
+
+    #[test]
+    fn a_client_that_has_never_answered_is_not_a_link() {
+        // The first probe has not come back yet, so there is nothing to say
+        // whether this is a network or a corpse. Backpressure from it is not
+        // evidence either way, and the controller is settling at this point
+        // regardless.
+        let (sink, _slot) = sink_with(test_slot());
+        assert!(!sink.answering());
+    }
+
+    #[test]
+    fn a_client_that_has_answered_is() {
+        let (sink, slot) = sink_with(test_slot());
+        slot.answering.store(true, Ordering::Relaxed);
+        assert!(sink.answering());
+    }
+
+    #[test]
+    fn a_client_that_has_gone_quiet_stops_counting() {
+        // The whole point. A page that navigated away holds its socket open,
+        // its queue never drains, and until the heartbeat gives up that looks
+        // exactly like a link that cannot keep up. It walked the budget from
+        // the ceiling to the floor in twelve seconds.
+        let (sink, slot) = sink_with(test_slot());
+        slot.answering.store(true, Ordering::Relaxed);
+        slot.answering.store(false, Ordering::Relaxed);
+        assert!(!sink.answering());
+    }
+
+    #[test]
+    fn an_evicted_client_cannot_speak_for_the_link() {
+        // Eviction drops `connected` immediately, and everything that reads
+        // the link has to agree about that or a kicked device keeps steering
+        // the budget for whoever is left.
+        let (sink, slot) = sink_with(test_slot());
+        slot.answering.store(true, Ordering::Relaxed);
+        slot.connected.store(false, Ordering::Relaxed);
+        assert!(!sink.answering());
+    }
+
     #[test]
     fn a_client_with_room_is_bounded_by_bytes_as_well_as_frames() {
         // The bug this closes: four frames means four kilobytes at the bottom
@@ -1687,6 +1906,7 @@ mod tests {
             opus: AtomicBool::new(false),
             rtt_excess: Arc::new(AtomicU64::new(RTT_UNMEASURED)),
             delay_congested: Arc::new(AtomicBool::new(false)),
+            answering: Arc::new(AtomicBool::new(false)),
             superseded: Arc::new(AtomicBool::new(false)),
             evict: Arc::new(AtomicBool::new(false)),
         }

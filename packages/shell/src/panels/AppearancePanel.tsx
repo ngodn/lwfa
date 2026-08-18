@@ -1,5 +1,5 @@
 /**
- * Appearance: light, dark, or follow the device.
+ * Appearance: light, dark, or follow the device, and how things move.
  */
 
 import { memo } from "react"
@@ -43,7 +43,22 @@ function AppearancePanel() {
         </ToggleGroup>
       </PanelSection>
 
-      <PanelSection title="Stream">
+      {/* Both of these are about how the desktop *moves*, which is what this
+        * panel is for. "Animate windows" lived under Settings > Stream, where
+        * it had nothing to do with the video stream or with anything else on
+        * that tab; it is a look, and this is where looks are chosen. */}
+      <PanelSection title="Movement">
+        <FieldRow>
+          <Field
+            label="Animate windows"
+            hint={prefs.motion.animate ? "Windows slide" : "Windows jump"}
+          />
+          <Switch
+            checked={prefs.motion.animate}
+            onCheckedChange={(animate) => patchPrefs("motion", { animate })}
+            aria-label="Animate windows"
+          />
+        </FieldRow>
         <FieldRow>
           <Field
             label="Follow the engine's scroll"

@@ -75,7 +75,7 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   theme: {
     id: "theme",
     label: "Appearance",
-    hint: "Light, dark, or follow the device",
+    hint: "Theme, movement and touch feedback",
     icon: SunMoon,
   },
   settings: {

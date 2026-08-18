@@ -53,7 +53,15 @@ class FakeSocket {
     this.readyState = 3
   }
 
-  send() {}
+  /** Anything at all from the engine, which is what proves a socket alive. */
+  deliver(data: unknown = JSON.stringify({ type: "pong" })) {
+    this.onmessage?.({ data })
+  }
+
+  sent: string[] = []
+  send(data: string) {
+    this.sent.push(data)
+  }
 }
 
 const handlers = () => {
@@ -142,5 +150,75 @@ describe("a stale socket", () => {
 
     expect(h.seen.slice(before)).not.toContain("replaced")
     conn.close()
+  })
+})
+
+describe("a socket that has gone quiet", () => {
+  it("is probed without waiting for the page to be backgrounded", () => {
+    // The resume probe only fires on `visibilitychange` and `pageshow`, so
+    // somebody watching a session the whole time got no check at all. A link
+    // that died under them was noticed only when the engine gave up on it,
+    // which is fifteen seconds of frozen picture.
+    const h = handlers()
+    const conn = new Connection("ws://engine", h)
+    conn.connect()
+
+    const socket = opened[0]!
+    socket.accept()
+    socket.deliver()
+    expect(socket.sent).toHaveLength(0)
+
+    vi.advanceTimersByTime(4_000)
+    expect(socket.sent.length).toBeGreaterThan(0)
+    expect(socket.sent.join()).toContain("ping")
+    conn.close()
+  })
+
+  it("is replaced when the probe goes unanswered", () => {
+    const h = handlers()
+    const conn = new Connection("ws://engine", h)
+    conn.connect()
+
+    const socket = opened[0]!
+    socket.accept()
+    socket.deliver()
+
+    // Long enough to be noticed, then long enough for the probe to expire.
+    vi.advanceTimersByTime(4_000)
+    vi.advanceTimersByTime(3_000)
+    expect(opened.length).toBeGreaterThan(1)
+    conn.close()
+  })
+
+  it("leaves a busy socket alone", () => {
+    // Frames and audio arrive continuously on a working session, so this must
+    // never fire on one. A probe per second against a healthy link would be
+    // pure noise, and worse, would make the log of a good session look bad.
+    const h = handlers()
+    const conn = new Connection("ws://engine", h)
+    conn.connect()
+
+    const socket = opened[0]!
+    socket.accept()
+    for (let i = 0; i < 20; i++) {
+      socket.deliver()
+      vi.advanceTimersByTime(500)
+    }
+
+    expect(socket.sent).toHaveLength(0)
+    expect(opened).toHaveLength(1)
+    conn.close()
+  })
+
+  it("stops checking once the connection is closed", () => {
+    const h = handlers()
+    const conn = new Connection("ws://engine", h)
+    conn.connect()
+    opened[0]!.accept()
+    opened[0]!.deliver()
+    conn.close()
+
+    vi.advanceTimersByTime(30_000)
+    expect(opened).toHaveLength(1)
   })
 })

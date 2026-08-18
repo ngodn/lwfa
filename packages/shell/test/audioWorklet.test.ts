@@ -94,6 +94,77 @@ describe("the audio worklet", () => {
     expect([...out[0]![0]!].every((v) => v === 0)).toBe(true)
   })
 
+  it("gives back a cushion it does not need, once the sound is quiet", () => {
+    // The bug: the only thing that ever removed a frame was the 250ms
+    // emergency ceiling, so the burst a recovering connection delivers filled
+    // the ring to that ceiling and it stayed there. Sound is produced and
+    // consumed at exactly the same rate, so nothing was ever going to bring it
+    // back down, and every network hiccup added a fifth of a second of lag
+    // permanently.
+    const player = new Processor()
+    // A burst, as a stalled socket delivers when it comes back. Silent, which
+    // is what makes it safe to shorten.
+    player.port.onmessage({ data: chunk(11000, () => 0) })
+    expect(player.priming).toBe(false)
+    const swollen = player.available
+
+    // Fed at exactly the rate it plays, so the ring can only shrink by a
+    // deliberate drop rather than by being drained.
+    for (let i = 0; i < 100; i++) {
+      player.process([], block(128))
+      player.port.onmessage({ data: chunk(128, () => 0) })
+    }
+
+    expect(player.available).toBeLessThan(swollen)
+    // Back to roughly the cushion it wanted, not emptied: an empty ring is an
+    // underrun on the next late chunk.
+    expect(player.available).toBeLessThanOrEqual(2880 * 2 + 128)
+    expect(player.available).toBeGreaterThan(0)
+  })
+
+  it("does not cut into audible sound to do it", () => {
+    // Discarding samples mid-note is a click, which is worse than the delay it
+    // saves. A desktop is quiet between keystrokes, so waiting costs nothing.
+    const player = new Processor()
+    player.port.onmessage({ data: chunk(11000, () => 20000) })
+    const swollen = player.available
+
+    // Consume and refill at exactly the rate it plays, so the only thing that
+    // could shorten the ring is a deliberate drop.
+    for (let i = 0; i < 50; i++) {
+      player.process([], block(128))
+      player.port.onmessage({ data: chunk(128, () => 20000) })
+    }
+
+    expect(player.available).toBe(swollen)
+  })
+
+  it("leaves an ordinary cushion alone", () => {
+    // Normal jitter has to stay absorbed. Trimming a healthy buffer would turn
+    // the next late chunk into a dropout, which is the thing the cushion is
+    // for in the first place.
+    const player = new Processor()
+    player.port.onmessage({ data: chunk(3000, () => 0) })
+    const settled = player.available
+
+    for (let i = 0; i < 5; i++) player.process([], block(128))
+
+    // Only what was played, nothing extra thrown away.
+    expect(player.available).toBe(settled - 5 * 128)
+  })
+
+  it("reports how much sound it is holding", () => {
+    // Latency you can hear and nothing else measures. Without it, a buffer
+    // sitting at its ceiling is indistinguishable from a slow network.
+    const player = new Processor()
+    const seen: unknown[] = []
+    player.port.postMessage = (data: unknown) => seen.push(data)
+    player.port.onmessage({ data: chunk(3000, () => 0) })
+
+    player.port.onmessage({ data: "report" })
+    expect(seen.at(-1)).toMatchObject({ buffered: 3000 })
+  })
+
   it("plays samples back in order across a buffer wrap", () => {
     const player = new Processor()
     // A ramp long enough to run past the ring's capacity, pushed in pieces.

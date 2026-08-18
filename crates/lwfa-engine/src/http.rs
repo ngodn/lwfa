@@ -84,9 +84,76 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 /// A request that never arrives, is not valid HTTP, or is too large to be a
 /// request head answers `false`: it will be handled as an ordinary request and
 /// refused there, which is the same outcome without a second error path.
+/// How long the routing decision may wait for a client to say what it wants.
+///
+/// Deliberately much shorter than [`REQUEST_TIMEOUT`]. Every client sends its
+/// request line immediately on connecting, so this only has to cover a round
+/// trip and some slack, and the cost of waiting is paid by *every other
+/// session*: sniffing happens on the accept thread, which is the same thread
+/// that reads every live socket, answers every probe and drains every frame
+/// queue.
+///
+/// A connection slower than this is not refused. It falls through to the
+/// ordinary HTTP path, which runs on a thread of its own and reads with the
+/// full [`REQUEST_TIMEOUT`], so a slow page load still works; only the routing
+/// guess is given up on.
+pub const SNIFF_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Peek at the request head, without blocking the caller indefinitely.
+///
+/// Every sniffer below goes through this. Two of them used to call `peek`
+/// bare, and `accept(2)` hands back a *blocking* socket however the listener
+/// was configured, so a connection that sent nothing wedged the accept thread
+/// in `recvfrom` forever. Browsers open speculative connections and send
+/// nothing on them all the time, so this was not a rare case: one preconnect
+/// from a page load stopped the engine reading any socket at all, which
+/// stalled every live session, and because frames then piled up undrained the
+/// bitrate controller read it as a congested link and walked the budget to its
+/// floor. That is what "it goes laggy after a reconnect" was.
+///
+/// Returns `None` when nothing useful arrived in time, which every caller
+/// treats as "not mine".
+fn peek_head_briefly(stream: &TcpStream) -> Option<Vec<u8>> {
+    let mut buf = vec![0u8; 4096];
+    let deadline = Instant::now() + SNIFF_TIMEOUT;
+
+    loop {
+        let peeked = match stream.peek(&mut buf) {
+            Ok(0) => return None,
+            Ok(n) => n,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+                continue;
+            }
+            Err(_) => return None,
+        };
+        let head = &buf[..peeked];
+        // The whole head has arrived once the blank line is visible. Until
+        // then a header could still be split across segments.
+        if find(head, b"\r\n\r\n").is_some() || peeked == buf.len() {
+            return Some(head.to_vec());
+        }
+        if Instant::now() >= deadline {
+            // Partial, but a request line is all any caller needs.
+            return find(head, b"\r\n").map(|_| head.to_vec());
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// The target of the request, if the head holds a well-formed request line.
+fn request_target(head: &[u8]) -> Option<&str> {
+    let line_end = find(head, b"\r\n")?;
+    let line = std::str::from_utf8(&head[..line_end]).ok()?;
+    line.split(' ').nth(1)
+}
+
 pub fn wants_websocket(stream: &TcpStream) -> bool {
     let mut buf = vec![0u8; 4096];
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let deadline = Instant::now() + SNIFF_TIMEOUT;
 
     loop {
         let peeked = match stream.peek(&mut buf) {
@@ -96,7 +163,7 @@ pub fn wants_websocket(stream: &TcpStream) -> bool {
                 if Instant::now() >= deadline {
                     return false;
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(Duration::from_millis(2));
                 continue;
             }
             Err(_) => return false,
@@ -162,12 +229,13 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// channel, everything else is a session. Called after `wants_websocket`
 /// said yes, so the head is already known to have arrived.
 pub fn wants_upload_channel(stream: &TcpStream) -> bool {
-    let mut buf = [0u8; 4096];
-    let Ok(peeked) = stream.peek(&mut buf) else {
+    // Bounded, and tolerant of a socket that has sent nothing. This used to
+    // peek bare, which on the blocking socket `accept` returns meant a silent
+    // connection stopped the accept thread dead. See `peek_head_briefly`.
+    let Some(head) = peek_head_briefly(stream) else {
         return false;
     };
-    let head = &buf[..peeked];
-    let Some(line_end) = find(head, b"\r\n") else {
+    let Some(line_end) = find(&head, b"\r\n") else {
         return false;
     };
     let Ok(line) = std::str::from_utf8(&head[..line_end]) else {
@@ -193,18 +261,12 @@ pub fn wants_upload_channel(stream: &TcpStream) -> bool {
 /// same reason: the shell derives it from wherever the engine lives, which
 /// may be behind a proxy prefix.
 pub fn wants_preview(stream: &TcpStream) -> bool {
-    let mut buf = [0u8; 4096];
-    let Ok(peeked) = stream.peek(&mut buf) else {
+    // This is the *first* thing every accepted connection meets, so a bare
+    // blocking peek here stopped the whole engine. See `peek_head_briefly`.
+    let Some(head) = peek_head_briefly(stream) else {
         return false;
     };
-    let head = &buf[..peeked];
-    let Some(line_end) = find(head, b"\r\n") else {
-        return false;
-    };
-    let Ok(line) = std::str::from_utf8(&head[..line_end]) else {
-        return false;
-    };
-    let Some(target) = line.split(' ').nth(1) else {
+    let Some(target) = request_target(&head) else {
         return false;
     };
     let path = target.split('?').next().unwrap_or("");
@@ -503,6 +565,89 @@ fn respond(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A connected pair, with the server side configured as `accept` leaves
+    /// it plus the timeout the accept loop sets.
+    fn pair() -> (std::net::TcpStream, std::net::TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        // Exactly what `accept_loop` does, and the thing whose absence was the
+        // bug: `accept` hands back a blocking socket.
+        server.set_read_timeout(Some(SNIFF_TIMEOUT)).unwrap();
+        (client, server)
+    }
+
+    #[test]
+    fn a_connection_that_says_nothing_does_not_hold_the_thread() {
+        // The whole reason this module has a sniff timeout. A browser opens
+        // speculative connections and sends nothing on them; this used to
+        // block the accept thread in `recvfrom` forever, which stopped the
+        // engine reading *any* socket. Live sessions then piled up undrained
+        // and the bitrate controller read that as a congested link, walking
+        // the budget to its floor and leaving it there.
+        let (_client, server) = pair();
+        let began = Instant::now();
+        assert!(!wants_preview(&server));
+        assert!(!wants_upload_channel(&server));
+        assert!(!wants_websocket(&server));
+        let took = began.elapsed();
+        assert!(
+            took < SNIFF_TIMEOUT * 6,
+            "three sniffs of a silent connection took {took:?}",
+        );
+    }
+
+    #[test]
+    fn a_request_that_has_arrived_is_still_routed() {
+        // The timeout must not cost correctness on the ordinary path.
+        let (mut client, server) = pair();
+        use std::io::Write;
+        client
+            .write_all(b"GET /engine/preview?w=1 HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        client.flush().unwrap();
+        assert!(wants_preview(&server));
+    }
+
+    #[test]
+    fn an_upload_is_still_told_apart_from_a_session() {
+        let (mut client, server) = pair();
+        use std::io::Write;
+        client
+            .write_all(b"GET /engine/upload?request=1 HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        client.flush().unwrap();
+        assert!(!wants_preview(&server));
+        assert!(wants_upload_channel(&server));
+    }
+
+    #[test]
+    fn an_upgrade_is_still_recognised() {
+        let (mut client, server) = pair();
+        use std::io::Write;
+        client
+            .write_all(
+                b"GET /engine HTTP/1.1\r\nHost: x\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\r\n",
+            )
+            .unwrap();
+        client.flush().unwrap();
+        assert!(wants_websocket(&server));
+    }
+
+    #[test]
+    fn a_plain_page_request_is_not_mistaken_for_anything() {
+        let (mut client, server) = pair();
+        use std::io::Write;
+        client
+            .write_all(b"GET /index.html HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        client.flush().unwrap();
+        assert!(!wants_preview(&server));
+        assert!(!wants_upload_channel(&server));
+        assert!(!wants_websocket(&server));
+    }
 
     fn root() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("lwfa-http-{}", std::process::id()));
