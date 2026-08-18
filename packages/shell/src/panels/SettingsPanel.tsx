@@ -32,9 +32,8 @@ import {
   Wand2,
 } from "lucide-react"
 import { useEffect, useState } from "react"
-import { useSessionState } from "@/session"
 import * as audio from "@/lib/audio"
-import { choose, decodable } from "@/lib/codecs"
+import { decodable } from "@/lib/codecs"
 import type { Codec } from "@lwfa/proto"
 import {
   getPrefs,
@@ -340,8 +339,7 @@ function PauseInactive({ value, disabled }: { value: boolean; disabled: boolean 
 }
 
 function StreamSettings() {
-  const { stream, motion } = usePrefs()
-  const { permissions } = useSessionState()
+  const { stream } = usePrefs()
   /**
    * What this device can decode, asked of it once when the panel opens.
    *
@@ -357,17 +355,6 @@ function StreamSettings() {
     }
   }, [])
   const hardware = decodes.length > 0
-
-  /**
-   * The codec that will actually be used, by the same rule the engine applies:
-   * the preference narrows what the device offers, and the best survivor wins.
-   */
-  const inUse = (() => {
-    if (stream.codec === "jpeg") return null
-    const allowed = stream.codec === "auto" ? decodes : decodes.filter((c) => c === stream.codec)
-    const chosen = choose(allowed)
-    return chosen === "hevc" ? "HEVC, hardware" : chosen === "h264" ? "H.264, hardware" : null
-  })()
 
   return (
     <>
@@ -462,7 +449,6 @@ function StreamSettings() {
             ringer is off.
           </p>
         ) : null}
-        {stream.audio ? <AudioDiagnostics /> : null}
         {stream.audio ? (
           <FieldRow>
             <Field
@@ -523,45 +509,25 @@ function StreamSettings() {
         ) : null}
       </PanelSection>
 
-      <PanelSection
-        title="Motion"
-        description="Slide windows to their new positions."
-      >
-        <FieldRow>
-          <Field label="Animate windows" hint={motion.animate ? "Sliding" : "Instant"} />
-          <Switch
-            checked={motion.animate}
-            onCheckedChange={(animate) => patchPrefs("motion", { animate })}
-            aria-label="Animate windows"
-          />
-        </FieldRow>
-      </PanelSection>
-
-      <PanelSection
-        title="Status"
-      >
-        <dl className="space-y-1.5 text-xs">
-          <Readout
-            label="Encoding in use"
-            value={
-              !stream.enabled
-                ? "Nothing"
-                : (inUse ?? "JPEG")
-            }
-          />
-          <Readout label="Sound" value={stream.audio ? "48kHz stereo, uncompressed" : "Muted"} />
-          {stream.audio ? (
-            <Readout
-              label="Playback"
-              value={hardware ? "Audio worklet" : "Scheduled buffers"}
-            />
-          ) : null}
-          <Readout
-            label="This session"
-            value={permissions.mode === "interact" ? "Can interact" : "Viewing only"}
-          />
-        </dl>
-      </PanelSection>
+      {/* Where the answers went.
+        *
+        * This tab used to end with a "Status" block and a set of audio
+        * diagnostics, which is a different kind of thing from everything above
+        * it: those are readings, and this is a set of switches. Splitting them
+        * was not tidying. A settings screen is where you go to *change* the
+        * session and the session panel is where you go when it looks wrong, so
+        * a reading filed here is a reading nobody finds at the moment they
+        * need it, and it was duplicated against the session panel besides.
+        *
+        * Two of them were also lying, which is what a readout kept next to the
+        * controls rather than next to the measurement gets you: the sound line
+        * said "uncompressed" while Opus was being decoded three inches above
+        * it, and the playback line decided which audio path was in use by
+        * asking whether the browser could decode *video*. */}
+      <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+        What is actually arriving, and whether anything is wrong with it, is in
+        the session panel.
+      </p>
     </>
   )
 }
@@ -611,93 +577,6 @@ function VolumeRow({ saved }: { saved: number }) {
 function isApple(): boolean {
   const ua = navigator.userAgent
   return /iPad|iPhone/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
-}
-
-/**
- * Live state of the audio graph.
- *
- * Deliberately blunt. "Running, worklet, 1423 chunks" and "suspended, 0 chunks"
- * are different problems with the same symptom, and without this the only way
- * to tell them apart is a laptop and a debugger, which is precisely what nobody
- * has when the thing that is silent is a tablet.
- */
-function AudioDiagnostics() {
-  const [state, setState] = useState(() => audio.diagnostics())
-  useEffect(() => {
-    // Bail when nothing moved: `diagnostics()` returns a fresh object every
-    // call, so setting it unconditionally re-rendered this panel every tick
-    // even while every number stood still.
-    const timer = setInterval(
-      () =>
-        setState((last) => {
-          const next = audio.diagnostics()
-          return (Object.keys(next) as (keyof typeof next)[]).every(
-            (key) => next[key] === last[key],
-          )
-            ? last
-            : next
-        }),
-      700,
-    )
-    return () => clearInterval(timer)
-  }, [])
-
-  const stalled = state.contextState !== "running"
-  const starved = state.contextState === "running" && state.chunks === 0
-
-  return (
-    <div
-      className={cn(
-        "space-y-1 rounded-lg border p-3 text-xs",
-        stalled || starved ? "border-warning/40 bg-warning/10" : "border-dashed",
-      )}
-    >
-      <dl className="space-y-1">
-        <Readout label="Audio context" value={state.contextState} />
-        <Readout label="Playback path" value={state.path} />
-        <Readout
-          label="From the machine"
-          value={
-            state.wire === "none"
-              ? "nothing yet"
-              : state.wire === "opus"
-                ? `Opus, ${state.wireKbits > 0 ? `${state.wireKbits} kbit/s` : "measuring"}`
-                : "raw PCM, 1536 kbit/s"
-          }
-        />
-        <Readout label="Chunks received" value={String(state.chunks)} />
-        <Readout label="Dropouts" value={String(state.underruns)} />
-      </dl>
-      {state.wire === "pcm" ? (
-        <p className="pt-1 text-muted-foreground">
-          Uncompressed audio. This costs more bandwidth than the whole video
-          stream at its floor and cannot adapt; it should only ever appear if
-          the Opus decoder failed to load.
-        </p>
-      ) : null}
-      {stalled ? (
-        <p className="pt-1 text-muted-foreground">
-          The browser has not started audio. Tap anywhere on the page: it will
-          not begin until the page has been touched.
-        </p>
-      ) : null}
-      {starved ? (
-        <p className="pt-1 text-muted-foreground">
-          Playing, but nothing is arriving from the machine. That is the
-          connection or the engine, not this device.
-        </p>
-      ) : null}
-    </div>
-  )
-}
-
-function Readout({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-right">{value}</dd>
-    </div>
-  )
 }
 
 /** Move one id by one position, clamped. Pure, so it is trivially testable. */

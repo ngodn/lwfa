@@ -45,6 +45,7 @@ import { AudioFormat } from "@lwfa/proto";
 import type { Codec } from "@lwfa/proto";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
 import { clearFormat } from "@/lib/streamFormat"
+import { clearStats } from "@/lib/streamStats"
 import { setPrefs, usePrefSection } from "@/lib/prefs"
 import {
   appsRequested,
@@ -877,6 +878,7 @@ export function App(): React.ReactElement {
       // The old answer would otherwise linger and claim a codec is in use
       // after the stream has stopped.
       clearFormat();
+      clearStats();
       // Another machine has a different set of applications and accounts.
       clearApps();
       clearAccounts();
