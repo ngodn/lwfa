@@ -165,6 +165,74 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
             },
         ),
         ("role", ToShell::Role { primary: false }),
+        (
+            "clip-ready",
+            ToShell::ClipReady {
+                channel: 9_000_001,
+                ticket: "0f3a9c2e5b174d68".into(),
+            },
+        ),
+        (
+            "clip-added-text",
+            ToShell::ClipAdded {
+                item: ClipItem {
+                    id: 41,
+                    at: 1_755_600_000_000,
+                    origin: ClipOrigin::Lwfa,
+                    device: None,
+                    kind: ClipKind::Text,
+                    bytes: 11,
+                    mime: "text/plain;charset=utf-8".into(),
+                    preview: "hello there".into(),
+                    whole: true,
+                    width: None,
+                    height: None,
+                    path: None,
+                },
+            },
+        ),
+        (
+            "clip-added-image",
+            ToShell::ClipAdded {
+                item: ClipItem {
+                    id: 42,
+                    at: 1_755_600_030_000,
+                    origin: ClipOrigin::Device,
+                    device: Some("iPad".into()),
+                    kind: ClipKind::Image,
+                    bytes: 284_913,
+                    mime: "image/png".into(),
+                    preview: "screenshot.png".into(),
+                    whole: false,
+                    width: Some(2360),
+                    height: Some(1640),
+                    path: Some("/home/user/Uploads/screenshot.png".into()),
+                },
+            },
+        ),
+        ("clip-dropped", ToShell::ClipDropped { id: 41 }),
+        ("clip-cleared", ToShell::ClipCleared),
+        (
+            "clip-history",
+            ToShell::ClipHistory {
+                request: 3,
+                items: vec![ClipItem {
+                    id: 40,
+                    at: 1_755_599_000_000,
+                    origin: ClipOrigin::Desktop,
+                    device: None,
+                    kind: ClipKind::Files,
+                    bytes: 46,
+                    mime: "text/uri-list".into(),
+                    preview: "notes.md".into(),
+                    whole: false,
+                    width: None,
+                    height: None,
+                    path: Some("/home/user/notes.md".into()),
+                }],
+                more: true,
+            },
+        ),
         ("pong", ToShell::Pong),
         (
             "already-running",
@@ -589,6 +657,23 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
                 path: "/home/user/Pictures/hero-4k.png".into(),
             },
         ),
+        (
+            "clip-list",
+            ToEngine::ClipList {
+                request: 3,
+                before: Some(40),
+                limit: 20,
+            },
+        ),
+        (
+            "clip-set-text",
+            ToEngine::ClipSetText {
+                text: "sent from the tablet".into(),
+            },
+        ),
+        ("clip-use", ToEngine::ClipUse { id: 40 }),
+        ("clip-drop", ToEngine::ClipDrop { id: 40 }),
+        ("clip-clear", ToEngine::ClipClear),
         ("ping", ToEngine::Ping),
     ]
 }

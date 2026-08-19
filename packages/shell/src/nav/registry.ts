@@ -14,6 +14,7 @@
 import type { LucideIcon } from "lucide-react"
 import {
   AppWindow,
+  ClipboardList,
   CornerUpLeft,
   Gamepad2,
   Grid3x3,
@@ -115,6 +116,12 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
     icon: KeyboardIcon,
     kind: "dock",
   },
+  clipboard: {
+    id: "clipboard",
+    label: "Clipboard",
+    hint: "What has been copied, here and on the machine",
+    icon: ClipboardList,
+  },
   workspaces: {
     id: "workspaces",
     label: "Windows",
@@ -152,8 +159,10 @@ export const NAV_GROUPS: Record<NavGroupId, NavGroup> = {
     label: "More",
     hint: "Everything else",
     icon: MoreHorizontal,
-    // Order matters: this is the order they appear inside the panel.
-    members: ["info", "connections", "access", "theme", "settings"],
+    // Order matters: this is the order they appear inside the panel, and
+    // the clipboard is the one thing in here somebody reaches for mid-task
+    // rather than once a week.
+    members: ["clipboard", "info", "connections", "access", "theme", "settings"],
   },
 }
 
@@ -210,6 +219,7 @@ const TIERS: ReadonlyArray<ReadonlyArray<NavItemId | NavGroupId>> = [
     "apps",
     "escape",
     "input",
+    "clipboard",
     "workspaces",
   ],
   // The management panels collapse together. Escape survives this tier: it is

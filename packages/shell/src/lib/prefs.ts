@@ -73,6 +73,7 @@ export const NAV_ITEM_IDS = [
   "escape",
   "gamepad",
   "keyboard",
+  "clipboard",
   "workspaces",
 ] as const
 
@@ -282,7 +283,7 @@ export const DEFAULT_PREFS: Prefs = {
     edge: "auto",
     order: [...NAV_ITEM_IDS],
     hidden: [],
-    anchored: ["escape", "gamepad", "keyboard", "workspaces"],
+    anchored: ["escape", "gamepad", "keyboard", "clipboard", "workspaces"],
     centred: ["apps"],
     size: "md",
   },

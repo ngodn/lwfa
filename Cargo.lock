@@ -398,6 +398,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "calloop-wayland-source"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "138efcf0940a02ebf0cc8d1eff41a1682a46b431630f4c52450d6265876021fa"
+dependencies = [
+ "calloop 0.14.4",
+ "rustix 1.1.4",
+ "wayland-backend",
+ "wayland-client",
+]
+
+[[package]]
 name = "cc"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1236,6 +1248,7 @@ version = "1.1.11"
 dependencies = [
  "argon2",
  "calloop 0.14.4",
+ "calloop-wayland-source 0.4.1",
  "ffmpeg-next",
  "futures-channel",
  "image",
@@ -1254,6 +1267,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tungstenite",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "x11rb",
  "zbus",
 ]
@@ -2279,7 +2295,7 @@ checksum = "3457dea1f0eb631b4034d61d4d8c32074caa6cd1ab2d59f2327bd8461e2c0016"
 dependencies = [
  "bitflags 2.13.1",
  "calloop 0.13.0",
- "calloop-wayland-source",
+ "calloop-wayland-source 0.3.0",
  "cursor-icon",
  "libc",
  "log",

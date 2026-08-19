@@ -246,6 +246,19 @@ pub struct Lwfa {
     /// Per-dialog upload authorisation, shared with the accept thread and
     /// every upload thread. See `upload.rs`.
     pub upload_gates: crate::upload::Gates,
+    /// Everything that has been on any of the clipboards. Shared with the
+    /// threads serving `GET /clip`, which read bytes without going through
+    /// the compositor at all. See `clipboard.rs`.
+    pub clipboard: crate::clipboard::Store,
+    /// The clipboard upload channel each session was given, so a file
+    /// arriving on one can be told apart from a file arriving for a dialog.
+    pub clip_channels: std::collections::HashMap<lwfa_proto::SessionId, u64>,
+    /// The desktop outside lwfa, when its clipboard could be reached.
+    /// `None` on a host with no data-control protocol. See `hostclip.rs`.
+    pub host_clip: Option<crate::hostclip::Link>,
+    /// A handle back into the event loop, for work that finishes on a
+    /// thread: reading a selection somebody offered, mainly.
+    pub events: Option<calloop::channel::Sender<crate::shell::ShellEvent>>,
     parked_pad: Option<crate::gamepad::VirtualPad>,
     /// The browser that was holding the parked controller, if any.
     ///
@@ -390,6 +403,10 @@ impl Lwfa {
             upload_gates: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            clipboard: crate::clipboard::store(),
+            clip_channels: std::collections::HashMap::new(),
+            host_clip: None,
+            events: None,
             parked_pad: None,
             parked_pad_client: None,
             grace_until: None,

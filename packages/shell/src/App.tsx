@@ -77,6 +77,14 @@ import {
   setAccountError,
   setAccounts,
 } from "@/lib/accounts"
+import {
+  clipAdded,
+  clipCleared,
+  clipDropped,
+  clipHistory,
+  clipReady,
+  clipReset,
+} from "@/lib/clipboard"
 import { ShellChrome } from "@/components/ShellChrome";
 import { Desktop } from "@/components/Desktop";
 import {
@@ -524,6 +532,11 @@ export function App(): React.ReactElement {
           // before it can attribute anything to it. See `takeCrashToReport`.
           reportAnyCrash(connection.current);
           setPermissions(message.permissions);
+          // A `hello` also arrives when the owner changes what this session
+          // may do. Losing the right to interact takes the clipboard with
+          // it: the engine has already destroyed the ticket, so holding the
+          // history here would leave rows nothing could fetch.
+          if (message.permissions.mode !== "interact") clipReset();
           setAccount(message.account);
           setSessionId(message.session);
           setPrimary(message.primary);
@@ -740,6 +753,29 @@ export function App(): React.ReactElement {
 
         case "accounts":
           setAccounts(message.accounts)
+          break
+
+        case "clipReady":
+          // Sent only to a session that may interact. Everything the panel
+          // needs beyond the session socket rides on this: the credential
+          // for fetching entry bytes and for sending files back.
+          clipReady(message.channel, message.ticket)
+          break
+
+        case "clipAdded":
+          clipAdded(message.item)
+          break
+
+        case "clipDropped":
+          clipDropped(message.id)
+          break
+
+        case "clipCleared":
+          clipCleared()
+          break
+
+        case "clipHistory":
+          clipHistory(message.request, message.items, message.more)
           break
 
         case "fullscreenRequest":
@@ -959,6 +995,9 @@ export function App(): React.ReactElement {
       // Another machine has a different set of applications and accounts.
       clearApps();
       clearAccounts();
+      // And a different clipboard, whose entry ids mean nothing here. The
+      // ticket this session was given is dead the moment the socket is.
+      clipReset();
       connection.current = null;
       decoderRef.current = null;
     };

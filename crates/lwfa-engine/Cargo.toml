@@ -25,6 +25,15 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "xwayland",
 ] }
 
+# Talking to the *host* compositor, as a client, so the desktop outside lwfa
+# shares one clipboard with the session inside it. All four already arrive
+# through winit; naming them here only turns on the client halves and the
+# staging protocols. See `hostclip.rs`.
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+calloop-wayland-source = "0.4"
+
 # The same calloop smithay re-exports, named here only to turn on `signals`.
 # Features are additive, so this enables it on smithay's copy too. Without it
 # SIGTERM kills the process outright and nothing in the loop is ever dropped;

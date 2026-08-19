@@ -1,0 +1,17 @@
+{
+  "type": "clipAdded",
+  "item": {
+    "id": 42,
+    "at": 1755600030000,
+    "origin": "device",
+    "device": "iPad",
+    "kind": "image",
+    "bytes": 284913,
+    "mime": "image/png",
+    "preview": "screenshot.png",
+    "whole": false,
+    "width": 2360,
+    "height": 1640,
+    "path": "/home/user/Uploads/screenshot.png"
+  }
+}

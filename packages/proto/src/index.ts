@@ -317,6 +317,32 @@ export type ToShell =
       error: string | null
     }
   /** The answer to `ping`. Carries nothing; arriving is the point. */
+  /**
+   * The clipboard is available on this connection.
+   *
+   * Sent after `hello` to a session that may interact, and not at all to one
+   * that may not. Carries the credential for the two things the session
+   * socket does not do: `GET /clip` for entry bytes, and the upload channel
+   * for files going the other way.
+   */
+  | { type: "clipReady"; channel: number; ticket: string }
+  /**
+   * This is on the clipboard now.
+   *
+   * Also sent when an entry already in the history goes back on the
+   * clipboard, with its original id and a fresh `at`, so the shell removes
+   * any entry with the same id before adding this one.
+   */
+  | { type: "clipAdded"; item: ClipItem }
+  | { type: "clipDropped"; id: number }
+  /** The whole history is gone, including whatever was current. */
+  | { type: "clipCleared" }
+  /**
+   * One page of history, answering `clipList`. `more` is whether anything
+   * older exists, so the panel knows whether to offer another page without
+   * asking for one to find out.
+   */
+  | { type: "clipHistory"; request: number; items: ClipItem[]; more: boolean }
   | { type: "pong" }
 
 /**
@@ -633,6 +659,26 @@ export type ToEngine =
    */
   | { type: "uploadEnd"; request: number; file: string; sha256: string }
   /**
+   * Ask for a page of clipboard history, oldest-bound by `before`.
+   *
+   * `before` is the id of the oldest entry already held, or null for the
+   * newest page. Ids descend with age, so this is a cursor rather than an
+   * offset: entries arriving while the panel is open cannot make a page
+   * repeat itself or skip a row.
+   */
+  | { type: "clipList"; request: number; before: number | null; limit: number }
+  /**
+   * Put text from this device on the machine's clipboard. Files do not come
+   * this way: they ride the upload channel, land in `~/Uploads`, and the
+   * engine puts them on the clipboard when they arrive whole.
+   */
+  | { type: "clipSetText"; text: string }
+  /** Put an entry from the history back on the clipboard. */
+  | { type: "clipUse"; id: number }
+  | { type: "clipDrop"; id: number }
+  /** Forget the whole history, and own an empty clipboard. */
+  | { type: "clipClear" }
+  /**
    * Is this connection actually alive? Answered with `pong`.
    *
    * Exists for iPadOS: a resumed home-screen web app is frequently handed
@@ -641,6 +687,52 @@ export type ToEngine =
    * pings, so the shell asks here and treats silence as death.
    */
   | { type: "ping" }
+
+
+/**
+ * One thing that has been on the clipboard.
+ *
+ * Deliberately not the bytes: a history of fifty entries can hold
+ * screenshots, and pushing those down the session socket would stall the
+ * video for a panel nobody has opened. This is enough to draw a row. The
+ * bytes come from `GET /clip` when somebody actually asks for them.
+ */
+export interface ClipItem {
+  id: number
+  /** When it was copied, in Unix milliseconds. */
+  at: number
+  origin: ClipOrigin
+  /** Which device sent it, when `origin` is "device". */
+  device: string | null
+  kind: ClipKind
+  /** Bytes of the stored representation. */
+  bytes: number
+  /** The type those bytes are in, e.g. `text/plain;charset=utf-8`. */
+  mime: string
+  /** The start of a text entry, or the file name for anything else. */
+  preview: string
+  /**
+   * Whether `preview` is all of it. When it is, the shell can put the entry
+   * on the device clipboard without fetching anything, which is the common
+   * case and saves a round trip on a slow link.
+   */
+  whole: boolean
+  /** Pixel size of an image, so the panel can reserve space for it. */
+  width: number | null
+  height: number | null
+  /** Where the file sits on the machine, for entries that are one. */
+  path: string | null
+}
+
+export type ClipKind = "text" | "image" | "files"
+
+/**
+ * Which of the three clipboards an entry came from.
+ *
+ * They are kept in step, so this is history rather than routing: it says
+ * where a thing was copied, not where it can be pasted.
+ */
+export type ClipOrigin = "lwfa" | "desktop" | "device"
 
 /** How many bits the session's sound deserves. See `setAudio`. */
 export type AudioQuality = "auto" | "high" | "medium" | "low"
@@ -730,6 +822,10 @@ function nullableId(obj: Obj, key: string, at: string): WindowId | null {
   const v = obj[key]
   if (v === null) return null
   return int(obj, key, at)
+}
+
+function nullableInt(obj: Obj, key: string, at: string): number | null {
+  return obj[key] === null ? null : int(obj, key, at)
 }
 
 function array(obj: Obj, key: string, at: string): unknown[] {
@@ -1168,12 +1264,91 @@ export function decodeToShell(text: string): ToShell {
         error: nullableStr(o, "error", where),
       }
     }
+    case "clipReady": {
+      const where = `${at}.clipReady`
+      noExtraKeys(o, ["type", "channel", "ticket"], where)
+      return {
+        type: "clipReady",
+        channel: int(o, "channel", where),
+        ticket: str(o, "ticket", where),
+      }
+    }
+    case "clipAdded": {
+      const where = `${at}.clipAdded`
+      noExtraKeys(o, ["type", "item"], where)
+      return { type: "clipAdded", item: decodeClipItem(o["item"], `${where}.item`) }
+    }
+    case "clipDropped": {
+      const where = `${at}.clipDropped`
+      noExtraKeys(o, ["type", "id"], where)
+      return { type: "clipDropped", id: int(o, "id", where) }
+    }
+    case "clipCleared": {
+      noExtraKeys(o, ["type"], `${at}.clipCleared`)
+      return { type: "clipCleared" }
+    }
+    case "clipHistory": {
+      const where = `${at}.clipHistory`
+      noExtraKeys(o, ["type", "request", "items", "more"], where)
+      return {
+        type: "clipHistory",
+        request: int(o, "request", where),
+        items: array(o, "items", where).map((e, i) =>
+          decodeClipItem(e, `${where}.items[${i}]`),
+        ),
+        more: bool(o, "more", where),
+      }
+    }
     case "pong": {
       noExtraKeys(o, ["type"], `${at}.pong`)
       return { type: "pong" }
     }
     default:
       throw new ProtocolError(`${at}: unknown message type ${JSON.stringify(t)}`)
+  }
+}
+
+function decodeClipItem(value: unknown, at: string): ClipItem {
+  const o = asObject(value, at)
+  noExtraKeys(
+    o,
+    [
+      "id",
+      "at",
+      "origin",
+      "device",
+      "kind",
+      "bytes",
+      "mime",
+      "preview",
+      "whole",
+      "width",
+      "height",
+      "path",
+    ],
+    at,
+  )
+  const origin = str(o, "origin", at)
+  if (origin !== "lwfa" && origin !== "desktop" && origin !== "device") {
+    throw new ProtocolError(`${at}.origin: not a clipboard origin: ${origin}`)
+  }
+  const kind = str(o, "kind", at)
+  if (kind !== "text" && kind !== "image" && kind !== "files") {
+    throw new ProtocolError(`${at}.kind: not a clipboard kind: ${kind}`)
+  }
+  return {
+    id: int(o, "id", at),
+    at: int(o, "at", at),
+    origin,
+    device: nullableStr(o, "device", at),
+    kind,
+    bytes: int(o, "bytes", at),
+    mime: str(o, "mime", at),
+    preview: str(o, "preview", at),
+    whole: bool(o, "whole", at),
+    width: nullableInt(o, "width", at),
+    height: nullableInt(o, "height", at),
+    path: nullableStr(o, "path", at),
   }
 }
 
@@ -1526,6 +1701,35 @@ export function decodeToEngine(text: string): ToEngine {
         file: str(o, "file", where),
         sha256: str(o, "sha256", where),
       }
+    }
+    case "clipList": {
+      const where = `${at}.clipList`
+      noExtraKeys(o, ["type", "request", "before", "limit"], where)
+      return {
+        type: "clipList",
+        request: int(o, "request", where),
+        before: nullableInt(o, "before", where),
+        limit: int(o, "limit", where),
+      }
+    }
+    case "clipSetText": {
+      const where = `${at}.clipSetText`
+      noExtraKeys(o, ["type", "text"], where)
+      return { type: "clipSetText", text: str(o, "text", where) }
+    }
+    case "clipUse": {
+      const where = `${at}.clipUse`
+      noExtraKeys(o, ["type", "id"], where)
+      return { type: "clipUse", id: int(o, "id", where) }
+    }
+    case "clipDrop": {
+      const where = `${at}.clipDrop`
+      noExtraKeys(o, ["type", "id"], where)
+      return { type: "clipDrop", id: int(o, "id", where) }
+    }
+    case "clipClear": {
+      noExtraKeys(o, ["type"], `${at}.clipClear`)
+      return { type: "clipClear" }
     }
     case "ping": {
       noExtraKeys(o, ["type"], `${at}.ping`)

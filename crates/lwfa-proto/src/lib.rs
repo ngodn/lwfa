@@ -162,6 +162,74 @@ pub struct Modifiers {
     pub logo: bool,
 }
 
+/// One thing that has been on the clipboard.
+///
+/// Deliberately not the bytes. A history of fifty entries can hold
+/// screenshots, and pushing those down the session socket would stall the
+/// video for a panel nobody has opened. What travels here is enough to draw
+/// a row: what it is, how big, and the start of it. The bytes are fetched
+/// over `GET /clip` when somebody actually asks for them, and they never
+/// touch the session socket at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipItem {
+    pub id: u64,
+    /// When it was copied, in Unix milliseconds.
+    pub at: u64,
+    pub origin: ClipOrigin,
+    /// Which device sent it, when `origin` is `device`. Best effort, from
+    /// the same user agent guess that names a peer.
+    pub device: Option<String>,
+    pub kind: ClipKind,
+    /// Bytes of the stored representation.
+    pub bytes: u64,
+    /// The type those bytes are in, e.g. `text/plain;charset=utf-8`.
+    pub mime: String,
+    /// The start of a text entry, or the file name for anything else.
+    ///
+    /// Capped, because a copied log file is not a preview. `whole` says
+    /// whether this is all of it: when it is, the shell can put the entry
+    /// on the device clipboard without fetching anything, which is the
+    /// common case and saves a round trip on a slow link.
+    pub preview: String,
+    pub whole: bool,
+    /// Pixel size of an image, when it could be read. Present so the panel
+    /// can reserve the right space before the thumbnail arrives.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// Where the file sits on the machine, for entries that are one.
+    ///
+    /// Set for files sent from a device, which land in `~/Uploads`, and for
+    /// files copied on the machine. Absent for text and for images that
+    /// only ever existed on the clipboard.
+    pub path: Option<String>,
+}
+
+/// What an entry is, which decides how the panel draws it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipKind {
+    Text,
+    Image,
+    /// One or more files, named by `text/uri-list`.
+    Files,
+}
+
+/// Which of the three clipboards an entry came from.
+///
+/// They are kept in step, so this is history rather than routing: it says
+/// where a thing was copied, not where it can be pasted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipOrigin {
+    /// An application running inside this session.
+    Lwfa,
+    /// The host desktop, outside lwfa.
+    Desktop,
+    /// A connected client device.
+    Device,
+}
+
 /// Engine to shell.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
@@ -480,6 +548,43 @@ pub enum ToShell {
         name: String,
         ok: bool,
         error: Option<String>,
+    },
+
+    /// The clipboard is available on this connection.
+    ///
+    /// Sent after `hello` to any session that may interact, and not at all
+    /// to one that may not. Carries the credential for two things the
+    /// session socket does not do: `GET /clip` for entry bytes, and the
+    /// upload channel for files going the other way. `channel` is the
+    /// request id to open that channel with, minted for the life of this
+    /// connection rather than for one dialog.
+    #[serde(rename_all = "camelCase")]
+    ClipReady { channel: u64, ticket: String },
+
+    /// This is on the clipboard now.
+    ///
+    /// Also sent when an entry already in the history is put back on the
+    /// clipboard, with its original id and a fresh `at`. The shell removes
+    /// any entry with the same id before adding this one, so the two cases
+    /// need only one message.
+    #[serde(rename_all = "camelCase")]
+    ClipAdded { item: ClipItem },
+
+    #[serde(rename_all = "camelCase")]
+    ClipDropped { id: u64 },
+
+    /// The whole history is gone, including whatever was current.
+    ClipCleared,
+
+    /// One page of history, answering [`ToEngine::ClipList`].
+    ///
+    /// `more` is whether anything older exists, so the panel knows whether
+    /// to offer another page without asking for one to find out.
+    #[serde(rename_all = "camelCase")]
+    ClipHistory {
+        request: u64,
+        items: Vec<ClipItem>,
+        more: bool,
     },
 
     /// The answer to [`ToEngine::Ping`]. Carries nothing; arriving is the point.
@@ -1206,6 +1311,37 @@ pub enum ToEngine {
         file: String,
         sha256: String,
     },
+
+    /// Ask for a page of clipboard history, oldest-bound by `before`.
+    ///
+    /// `before` is the `id` of the oldest entry already held, or absent for
+    /// the newest page. Ids descend with age, so this is a cursor rather
+    /// than an offset: entries arriving while the panel is open cannot make
+    /// a page repeat itself or skip a row.
+    #[serde(rename_all = "camelCase")]
+    ClipList {
+        request: u64,
+        before: Option<u64>,
+        limit: u32,
+    },
+
+    /// Put text from the client device on the machine's clipboard.
+    ///
+    /// Files do not come this way: they ride the upload channel, land in
+    /// `~/Uploads`, and the engine puts them on the clipboard when they
+    /// arrive whole.
+    #[serde(rename_all = "camelCase")]
+    ClipSetText { text: String },
+
+    /// Put an entry from the history back on the clipboard.
+    #[serde(rename_all = "camelCase")]
+    ClipUse { id: u64 },
+
+    #[serde(rename_all = "camelCase")]
+    ClipDrop { id: u64 },
+
+    /// Forget the whole history, and own an empty clipboard.
+    ClipClear,
 
     /// Is this connection actually alive? Answered with [`ToShell::Pong`].
     ///

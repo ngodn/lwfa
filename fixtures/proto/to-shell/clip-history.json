@@ -1,0 +1,21 @@
+{
+  "type": "clipHistory",
+  "request": 3,
+  "items": [
+    {
+      "id": 40,
+      "at": 1755599000000,
+      "origin": "desktop",
+      "device": null,
+      "kind": "files",
+      "bytes": 46,
+      "mime": "text/uri-list",
+      "preview": "notes.md",
+      "whole": false,
+      "width": null,
+      "height": null,
+      "path": "/home/user/notes.md"
+    }
+  ],
+  "more": true
+}
