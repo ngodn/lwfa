@@ -94,6 +94,25 @@ backdrop = [0.047, 0.051, 0.063, 1.0]
 preview = true
 
 # ---------------------------------------------------------------------------
+# Clipboard
+# ---------------------------------------------------------------------------
+[clipboard]
+
+# Whether the desktop outside lwfa shares the session's clipboard.
+#
+# On, there is one clipboard: copy in a window in the session, in an X11
+# program, or on the machine's own desktop, and all of them have it, along
+# with every connected device. That is usually what you want, and an
+# overwrite is not a loss, because whatever was replaced is still in the
+# clipboard panel's history one tap away.
+#
+# Turn it off on a machine somebody else also sits at, where a copy made
+# from a tablet taking over their clipboard mid-sentence is rude. lwfa then
+# keeps its own: the session, its X11 programs and connected devices still
+# share one clipboard, and the host is neither read nor written.
+desktop = true
+
+# ---------------------------------------------------------------------------
 # Session
 # ---------------------------------------------------------------------------
 [session]

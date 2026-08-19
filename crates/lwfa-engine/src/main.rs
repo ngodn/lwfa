@@ -316,6 +316,10 @@ fn init_xwayland(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut Ca
 /// events use. Absent it, everything still works; the desktop is simply not
 /// one of the clipboards being kept in step.
 fn init_host_clipboard(data: &mut CalloopData, host_display: Option<std::ffi::OsString>) {
+    if !data.config.clipboard.desktop {
+        tracing::info!("the desktop outside keeps its own clipboard ([clipboard] desktop)");
+        return;
+    }
     let Some(events) = data.events.clone() else {
         return;
     };

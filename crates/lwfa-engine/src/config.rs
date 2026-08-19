@@ -68,6 +68,7 @@ pub struct Config {
     pub layout: toml::Table,
     pub audio: Audio,
     pub gamepad: Gamepad,
+    pub clipboard: Clipboard,
     /// Also the shell's, for the same reason.
     ///
     /// The engine does integrate springs, but with the parameters the shell
@@ -76,6 +77,25 @@ pub struct Config {
     /// be a second source of truth for the same thing.
     #[allow(dead_code)]
     pub animation: toml::Table,
+}
+
+/// How far the shared clipboard reaches. See `clipboard.rs`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Clipboard {
+    /// Whether the desktop *outside* lwfa shares the session's clipboard.
+    ///
+    /// On, this is one clipboard: a copy inside the session replaces what
+    /// the host had, and the other way round. Off, lwfa keeps its own and
+    /// the host is neither read nor written, which is the setting for a
+    /// machine somebody else is also sitting at.
+    pub desktop: bool,
+}
+
+impl Default for Clipboard {
+    fn default() -> Self {
+        Self { desktop: true }
+    }
 }
 
 /// Capturing what the machine is playing. See `audio.rs`.
@@ -648,6 +668,7 @@ mod tests {
         assert_eq!(parsed.render, built_in.render);
         assert_eq!(parsed.audio, built_in.audio);
         assert_eq!(parsed.gamepad, built_in.gamepad);
+        assert_eq!(parsed.clipboard, built_in.clipboard);
         // [layout] and [animation] are deliberately absent: the shell owns
         // them, and the engine parses them only to keep deny_unknown_fields
         // from rejecting a good file.
