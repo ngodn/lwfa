@@ -130,6 +130,11 @@ pub enum ShellEvent {
     /// session at all: upload connections authenticate with a per-dialog
     /// ticket and never become sessions. See `upload.rs`.
     Uploaded(crate::upload::Finished),
+    /// Something was copied, somewhere, and has been read. Not from a
+    /// session either: the read happens on a thread of its own, because the
+    /// program that owns a selection writes at its own pace. See
+    /// `clipboard.rs`.
+    Clip(crate::clipboard::Capture),
 }
 
 /// Something queued for the shell: a control message or a frame of pixels.
@@ -617,6 +622,19 @@ impl FrameSink {
 /// compositor when `.env` changes. See `Lwfa::watch_dotenv`.
 pub type SharedToken = Arc<Mutex<String>>;
 
+/// What a request thread can answer for without the compositor.
+///
+/// Both are shared with threads that serve one HTTP request or one upload
+/// and then exit, so neither can be reached through `Lwfa`. Carried
+/// together because they always travel together.
+#[derive(Clone)]
+pub struct Shared {
+    /// Per-dialog and per-session upload authorisation. See `upload.rs`.
+    pub gates: crate::upload::Gates,
+    /// The clipboard history, for `GET /clip`. See `clipserve.rs`.
+    pub clipboard: crate::clipboard::Store,
+}
+
 /// Handle the compositor uses to talk to every connected shell.
 pub struct ShellLink {
     clients: Arc<Clients>,
@@ -636,7 +654,7 @@ impl ShellLink {
         events: LoopSender<ShellEvent>,
         max_in_flight: usize,
         shell_dir: Option<std::path::PathBuf>,
-        gates: crate::upload::Gates,
+        shared: Shared,
     ) -> std::io::Result<(Self, std::net::SocketAddr, SharedToken)> {
         let listener = TcpListener::bind(addr)?;
         let local = listener.local_addr()?;
@@ -663,7 +681,7 @@ impl ShellLink {
                     events,
                     thread_clients,
                     shell_dir,
-                    gates,
+                    shared,
                 )
             })?;
 
@@ -1008,7 +1026,7 @@ fn accept_loop(
     events: LoopSender<ShellEvent>,
     clients: Arc<Clients>,
     shell_dir: Option<std::path::PathBuf>,
-    gates: crate::upload::Gates,
+    shared: Shared,
 ) {
     if listener.set_nonblocking(true).is_err() {
         tracing::error!("could not set the shell listener non-blocking; no shell can connect");
@@ -1058,8 +1076,29 @@ fn accept_loop(
                     // is split off before the static-file path. Its own
                     // thread for the same reason: a video being streamed
                     // must not hold up anyone else's connection.
+                    // Clipboard bytes are an ordinary GET too, and are
+                    // split off first for the same reason: a tablet pulling
+                    // a copied video must not hold up a live session.
+                    if crate::http::wants_clip(&stream) {
+                        let shared = shared.clone();
+                        let _ = thread::Builder::new()
+                            .name("lwfa-clip".into())
+                            .spawn(move || {
+                                let mut stream = stream;
+                                if let Some(head) = crate::http::peek_head(&mut stream) {
+                                    crate::clipserve::serve(
+                                        stream,
+                                        &head,
+                                        &shared.gates,
+                                        &shared.clipboard,
+                                    );
+                                }
+                            });
+                        continue;
+                    }
+
                     if crate::http::wants_preview(&stream) {
-                        let gates = Arc::clone(&gates);
+                        let gates = Arc::clone(&shared.gates);
                         let _ = thread::Builder::new()
                             .name("lwfa-preview".into())
                             .spawn(move || {
@@ -1099,7 +1138,7 @@ fn accept_loop(
                     // for the same reason the HTTP requests do: this loop must
                     // not block, and an upload lasts as long as the file.
                     if crate::http::wants_upload_channel(&stream) {
-                        let gates = Arc::clone(&gates);
+                        let gates = Arc::clone(&shared.gates);
                         let upload_events = events.clone();
                         let _ = thread::Builder::new()
                             .name("lwfa-upload".into())

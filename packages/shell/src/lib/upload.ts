@@ -60,10 +60,37 @@ interface Pending {
   reject: (reason: Error) => void
 }
 
+/**
+ * Where an uploader reports what it is doing.
+ *
+ * The transfer above is the same work whoever asked for it: announce,
+ * resume, stream, checksum, retry. What differs is where the progress
+ * belongs, and that used to be hard-wired to the file-dialog store. The
+ * clipboard sends files on the same channel to a panel that is not a
+ * dialog, and a second copy of this file would be a second place for the
+ * resume logic to be subtly wrong.
+ */
+export interface UploadSink {
+  update(file: string, change: Partial<store.UploadRow>): void
+  channel(state: store.ChannelState): void
+  /** The row as it stands, for working out a transfer rate. */
+  row(file: string): store.UploadRow | undefined
+}
+
+/** The sink for an ordinary file dialog: the dialog's own store. */
+function dialogSink(request: number): UploadSink {
+  return {
+    update: (file, change) => store.updateUpload(request, file, change),
+    channel: (state) => store.setChannel(request, state),
+    row: (file) => store.dialogNow(request)?.uploads.find((r) => r.id === file),
+  }
+}
+
 /** One dialog's uploader. Create with {@link uploaderFor}. */
 export class Uploader {
   readonly #request: number
   readonly #ticket: string
+  readonly #sink: UploadSink
   #socket: WebSocket | null = null
   #queue: store.UploadRow[] = []
   #running = false
@@ -72,9 +99,10 @@ export class Uploader {
   /** The reply the state machine is waiting for, keyed by message type. */
   #pending = new Map<string, Pending>()
 
-  constructor(request: number, ticket: string) {
+  constructor(request: number, ticket: string, sink: UploadSink) {
     this.#request = request
     this.#ticket = ticket
+    this.#sink = sink
   }
 
   /** Queue files picked from this device. Upload runs one at a time. */
@@ -112,15 +140,15 @@ export class Uploader {
         // the same row. The engine kept the bytes it verified.
         if (!done) {
           if (this.#aborted) break
-          store.updateUpload(this.#request, row.id, { status: "paused", speed: undefined })
-          store.setChannel(this.#request, "paused")
+          this.#sink.update(row.id, { status: "paused", speed: undefined })
+          this.#sink.channel("paused")
           await sleep(this.#retryMs)
           this.#retryMs = Math.min(this.#retryMs * 2, RETRY_MAX_MS)
         }
       }
     } finally {
       this.#running = false
-      if (!this.#aborted) store.setChannel(this.#request, "idle")
+      if (!this.#aborted) this.#sink.channel("idle")
       this.#socket?.close()
       this.#socket = null
     }
@@ -136,7 +164,7 @@ export class Uploader {
     }
 
     try {
-      store.updateUpload(this.#request, row.id, { status: "sending", error: undefined })
+      this.#sink.update(row.id, { status: "sending", error: undefined })
 
       const offsetReply = await this.#ask(socket, "uploadOffset", {
         type: "uploadBegin",
@@ -148,7 +176,7 @@ export class Uploader {
       })
       if (offsetReply.type !== "uploadOffset") return true
       const offset = offsetReply.offset
-      store.updateUpload(this.#request, row.id, { written: offset })
+      this.#sink.update(row.id, { written: offset })
 
       // The hash covers the whole file, so a resumed transfer re-reads the
       // part the engine already has. Local disk, so this is fast relative
@@ -187,7 +215,7 @@ export class Uploader {
       })
       if (doneReply.type !== "uploadDone") return true
       if (doneReply.ok) {
-        store.updateUpload(this.#request, row.id, {
+        this.#sink.update(row.id, {
           status: "done",
           written: row.size,
           finalName: doneReply.name,
@@ -197,7 +225,7 @@ export class Uploader {
       } else {
         // The engine said no: size mismatch, checksum, disk. Retrying will
         // not change the answer, so the row fails and the human decides.
-        store.updateUpload(this.#request, row.id, {
+        this.#sink.update(row.id, {
           status: "failed",
           error: doneReply.error ?? "failed on the machine",
           speed: undefined,
@@ -234,7 +262,7 @@ export class Uploader {
     if (existing && existing.readyState === WebSocket.OPEN) return existing
     if (this.#aborted) throw new Error("dialog closed")
 
-    store.setChannel(this.#request, "connecting")
+    this.#sink.channel("connecting")
     const base = engineFor(location, location.search)
     const url = `${base.replace(/\/$/, "")}/upload?request=${this.#request}&ticket=${this.#ticket}`
 
@@ -251,7 +279,7 @@ export class Uploader {
       socket.onopen = () => resolve()
       socket.onerror = () => reject(new Error("upload channel refused"))
     })
-    store.setChannel(this.#request, "open")
+    this.#sink.channel("open")
     return socket
   }
 
@@ -266,12 +294,10 @@ export class Uploader {
     }
     switch (message.type) {
       case "uploadProgress": {
-        const row = store
-          .dialogNow(this.#request)
-          ?.uploads.find((r) => r.id === message.file)
+        const row = this.#sink.row(message.file)
         if (!row) break
         const speed = speedOf(row, message.written)
-        store.updateUpload(this.#request, message.file, {
+        this.#sink.update(message.file, {
           written: message.written,
           ...(speed !== undefined ? { speed } : {}),
         })
@@ -294,11 +320,16 @@ export class Uploader {
 
 const uploaders = new Map<number, Uploader>()
 
-/** The uploader for a dialog, created on first use. */
-export function uploaderFor(request: number, ticket: string): Uploader {
+/**
+ * The uploader for one channel, created on first use.
+ *
+ * `sink` says where progress goes; without one it goes to the file dialog
+ * with that request id, which is every caller but the clipboard.
+ */
+export function uploaderFor(request: number, ticket: string, sink?: UploadSink): Uploader {
   let uploader = uploaders.get(request)
   if (!uploader) {
-    uploader = new Uploader(request, ticket)
+    uploader = new Uploader(request, ticket, sink ?? dialogSink(request))
     uploaders.set(request, uploader)
   }
   return uploader

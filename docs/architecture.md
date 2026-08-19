@@ -693,6 +693,51 @@ free, because the libraries that most need to be the host's are opened by name
 at run time rather than linked: libwayland-client, libEGL and libcuda never
 appear in the closure at all.
 
+### 9.3 One clipboard, four places
+
+Implemented. `clipboard.rs`, `hostclip.rs`, `clipserve.rs`, and the Clipboard
+panel.
+
+A copy can happen in four places and until this existed none of them could see
+the others: a Wayland client in the session owns a `wl_data_source`, an X11
+client under Xwayland owns the `CLIPBOARD` selection, the desktop *outside*
+lwfa has its own selection entirely (a nested compositor is just another
+client, and its clients' clipboards stop at its edge), and a tablet has a
+fourth that no Wayland protocol will ever reach.
+
+The engine is the hub. Whatever is copied anywhere is read once and offered
+back to the others as a compositor-owned selection, and the history that falls
+out of that is the same store rather than a second subsystem.
+
+Three things about it are not obvious.
+
+**The bytes are read eagerly**, which a selection normally is not. The owner
+advertises types and produces bytes only when somebody pastes, which is right
+and is exactly what cannot be forwarded: the program that owns it is on the
+wrong side of a socket the pasting program cannot reach, and may have exited
+by the time anyone pastes. So a copy is read when it happens, on a thread,
+because the owner writes at its own pace and waiting on it in the event loop
+would freeze every window on the desktop.
+
+**The host is reached over `ext-data-control`**, not `wl_data_device`. The
+ordinary protocol delivers offers only to the focused surface, and lwfa's
+window sits parked on a workspace nobody is looking at. Data-control is what
+clipboard managers use: every change regardless of focus, and setting the
+selection without one. `wlr-data-control` is the older spelling and is used
+when that is all a compositor offers.
+
+**Mirroring in three directions invites an echo**, and two mechanisms stop it.
+Every entry carries a hash of its contents, so a copy that comes back is
+recognised as the one already held; and everything put on the *host* clipboard
+carries a marker type, because what goes out can be a file and what comes back
+is the list naming it, which no hash of contents will ever match. Both were
+found by testing, in that order.
+
+Entry bytes never travel on the session socket. `GET /clip` serves them with
+the session's own clipboard ticket, so a thumbnail loads lazily when a row
+scrolls into view and a 400MB file streams straight to disk, neither costing
+the video a frame.
+
 ## 10. Accounts and permissions
 
 Implemented. `crates/lwfa-engine/src/accounts.rs`, and the Access panel.

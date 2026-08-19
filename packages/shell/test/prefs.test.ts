@@ -88,4 +88,25 @@ describe("hydrate", () => {
     const prefs = await hydrateWith({ nav: 7 })
     expect(prefs.nav.order.length).toBeGreaterThan(0)
   })
+
+  it("puts a button added by an upgrade where it was designed to go", async () => {
+    // A saved rail predates every button added since. Appending them would
+    // land the clipboard at the far end, away from the keyboard it belongs
+    // next to; the order is a reachability decision, not a list.
+    const saved = ["apps", "escape", "keyboard", "gamepad", "workspaces"]
+    const prefs = await hydrateWith({ nav: { order: saved } })
+    const at = prefs.nav.order.indexOf("clipboard")
+    expect(at).toBeGreaterThan(prefs.nav.order.indexOf("keyboard"))
+    expect(at).toBeLessThan(prefs.nav.order.indexOf("workspaces"))
+  })
+
+  it("anchors a new button the user has never seen", async () => {
+    // Anchored means "within thumb reach". A control that arrives
+    // un-anchored because the saved list predates it lands at the wrong end
+    // of the rail on a held tablet.
+    const prefs = await hydrateWith({
+      nav: { order: ["apps", "keyboard", "workspaces"], anchored: ["keyboard", "workspaces"] },
+    })
+    expect(prefs.nav.anchored).toContain("clipboard")
+  })
 })

@@ -1,0 +1,17 @@
+{
+  "type": "clipAdded",
+  "item": {
+    "id": 41,
+    "at": 1755600000000,
+    "origin": "lwfa",
+    "device": null,
+    "kind": "text",
+    "bytes": 11,
+    "mime": "text/plain;charset=utf-8",
+    "preview": "hello there",
+    "whole": true,
+    "width": null,
+    "height": null,
+    "path": null
+  }
+}

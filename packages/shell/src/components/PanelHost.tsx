@@ -27,6 +27,7 @@ const ConnectionsPanel = lazy(() => import("@/panels/ConnectionsPanel"))
 const AccessPanel = lazy(() => import("@/panels/AccessPanel"))
 const AppsPanel = lazy(() => import("@/panels/AppsPanel"))
 const WindowsPanel = lazy(() => import("@/panels/WindowsPanel"))
+const ClipboardPanel = lazy(() => import("@/panels/ClipboardPanel"))
 const KeyboardPanel = lazy(() => import("@/panels/KeyboardPanel"))
 const GamepadPanel = lazy(() => import("@/panels/GamepadPanel"))
 
@@ -44,6 +45,7 @@ const PANELS: Partial<Record<NavItemId, React.LazyExoticComponent<React.Componen
   access: AccessPanel,
   apps: AppsPanel,
   workspaces: WindowsPanel,
+  clipboard: ClipboardPanel,
   keyboard: KeyboardPanel,
   gamepad: GamepadPanel,
 }

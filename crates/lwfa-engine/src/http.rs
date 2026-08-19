@@ -273,6 +273,22 @@ pub fn wants_preview(stream: &TcpStream) -> bool {
     path == "/preview" || path.ends_with("/preview")
 }
 
+/// Is this an ordinary request for clipboard entry bytes?
+///
+/// Same shape as [`wants_preview`], and matched on the last path segment
+/// for the same reason: the shell derives the URL from wherever the engine
+/// lives, which may be behind a proxy prefix.
+pub fn wants_clip(stream: &TcpStream) -> bool {
+    let Some(head) = peek_head_briefly(stream) else {
+        return false;
+    };
+    let Some(target) = request_target(&head) else {
+        return false;
+    };
+    let path = target.split('?').next().unwrap_or("");
+    path == "/clip" || path.ends_with("/clip")
+}
+
 /// Serve one request from `root`, then close.
 ///
 /// Errors are deliberately swallowed: this runs on a throwaway thread for one

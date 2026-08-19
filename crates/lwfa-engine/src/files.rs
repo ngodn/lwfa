@@ -354,7 +354,7 @@ impl Lwfa {
 
     /// Close the upload gate: refuse new connections, stop a live one, and
     /// remove the partial directory.
-    fn drop_file_gate(&mut self, request: u64) {
+    pub(crate) fn drop_file_gate(&mut self, request: u64) {
         let gate = self.upload_gates.lock().unwrap().remove(&request);
         if let Some(gate) = gate {
             gate.cancelled.store(true, Ordering::Relaxed);

@@ -76,12 +76,15 @@ What works today:
       permissions, enforced in the engine
 - [x] Multi-device: one client drives, the rest watch, control is taken
       explicitly
+- [x] One clipboard across the session, the desktop outside it and every
+      connected device, text and files alike, with a history you can put
+      anything back from
 - [x] Installs as a PWA, edge to edge on an iPad, with the brand's icons
 - [x] Ships as one self-extracting file with an installer that detects the
       machine before it writes anything
 
 Deliberately not done yet: built-in TLS (terminate it at a reverse proxy, see
-[Production](#production)), clipboard sync, multi-monitor, DPI awareness, the
+[Production](#production)), multi-monitor, DPI awareness, the
 layer-shell chrome path for the native output, and a TTY backend. The engine
 runs nested inside an existing compositor; it does not own a display outright.
 
@@ -557,6 +560,29 @@ chosen programs. On the wire it is Opus, with its own send accounting so fifty
 audio chunks a second can never crowd video out. Quality is Auto by default,
 following the same budget as the video with sound degrading last, or pinned to
 High, Medium or Low per device.
+
+### Clipboard
+
+One clipboard, not a transfer tool with two sides. Copy in a window in the
+session, in an X11 program like Steam, on the machine's own desktop outside
+lwfa, or on the tablet, and the other three have it. The panel shows the
+history newest first, with a note on each row saying where that copy
+happened, and putting an old row back puts it on all of them.
+
+Text, images and **files of any type**. A file copied in a file manager can
+be downloaded on the tablet; a file sent from the tablet lands in
+`~/Uploads` and goes on the machine's clipboard as itself *and* as its path,
+so it pastes into an image editor and drops into a file manager. Sends ride
+the upload channel, so a large one never stalls the picture, and a send
+interrupted by a network blip is re-queued rather than lost.
+
+Sending **from** a browser needs a tap, and always will: `clipboard-read` is
+a permission Safari does not implement and has said it will not. So the
+panel has a button, which triggers the browser's own paste confirmation, and
+a box beside it that catches what that route cannot reach. Nothing is
+written to a durable directory: the history is in memory with anything large
+spilled to `$XDG_RUNTIME_DIR`, so an engine restart forgets it, and a
+password manager's copy (`x-kde-passwordManagerHint`) is never taken at all.
 
 ### Launcher and windows
 

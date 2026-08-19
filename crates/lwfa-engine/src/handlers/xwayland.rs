@@ -39,6 +39,9 @@ use smithay::desktop::{Window, WindowSurface};
 use smithay::utils::{Logical, Rectangle};
 use smithay::wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState};
 use smithay::xwayland::xwm::{Reorder, ResizeEdge, WmWindowProperty, XwmId};
+use std::os::unix::io::OwnedFd;
+
+use smithay::wayland::selection::SelectionTarget;
 use smithay::xwayland::{X11Surface, X11Wm, XwmHandler};
 
 use crate::layout::Mode;
@@ -229,6 +232,60 @@ impl XwmHandler for Lwfa {
 
     fn unfullscreen_request(&mut self, _xwm: XwmId, surface: X11Surface) {
         self.request_fullscreen_x11(&surface, false);
+    }
+
+    /// Whether an X11 program may read the clipboard.
+    ///
+    /// Yes, and until this existed the answer was no: smithay defaults to
+    /// refusing, which is why copying in Steam and pasting into Firefox did
+    /// nothing at all inside this session. The primary selection stays
+    /// refused, because nothing here tracks it and answering "yes" without
+    /// somewhere to get the bytes from would panic.
+    fn allow_selection_access(&mut self, _xwm: XwmId, selection: SelectionTarget) -> bool {
+        selection == SelectionTarget::Clipboard
+    }
+
+    /// An X11 program copied something.
+    ///
+    /// Read straight away, through a pipe Xwayland writes into, for the
+    /// same reason Wayland selections are: the X program owns it lazily and
+    /// nothing outside this compositor can ask it directly.
+    fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
+        if selection != SelectionTarget::Clipboard {
+            return;
+        }
+        let Some(mime) = crate::clipboard::best_mime(&mime_types) else {
+            return;
+        };
+        let Some(events) = self.events.clone() else {
+            return;
+        };
+        let Ok((reader, writer)) = std::io::pipe() else {
+            tracing::warn!("no pipe for an X11 clipboard read");
+            return;
+        };
+        let handle = self.loop_handle.clone();
+        let Some(xwm) = self.xwm.as_mut() else { return };
+        if let Err(err) = xwm.send_selection(selection, mime.clone(), writer.into(), handle) {
+            tracing::debug!("could not read the X11 selection: {err}");
+            return;
+        }
+        crate::clipboard::read_offer(reader, mime, crate::clipboard::Where::X11, None, events);
+    }
+
+    /// An X11 program wants to paste something the compositor owns.
+    fn send_selection(
+        &mut self,
+        _xwm: XwmId,
+        _selection: SelectionTarget,
+        mime_type: String,
+        fd: OwnedFd,
+    ) {
+        let id = self.clipboard.lock().unwrap().current().map(|(id, _)| id);
+        match id.and_then(|id| self.clip_bytes(id, &mime_type)) {
+            Some(bytes) => crate::clipboard::write_offer(fd.into(), bytes),
+            None => tracing::debug!("an X11 program pasted {mime_type} and there was none"),
+        }
     }
 
     /// Xwayland went away. Everything it owned goes with it, and the compositor

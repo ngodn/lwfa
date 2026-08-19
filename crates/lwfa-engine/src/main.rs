@@ -20,6 +20,9 @@ mod audio;
 mod auth;
 mod capture;
 mod config;
+mod clipboard;
+mod clipserve;
+mod hostclip;
 mod cuda;
 mod encode;
 mod focus;
@@ -72,6 +75,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .init(),
     }
 
+    // Read before anything can change it. Starting the winit backend
+    // replaces `WAYLAND_DISPLAY` with this session's own socket, so anything
+    // asking the environment afterwards is told about lwfa rather than about
+    // the desktop lwfa is running on. See `hostclip.rs`.
+    let host_display = std::env::var_os("WAYLAND_DISPLAY");
+
     let mut event_loop: EventLoop<'static, CalloopData> = EventLoop::try_new()?;
     // Before anything else, because this only covers threads that do not exist
     // yet. See `init_signals`.
@@ -81,6 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     winit::init_winit(&mut event_loop, &mut data)?;
     init_shell_link(&mut event_loop, &mut data)?;
+    init_host_clipboard(&mut data, host_display);
     init_xwayland(&mut event_loop, &mut data);
     init_portal(&mut event_loop, &mut data);
 
@@ -300,6 +310,18 @@ fn init_xwayland(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut Ca
     }
 }
 
+/// Join the clipboard of the desktop outside to this session's.
+///
+/// After the shell link, because it needs the same channel the shell's
+/// events use. Absent it, everything still works; the desktop is simply not
+/// one of the clipboards being kept in step.
+fn init_host_clipboard(data: &mut CalloopData, host_display: Option<std::ffi::OsString>) {
+    let Some(events) = data.events.clone() else {
+        return;
+    };
+    data.host_clip = crate::hostclip::start(host_display, &data.socket_name, events);
+}
+
 /// Start the shell listener and route its events into the compositor.
 fn init_shell_link(
     event_loop: &mut EventLoop<'static, CalloopData>,
@@ -308,6 +330,11 @@ fn init_shell_link(
     // Environment first, then .env, then configs/defaults.toml.
     let addr = data.config.shell_addr();
     let (events_tx, events_rx) = channel::channel::<ShellEvent>();
+    // Kept so work that finishes on a thread can report back. Reading a
+    // clipboard selection is the only such work today: the program that owns
+    // one writes at its own pace, and waiting on it here would stall every
+    // window on the desktop. See `clipboard.rs`.
+    data.events = Some(events_tx.clone());
 
     let token = match auth::resolve_token() {
         Ok(token) => token,
@@ -351,7 +378,10 @@ fn init_shell_link(
         events_tx,
         data.config.stream.max_frames_in_flight,
         shell_dir,
-        data.upload_gates.clone(),
+        crate::shell::Shared {
+            gates: data.upload_gates.clone(),
+            clipboard: data.clipboard.clone(),
+        },
     ) {
         Ok(bound) => bound,
         Err(err) => {
@@ -665,6 +695,11 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                     },
                 );
             }
+            // The clipboard channel, for sessions allowed to use it. Minted
+            // per connection rather than per panel: files ride the upload
+            // channel and entry bytes come over HTTP, and both need a
+            // credential that exists before anybody opens anything.
+            state.clip_open(session);
             // A device that joined into an existing session is following, and
             // has nothing to draw until it is told the arrangement. Waiting for
             // the primary to move something would mean an empty desktop for as
@@ -700,6 +735,11 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // application is still blocked on an answer, and the browser is
             // usually about to reconnect. See `files.rs`.
             state.orphan_file_dialogs(session);
+            // The clipboard channel is not kept the way a dialog is: no
+            // application is waiting on it, and a reconnecting browser is
+            // given a fresh one in its greeting. So its ticket dies here,
+            // which is the point of minting one per connection.
+            state.clip_close(session);
             // Parked, not unplugged: a network flap must not cost the game
             // its controller device. Inputs are released on the way into the
             // parking spot, so a tab closed mid-press does not leave a
@@ -764,8 +804,19 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
 
         ShellEvent::Uploaded(finished) => {
             // From an upload thread, not a session; the ticket authenticated
-            // it. The compositor folds the file into its dialog's answer.
-            state.file_uploaded(finished);
+            // it. A file sent to a clipboard channel is a copy rather than an
+            // answer to a dialog, so it goes to the clipboard instead.
+            if state.clip_is_channel(finished.request) {
+                state.clip_uploaded(finished);
+            } else {
+                state.file_uploaded(finished);
+            }
+        }
+        ShellEvent::Clip(capture) => {
+            // A copy that happened somewhere: a window in here, an X11
+            // program, or the desktop outside. Read on a thread, so this is
+            // the first the compositor hears of it. See `clipboard.rs`.
+            state.clip_captured(capture);
         }
     }
 }
@@ -908,6 +959,15 @@ fn kind_of(message: &ToEngine) -> &'static str {
 
 fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, message: ToEngine) {
     match message {
+        ToEngine::ClipList {
+            request,
+            before,
+            limit,
+        } => state.clip_page(session, request, before, limit),
+        ToEngine::ClipSetText { text } => state.clip_set_text(session, text),
+        ToEngine::ClipUse { id } => state.clip_use(id),
+        ToEngine::ClipDrop { id } => state.clip_forget(id),
+        ToEngine::ClipClear => state.clip_clear(),
         ToEngine::SetLayout { windows, animate } => {
             let configures = state.layout.apply(
                 &windows,
@@ -1094,6 +1154,16 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                     let hello = state.hello(next);
                     state.send_to_session(next, hello);
                 }
+            }
+
+            // And the clipboard follows the same right. Taking the keys
+            // back has to take the clipboard with them, or a session
+            // downgraded to watching would keep a live ticket and go on
+            // reading everything the owner copies.
+            if downgraded {
+                state.clip_close(target);
+            } else {
+                state.clip_open(target);
             }
 
             // Its own `Hello` again, because permissions are what the shell
