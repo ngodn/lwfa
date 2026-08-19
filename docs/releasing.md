@@ -74,7 +74,8 @@ bundle have to be that container's. Collecting them on the host would put the
 original problem straight back.
 
 FFmpeg is built from source in the image rather than installed, because
-`ffmpeg-next` needs FFmpeg 8 headers and no old distribution ships them. It is
+`ffmpeg-next` needs headers matching its own major version (9 as of lwfa
+1.1.10) and no old distribution ships them. It is
 configured with `--disable-everything` plus only what lwfa asks for, which is
 why the artifact is a few megabytes instead of eighty: a distribution's FFmpeg
 links every encoder it was configured with, and lwfa calls two of them.
