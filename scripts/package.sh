@@ -14,7 +14,7 @@
 #
 # # Why libraries are bundled at all
 #
-# `ffmpeg-next` links the system FFmpeg, so the binary needs libavcodec.so.62
+# `ffmpeg-next` links the system FFmpeg, so the binary needs libavcodec.so.63
 # and friends. That soname is current on Arch and wrong nearly everywhere
 # else: Debian stable, Ubuntu LTS and Fedora all ship different majors. A
 # binary built here and copied there fails at load with a message about a
