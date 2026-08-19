@@ -30,6 +30,7 @@ import {
   Layers,
   LogOut,
   Radio,
+  RefreshCw,
 } from "lucide-react"
 import { useSessionActions, useSessionState } from "@/session"
 import { useLog } from "@/lib/log"
@@ -44,9 +45,10 @@ import { describeFormat, useStreamFormat } from "@/lib/streamFormat"
 import { useStreamStats } from "@/lib/streamStats"
 import { AudioReadout } from "@/panels/AudioReadout"
 import { cn } from "@/lib/utils"
+import { SHELL_VERSION } from "@/generated/config"
 
 function SessionPanel() {
-  const { status, statusDetail, output, windows, strip, endpoint, account, permissions, primary, peers } =
+  const { status, statusDetail, output, windows, strip, endpoint, account, permissions, primary, peers, engineVersion } =
     useSessionState()
   const actions = useSessionActions()
   const entries = useLog()
@@ -67,6 +69,11 @@ function SessionPanel() {
   const report = describeStatus(status, statusDetail)
   const format = useStreamFormat()
   const stats = useStreamStats()
+  // A page keeps running the JavaScript it loaded until it is reloaded, so an
+  // upgraded machine and an open tab disagree until somebody remembers to
+  // refresh. Now the page can notice by itself. Null means an engine that
+  // predates saying so, which is not something to nag about.
+  const stale = engineVersion !== null && engineVersion !== SHELL_VERSION
 
   return (
     <div className="space-y-6 pt-2">
@@ -108,12 +115,11 @@ function SessionPanel() {
         */}
       <PanelSection
         title="Video"
-        description="Measured from the frames themselves."
+        description="Counted as the video arrives."
       >
         {!streamPrefs.enabled ? (
           <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            Paused. The connection is still open; turn the picture back on in
-            Settings.
+            Paused. Turn the picture back on in Settings.
           </p>
         ) : (
           <>
@@ -144,9 +150,8 @@ function SessionPanel() {
             </dl>
             {stats.fps > 0 && stats.fps < 20 ? (
               <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-                Few frames rather than soft ones. The engine sends fewer when it
-                has decided the connection cannot carry more, so this is the
-                link rather than this device.
+                The connection cannot carry more, so the engine is sending
+                fewer frames. That is the link, not this device.
               </p>
             ) : null}
           </>
@@ -154,7 +159,7 @@ function SessionPanel() {
       </PanelSection>
 
       {/* Moved here whole from Settings > Stream, where the switches are. */}
-      <PanelSection title="Sound" description="Where silence would come from.">
+      <PanelSection title="Sound" description="Why there might be no sound.">
         {streamPrefs.audio ? (
           <AudioReadout />
         ) : (
@@ -184,7 +189,43 @@ function SessionPanel() {
             value={peers.length <= 1 ? "This one only" : `${peers.length} attached`}
           />
           <Row label="Layout" value={primary ? "Decided here" : "Following another device"} />
+          <Row
+            label="Version"
+            value={
+              stale ? (
+                <span className="text-warning">
+                  {SHELL_VERSION} · machine has {engineVersion}
+                </span>
+              ) : (
+                SHELL_VERSION
+              )
+            }
+          />
         </dl>
+
+        {stale ? (
+          <div className="space-y-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs">
+            <p className="text-muted-foreground">
+              This page is older than the machine. Reloading picks up{" "}
+              {engineVersion}. Your windows stay open, because they live on the
+              machine, not here.
+            </p>
+            <Button
+              size="sm"
+              className="w-full gap-1.5"
+              onClick={() => {
+                // Enough on its own: the engine serves index.html as
+                // `no-cache` and every asset under a content-hashed name, so a
+                // reload revalidates the page and pulls whatever it now points
+                // at. See `cache_control` in http.rs.
+                globalThis.location.reload()
+              }}
+            >
+              <RefreshCw className="size-3.5" aria-hidden />
+              Reload to update
+            </Button>
+          </div>
+        ) : null}
 
         {!primary ? (
           <Button size="sm" variant="outline" className="w-full gap-1.5" onClick={actions.takeControl}>
@@ -208,7 +249,7 @@ function SessionPanel() {
 
       <PanelSection
         title="Recent events"
-        description="What this tab saw, newest first."
+        description="Newest first."
       >
         {entries.length === 0 ? (
           <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">

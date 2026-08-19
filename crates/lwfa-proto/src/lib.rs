@@ -231,6 +231,19 @@ pub enum ToShell {
     #[serde(rename_all = "camelCase")]
     WindowClosed { id: WindowId },
 
+    /// What the engine is running, so a shell can tell whether it is stale.
+    ///
+    /// Sent once, straight after [`ToShell::Hello`].
+    ///
+    /// A message of its own rather than a field on `Hello`, deliberately. The
+    /// shell validates `Hello` strictly and rejects unknown fields, so adding
+    /// one there would stop a shell built before this existed from decoding
+    /// its own greeting at all. An unrecognised *message* is logged and
+    /// ignored, which is the behaviour that matters here: the shells most in
+    /// need of being told they are out of date are exactly the old ones.
+    #[serde(rename_all = "camelCase")]
+    EngineVersion { version: String },
+
     /// This window is being streamed and has drawn nothing.
     ///
     /// Sent once a window has been asked for and has produced no frame at all

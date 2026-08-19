@@ -107,6 +107,12 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         ),
         ("window-closed", ToShell::WindowClosed { id: WindowId(7) }),
         (
+            "engine-version",
+            ToShell::EngineVersion {
+                version: "1.1.10".into(),
+            },
+        ),
+        (
             "window-blank",
             ToShell::WindowBlank {
                 id: WindowId(7),
