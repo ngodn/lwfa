@@ -1,6 +1,6 @@
 [package]
 name = "lwfa-proto"
-version = "1.1.9"
+version = "1.1.10"
 description = "The lwfa shell protocol: wire types shared by the engine and the shell"
 edition.workspace = true
 rust-version.workspace = true
