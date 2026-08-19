@@ -883,13 +883,24 @@ impl DelayEstimate {
         // Both passes are bounded by the window over the probe interval, so a
         // hundred-odd entries scanned four times a second per client.
         let floor = self.floor();
-        let recent = self
-            .samples
-            .iter()
-            .filter(|(at, _)| now.duration_since(*at) <= QUEUE_WINDOW)
-            .map(|(_, rtt)| *rtt)
-            .min()
-            .unwrap_or(rtt);
+        // The typical recent sample, not the luckiest one.
+        //
+        // This was a minimum, which is right on a link whose jitter is small
+        // and occasional: one unlucky sample should not be read as a queue.
+        // On a relayed mobile link it inverts. Probes measured over one
+        // (82, 87, 90, 289, 385, 1042 ms) have a minimum of 82ms whatever
+        // else is happening, so the estimate said "no queue" while the link
+        // carried seconds of it, and the budget climbed to its ceiling into a
+        // 2.9 second queue. A median moves with the bulk of the samples, so a
+        // link that is bad most of the time reads as bad, and a link that is
+        // good with one bad sample still reads as good.
+        let recent = median(
+            self.samples
+                .iter()
+                .filter(|(at, _)| now.duration_since(*at) <= QUEUE_WINDOW)
+                .map(|(_, rtt)| *rtt),
+        )
+        .unwrap_or(rtt);
         recent.saturating_sub(floor)
     }
 
@@ -901,6 +912,22 @@ impl DelayEstimate {
             .min()
             .unwrap_or_default()
     }
+}
+
+/// The middle value, or `None` from nothing.
+///
+/// Free-standing and taking an iterator so the rule can be tested without a
+/// connection to measure. The upper median on an even count, which errs
+/// towards calling a link congested rather than clear: being slow to notice a
+/// queue costs more than being early, because by the time a queue is certain
+/// it is already being felt.
+fn median(values: impl Iterator<Item = Duration>) -> Option<Duration> {
+    let mut values: Vec<Duration> = values.collect();
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    Some(values[values.len() / 2])
 }
 
 /// Marker for "no probe has completed yet" in [`Slot::rtt_excess`].
@@ -1600,10 +1627,26 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
                     // The verdict, not the sample. One probe over the limit is
                     // a hiccup; a run of them is a queue. See
                     // `SUSTAINED_PROBES`.
+                    // As slow to clear as it was to set.
+                    //
+                    // This used to reset to zero on one sample under the
+                    // limit, which on a jittery link is a coin toss: a single
+                    // lucky probe wiped out the evidence of a queue that was
+                    // still there. Measured on a tethered mobile connection,
+                    // the verdict flipped back to "clear" repeatedly while the
+                    // queue stood at seconds, and each flip let the budget
+                    // climb again. Counting down instead means it takes as
+                    // many good probes to earn back a clear verdict as it took
+                    // bad ones to lose it.
                     if excess >= crate::bitrate::QUEUE_DELAY_LIMIT {
-                        client.over_limit = client.over_limit.saturating_add(1);
+                        client.over_limit = client
+                            .over_limit
+                            .saturating_add(1)
+                            // Bounded, or a long bad spell would take just as
+                            // long to forgive after the link recovered.
+                            .min(SUSTAINED_PROBES * 2);
                     } else {
-                        client.over_limit = 0;
+                        client.over_limit = client.over_limit.saturating_sub(1);
                     }
                     client
                         .delay_congested
@@ -1708,6 +1751,51 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
 mod tests {
     use super::*;
 
+    /// Round trips measured over a relayed mobile link, in milliseconds.
+    ///
+    /// Taken from `tailscale ping` while the tablet was tethered: the same
+    /// session that made lwfa unusable. The spread is the point. A minimum
+    /// over any window of these is about 82ms however bad the link is.
+    const TETHERED: [u64; 8] = [140, 85, 130, 143, 93, 1890, 363, 93];
+
+    fn samples(ms: &[u64]) -> impl Iterator<Item = Duration> + use<'_> {
+        ms.iter().map(|m| Duration::from_millis(*m))
+    }
+
+    #[test]
+    fn the_middle_sample_is_not_the_luckiest_one() {
+        // The whole fix. A minimum of this set reports 85ms, which reads as a
+        // link with no queue at all; the median reports 140ms, which is the
+        // delay somebody is actually experiencing.
+        let middle = median(samples(&TETHERED)).unwrap();
+        assert!(
+            middle >= Duration::from_millis(130),
+            "median was {middle:?}, which is close to the best sample rather than the typical one",
+        );
+    }
+
+    #[test]
+    fn one_bad_sample_does_not_make_a_good_link_look_queued() {
+        // The other half: the reason it was a minimum in the first place. A
+        // wifi link with a single hiccup must still read as clear.
+        let wifi = [4, 5, 4, 6, 5, 220, 4, 5];
+        let middle = median(samples(&wifi)).unwrap();
+        assert!(
+            middle <= Duration::from_millis(10),
+            "one spike moved the estimate to {middle:?}",
+        );
+    }
+
+    #[test]
+    fn nothing_measured_has_no_middle() {
+        assert_eq!(median(samples(&[])), None);
+    }
+
+    #[test]
+    fn a_single_sample_is_its_own_middle() {
+        assert_eq!(median(samples(&[42])), Some(Duration::from_millis(42)));
+    }
+
     #[test]
     fn an_opus_client_gets_opus_and_falls_back_to_pcm() {
         assert_eq!(audio_payload(true, Some(&"opus"), Some(&"pcm")), Some(&"opus"));
@@ -1734,11 +1822,56 @@ mod tests {
     }
 
     #[test]
-    fn a_faster_probe_lowers_the_floor_immediately() {
+    fn one_fast_probe_is_not_proof_the_queue_drained() {
+        // The mirror of `one_slow_probe_is_not_a_queue`, and the reason this
+        // estimate is a median rather than a minimum.
+        //
+        // It used to be the opposite: a single fast sample cleared the reading
+        // at once, because the recent window was a minimum. On a link whose
+        // samples ranged from 82ms to 1.9s that fired constantly, so a queue
+        // that never drained kept reading as clear and the budget kept
+        // climbing back into it. Evidence has to accumulate in both
+        // directions, or the noisiest links are the ones least well measured.
+        let start = std::time::Instant::now();
+        let mut delay = DelayEstimate::default();
+        let mut at = start;
+        // Establish a fast floor, then a run of slow probes: a real queue.
+        delay.observe(ms(10), at);
+        for _ in 0..6 {
+            at += PROBE_INTERVAL;
+            delay.observe(ms(300), at);
+        }
+        at += PROBE_INTERVAL;
+        let one_lucky_sample = delay.observe(ms(10), at);
+        assert!(
+            one_lucky_sample > Duration::ZERO,
+            "one fast probe wiped out the evidence of a queue",
+        );
+
+        // But a link that has genuinely recovered does clear, and quickly:
+        // the window is two seconds, so most of it turns over in about one.
+        for _ in 0..5 {
+            at += PROBE_INTERVAL;
+            delay.observe(ms(10), at);
+        }
+        at += PROBE_INTERVAL;
+        assert_eq!(
+            delay.observe(ms(10), at),
+            Duration::ZERO,
+            "a recovered link should read as clear again",
+        );
+    }
+
+    #[test]
+    fn the_floor_still_follows_a_link_that_genuinely_got_faster() {
+        // The floor is separate from the recent window and is still a plain
+        // minimum, so a path that improves is recognised rather than being
+        // measured against a stale, slower one.
         let now = std::time::Instant::now();
         let mut delay = DelayEstimate::default();
         delay.observe(ms(30), now);
-        assert_eq!(delay.observe(ms(9), now + PROBE_INTERVAL), Duration::ZERO);
+        delay.observe(ms(9), now + PROBE_INTERVAL);
+        assert_eq!(delay.floor(), ms(9));
     }
 
     #[test]

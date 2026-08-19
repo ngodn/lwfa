@@ -13,11 +13,23 @@
  * config`, which the dev, build, test and typecheck scripts all depend on.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { CONFIG_PATH, readConfig } from "./config.mjs"
 
 const OUT = fileURLToPath(new URL("../packages/shell/src/generated/config.ts", import.meta.url))
+
+/**
+ * The version this bundle was built from.
+ *
+ * Here rather than in a Vite `define` for the same reason as everything else
+ * in this file: the tests and the Node scripts have to see it too. It is what
+ * the session panel shows, and what the engine's own version is compared
+ * against to notice a page still running an older build.
+ */
+const VERSION = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+).version
 
 const config = readConfig()
 const layout = config.layout ?? {}
@@ -117,6 +129,15 @@ export const WINDOW_SPRING = {
   damping: ${animation.damping},
   mass: ${animation.mass},
 }
+
+/**
+ * The version this bundle was built from.
+ *
+ * Compared against the engine's, which arrives as \`engineVersion\`. A page
+ * left open across an upgrade keeps running its old JavaScript until it is
+ * reloaded, and until now the only way to know that was to remember.
+ */
+export const SHELL_VERSION = ${JSON.stringify(VERSION)}
 `
 
 mkdirSync(fileURLToPath(new URL("../packages/shell/src/generated/", import.meta.url)), {

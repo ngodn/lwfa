@@ -126,6 +126,12 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
         ),
         ("window-closed", ToShell::WindowClosed { id: WindowId(7) }),
         (
+            "engine-version",
+            ToShell::EngineVersion {
+                version: "1.1.10".into(),
+            },
+        ),
+        (
             "window-blank",
             ToShell::WindowBlank {
                 id: WindowId(7),

@@ -311,9 +311,8 @@ function PauseInactive({ value, disabled }: { value: boolean; disabled: boolean 
           <p className="text-sm">
             <span className="font-medium">Streaming every window costs real performance.</span>{" "}
             <span className="text-muted-foreground">
-              Each one keeps rendering, encoding and decoding even while you
-              work elsewhere. With several windows open this is what makes the
-              whole session feel laggy.
+              Windows you are not looking at keep encoding anyway. With
+              several open, that is what makes things feel slow.
             </span>
           </p>
           <div className="flex gap-1.5">
@@ -418,8 +417,8 @@ function StreamSettings() {
           */}
         {!hardware ? (
           <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            Over plain HTTP the browser blocks hardware decoding, so
-            Automatic uses JPEG. Serve the shell over HTTPS to enable H.264.
+            Browsers block hardware decoding over plain HTTP, so this falls
+            back to JPEG. Serve the shell over HTTPS for H.264.
           </p>
         ) : null}
       </PanelSection>
@@ -525,8 +524,7 @@ function StreamSettings() {
         * it, and the playback line decided which audio path was in use by
         * asking whether the browser could decode *video*. */}
       <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-        What is actually arriving, and whether anything is wrong with it, is in
-        the session panel.
+        The readings are in the session panel.
       </p>
     </>
   )

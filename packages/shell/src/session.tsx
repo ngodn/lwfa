@@ -57,6 +57,14 @@ export interface SessionState {
   primary: boolean
   /** Everyone connected, including this session. */
   peers: PeerInfo[]
+  /**
+   * What the engine is running, once it has said.
+   *
+   * `null` until its greeting arrives, and from an engine too old to send it
+   * at all. Compared against `SHELL_VERSION` to notice a page still running
+   * the JavaScript it loaded before an upgrade.
+   */
+  engineVersion: string | null
 }
 
 /**

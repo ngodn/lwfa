@@ -80,27 +80,27 @@ export function AudioReadout() {
       </dl>
       {state.wire === "pcm" ? (
         <p className="pt-1 text-muted-foreground">
-          Uncompressed audio. This costs more bandwidth than the whole video
-          stream at its floor and cannot adapt; it should only ever appear if
-          the Opus decoder failed to load.
+          Uncompressed audio. It uses more bandwidth than the video does and
+          cannot adapt. This should only happen if the Opus decoder failed to
+          load.
         </p>
       ) : null}
       {laggy ? (
         <p className="pt-1 text-muted-foreground">
-          The player is holding more sound than it needs, so what you hear is
-          behind what you see. It gives the extra back at the next quiet moment.
+          Sound is running behind the picture. It catches up at the next quiet
+          moment.
         </p>
       ) : null}
       {stalled ? (
         <p className="pt-1 text-muted-foreground">
-          The browser has not started audio. Tap anywhere on the page: it will
-          not begin until the page has been touched.
+          Tap anywhere to start audio. Browsers will not play sound until the
+          page has been touched.
         </p>
       ) : null}
       {starved ? (
         <p className="pt-1 text-muted-foreground">
-          Playing, but nothing is arriving from the machine. That is the
-          connection or the engine, not this device.
+          Nothing is arriving from the machine. That is the connection, not
+          this device.
         </p>
       ) : null}
     </div>

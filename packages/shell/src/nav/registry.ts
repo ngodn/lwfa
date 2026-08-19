@@ -57,19 +57,19 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   info: {
     id: "info",
     label: "Session",
-    hint: "Connection health, stream stats and the engine log",
+    hint: "How the stream and connection are doing",
     icon: Info,
   },
   connections: {
     id: "connections",
     label: "Connections",
-    hint: "Machines you can reach, and which one you are on",
+    hint: "Machines you can reach",
     icon: Network,
   },
   access: {
     id: "access",
     label: "Access",
-    hint: "Who may connect, and what they are allowed to do",
+    hint: "Who may connect, and what they can do",
     icon: Users,
   },
   theme: {
@@ -81,7 +81,7 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   settings: {
     id: "settings",
     label: "Settings",
-    hint: "Navigation, input and stream preferences",
+    hint: "Navigation, input and stream",
     icon: Settings,
   },
   apps: {
@@ -93,7 +93,7 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   escape: {
     id: "escape",
     label: "Escape",
-    hint: "Send Escape. Closes menus and dialogs, and leaves vim's insert mode",
+    hint: "Closes menus, and leaves vim's insert mode",
     // Never drawn: `glyph` wins. Present because every item has an icon, and
     // there is no icon anyone reads as "Escape" — a keycap is how keyboards
     // have labelled it for forty years.
@@ -104,21 +104,21 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   gamepad: {
     id: "gamepad",
     label: "Gamepad",
-    hint: "On-screen controller, with an editable layout",
+    hint: "On-screen controller you can rearrange",
     icon: Gamepad2,
     kind: "dock",
   },
   keyboard: {
     id: "keyboard",
     label: "Keyboard",
-    hint: "On-screen keyboard, including held modifier combos",
+    hint: "On-screen keyboard, with held modifiers",
     icon: KeyboardIcon,
     kind: "dock",
   },
   workspaces: {
     id: "workspaces",
     label: "Windows",
-    hint: "Workspaces, window arrangement and focus",
+    hint: "Workspaces, arrangement and focus",
     icon: AppWindow,
   },
 }

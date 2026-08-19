@@ -133,6 +133,15 @@ export type ToShell =
   | { type: "windowChanged"; window: WindowInfo }
   | { type: "windowClosed"; id: WindowId }
   /**
+   * What the engine is running, so a shell can tell whether it is stale.
+   *
+   * Sent once, straight after `hello`. A message of its own rather than a
+   * field on `hello`, because `hello` is validated strictly: a shell built
+   * before this existed would fail to decode its own greeting. An unknown
+   * message is logged and ignored instead, which is what an old shell needs.
+   */
+  | { type: "engineVersion"; version: string }
+  /**
    * This window is being streamed and has drawn nothing.
    *
    * Sent once a window has been asked for and has produced no frame at all for
@@ -911,6 +920,11 @@ export function decodeToShell(text: string): ToShell {
       const where = `${at}.windowClosed`
       noExtraKeys(o, ["type", "id"], where)
       return { type: "windowClosed", id: int(o, "id", where) }
+    }
+    case "engineVersion": {
+      const where = `${at}.engineVersion`
+      noExtraKeys(o, ["type", "version"], where)
+      return { type: "engineVersion", version: str(o, "version", where) }
     }
     case "windowBlank": {
       const where = `${at}.windowBlank`

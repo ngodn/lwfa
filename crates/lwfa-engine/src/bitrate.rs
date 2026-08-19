@@ -123,6 +123,26 @@ pub const QUEUE_DELAY_LIMIT: Duration = Duration::from_millis(75);
 /// is a feedback loop.
 const SETTLE: Duration = Duration::from_secs(2);
 
+/// How far to cut for a given amount of standing queue.
+///
+/// The rungs are a factor of two apart, so the number of them a queue justifies
+/// is roughly how many times too fast we are, in doublings. A queue at the
+/// limit is one rung; one eight times over is three.
+///
+/// Capped at three deliberately. This is a reaction to a measurement that is
+/// noisy by nature, and the floor is only seven rungs below the ceiling: an
+/// uncapped cut would land on the floor from a single bad sample, where the
+/// ladder is meant to find the level the link can hold.
+fn rungs_to_drop(queueing: Duration) -> usize {
+    let limit = QUEUE_DELAY_LIMIT.as_micros().max(1);
+    let over = queueing.as_micros() / limit;
+    match over {
+        0..=1 => 1,
+        2..=3 => 2,
+        _ => 3,
+    }
+}
+
 /// How long a departed client's level is still worth resuming from.
 ///
 /// Matched to the engine's own session grace (`state::SESSION_GRACE`, 45s) with
@@ -274,7 +294,16 @@ impl Controller {
     /// past it. See [`Controller::detach`].
     pub fn attach(&mut self, now: Instant) {
         self.step = match self.departed {
-            Some((step, at)) if now.duration_since(at) <= RESUME_WINDOW => step.max(START),
+            // Exactly where it left, not raised to the start.
+            //
+            // Raising was wrong for the case that matters most: a device drops
+            // *because* its link is struggling, and the link that beat the
+            // budget down to 1 Mbit/s is the same one that comes back a second
+            // later. Handing it four times the rate it had just failed to
+            // sustain floods it again, and on a link that flaps the cycle
+            // repeats for as long as the session lasts. It was measured doing
+            // exactly that over a tethered mobile connection.
+            Some((step, at)) if now.duration_since(at) <= RESUME_WINDOW => step,
             _ => START,
         };
         self.departed = None;
@@ -322,7 +351,21 @@ impl Controller {
         }
 
         if congested && self.step > 0 {
-            self.step -= 1;
+            // Cut by as many rungs as the measurement justifies, not always by
+            // one.
+            //
+            // Each cut rebuilds every encoder, because neither H.264 nor HEVC
+            // can change bitrate mid-stream through this binding, and a
+            // rebuild means a keyframe: the largest frame there is, sent onto
+            // a link that is already drowning. Walking down one rung at a time
+            // therefore answers congestion by adding data, once per rung.
+            //
+            // Measured on a tethered mobile connection: 32 Mbit/s to the floor
+            // took eight cuts and ninety seconds, and paid a keyframe for each
+            // one while the queue stood at seconds. Sizing the cut to the
+            // queue makes that one cut, one keyframe, and arrives at a
+            // survivable rate while the session is still worth using.
+            self.step = self.step.saturating_sub(rungs_to_drop(signal.queueing));
             self.changed_at = now;
             // Wait out the queue that already exists before judging the cut,
             // or the same backlog is counted once per settling period and the
@@ -717,6 +760,68 @@ mod tests {
                 clock - start,
             );
         }
+    }
+
+    #[test]
+    fn a_small_queue_costs_one_rung() {
+        // The ordinary case, and the one the ladder was built for: back off a
+        // little, measure again.
+        assert_eq!(rungs_to_drop(QUEUE_DELAY_LIMIT), 1);
+        assert_eq!(rungs_to_drop(Duration::from_millis(0)), 1);
+    }
+
+    #[test]
+    fn a_queue_of_seconds_costs_three() {
+        // Measured on a tethered mobile link: queueing of 723ms, 2827ms and
+        // 2423ms while the budget walked down one rung at a time, paying a
+        // keyframe per rung onto a link that was already drowning. One cut of
+        // three answers that with one keyframe.
+        assert_eq!(rungs_to_drop(Duration::from_millis(2906)), 3);
+        assert_eq!(rungs_to_drop(Duration::from_millis(723)), 3);
+    }
+
+    #[test]
+    fn a_single_bad_sample_cannot_reach_the_floor() {
+        // The cut is a reaction to a noisy measurement, so it is capped. From
+        // the ceiling, even an absurd reading lands mid-ladder, where the next
+        // measurement can still say "too far" or "not far enough".
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        for i in 1..40 {
+            controller.observe(Signal::clear(), at(base, i));
+        }
+        assert_eq!(controller.bitrate(), STEPS[STEPS.len() - 1]);
+
+        let absurd = Signal::congested().with_queue(Duration::from_secs(30));
+        controller.observe(absurd, at(base, 60));
+        assert!(
+            controller.bitrate() > STEPS[0],
+            "one reading took it all the way to the floor",
+        );
+    }
+
+    #[test]
+    fn a_flapping_link_is_not_handed_back_more_than_it_could_hold() {
+        // Measured: a tethered session was beaten to 1 Mbit/s, dropped,
+        // reconnected two seconds later, and was handed 4 Mbit/s because the
+        // start of the ladder was treated as a floor. The link that had just
+        // failed to sustain 1 was then asked for 4, and the cycle repeated for
+        // as long as the session lasted.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        for i in 1..30 {
+            controller.observe(Signal::congested(), at(base, i * 3));
+        }
+        let beaten = controller.bitrate();
+        assert!(beaten < STEPS[START], "{beaten} should be below the start");
+
+        controller.detach(at(base, 100));
+        controller.attach(at(base, 102));
+        assert_eq!(
+            controller.bitrate(),
+            beaten,
+            "a link that just proved what it can carry should be taken at its word",
+        );
     }
 
     #[test]

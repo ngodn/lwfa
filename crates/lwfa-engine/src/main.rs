@@ -653,6 +653,17 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             let hello = state.hello(session);
             if let Some(shell) = state.shell.as_ref() {
                 shell.send_to(session, hello);
+                // Straight after the greeting, so a shell can compare it with
+                // its own build and offer to reload if it is the older one.
+                // Every release so far has ended with "hard-refresh the shell
+                // in each browser", which is a thing to remember rather than a
+                // thing the machine tells you. See `ToShell::EngineVersion`.
+                shell.send_to(
+                    session,
+                    ToShell::EngineVersion {
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                    },
+                );
             }
             // A device that joined into an existing session is following, and
             // has nothing to draw until it is told the arrangement. Waiting for

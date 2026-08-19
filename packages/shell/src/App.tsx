@@ -70,7 +70,7 @@ import {
 } from "@/lib/fileDialog"
 import { dropUploader } from "@/lib/upload"
 import { motion } from "@/lib/motion"
-import { WINDOW_SPRING } from "@/generated/config"
+import { SHELL_VERSION, WINDOW_SPRING } from "@/generated/config"
 import {
   accountsRequested,
   clearAccounts,
@@ -319,6 +319,11 @@ export function App(): React.ReactElement {
   const [primary, setPrimary] = useState(true);
   const primaryRef = useRef(true);
   const [peers, setPeers] = useState<PeerInfo[]>([]);
+  /**
+   * What the engine says it is running. Null until it says, and from any
+   * engine old enough not to send it. See `SHELL_VERSION`.
+   */
+  const [engineVersion, setEngineVersion] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<SessionId>(0);
   /** The arrangement a follower was sent, in the engine's output space. */
   const [followed, setFollowed] = useState<WindowLayout[]>([]);
@@ -666,6 +671,16 @@ export function App(): React.ReactElement {
           setWindows((prev) =>
             new Map(prev).set(message.window.id, message.window),
           );
+          break;
+
+        case "engineVersion":
+          setEngineVersion(message.version);
+          if (message.version !== SHELL_VERSION) {
+            log(
+              "warn",
+              `this page is running ${SHELL_VERSION}, the machine is running ${message.version}`,
+            );
+          }
           break;
 
         case "windowBlank":
@@ -1194,8 +1209,9 @@ export function App(): React.ReactElement {
       session: sessionId,
       primary,
       peers,
+      engineVersion,
     }),
-    [status, statusDetail, output, windows, strip, primary, peers, sessionId],
+    [status, statusDetail, output, windows, strip, primary, peers, sessionId, engineVersion],
   );
 
   if (!password) {
