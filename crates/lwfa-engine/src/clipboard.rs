@@ -402,17 +402,21 @@ impl Clipboard {
         Some((entry.item.id, entry.mimes.clone()))
     }
 
-    /// The bytes to hand somebody pasting `mime` from entry `id`.
+    /// What to hand somebody pasting `mime` from entry `id`.
     ///
-    /// Reads from wherever they are: memory for text, `~/Uploads` for a
-    /// file from a device, the spill directory for anything else. A
-    /// `text/uri-list` is composed rather than stored, so a photo sent from
-    /// a tablet can be pasted into an image editor *and* dropped into a
-    /// file manager without keeping two copies of it.
-    pub fn bytes_for(&self, id: u64, mime: &str) -> Option<Vec<u8>> {
+    /// A `text/uri-list` is composed rather than stored, and asking a file
+    /// entry for text gets its path, so a photo sent from a tablet can be
+    /// pasted into an image editor *and* dropped into a file manager
+    /// without keeping two copies of it.
+    ///
+    /// Returns where the bytes are rather than the bytes themselves. This
+    /// is called on the compositor thread, and reading a 400MB file there
+    /// would freeze every window on the desktop for as long as the disk
+    /// took; [`write_offer`] does the reading, on a thread of its own.
+    pub fn payload_for(&self, id: u64, mime: &str) -> Option<Payload> {
         let entry = self.entries.iter().find(|e| e.item.id == id)?;
         if mime == "text/uri-list" && !entry.paths.is_empty() {
-            return Some(uri_list(&entry.paths).into_bytes());
+            return Some(Payload::Bytes(uri_list(&entry.paths).into_bytes()));
         }
         if is_text(mime) && entry.item.kind != ClipKind::Text && !entry.paths.is_empty() {
             // Pasting a file into a text field should give its path, which
@@ -423,11 +427,11 @@ impl Clipboard {
                 .map(|p| p.display().to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            return Some(joined.into_bytes());
+            return Some(Payload::Bytes(joined.into_bytes()));
         }
         match &entry.body {
-            Body::Text(text) => Some(text.as_bytes().to_vec()),
-            Body::File { path, .. } => std::fs::read(path).ok(),
+            Body::Text(text) => Some(Payload::Bytes(text.as_bytes().to_vec())),
+            Body::File { path, .. } => Some(Payload::File(path.clone())),
         }
     }
 
@@ -496,6 +500,15 @@ impl Default for Clipboard {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// One representation of an entry, on its way to a program pasting it.
+#[derive(Debug, Clone)]
+pub enum Payload {
+    /// Small and already in hand: text, a path, a URI list.
+    Bytes(Vec<u8>),
+    /// Streamed from disk by whoever writes it, because it can be a film.
+    File(PathBuf),
 }
 
 /// How `GET /clip` should answer for an entry.
@@ -880,18 +893,30 @@ pub fn read_offer(
     }
 }
 
-/// Answer a paste by writing an entry's bytes into the pipe it asked for.
+/// Answer a paste by writing an entry into the pipe it asked for.
 ///
-/// Also on a thread, and for the mirror-image reason: a pipe holds 64KB and
-/// the program reading it may be busy, so writing a screenshot inline would
-/// block the compositor until it caught up.
-pub fn write_offer(mut writer: std::io::PipeWriter, bytes: Vec<u8>) {
+/// On a thread, and for two reasons: a pipe holds 64KB and the program
+/// reading it may be busy, so writing a screenshot inline would block the
+/// compositor until it caught up; and a [`Payload::File`] is read here
+/// rather than by the caller, so pasting a large file costs a thread rather
+/// than a frozen desktop.
+pub fn write_offer(mut writer: std::io::PipeWriter, payload: Payload) {
     let spawned = std::thread::Builder::new()
         .name("lwfa-clip-write".to_string())
         .spawn(move || {
             // A program that asks for a paste and then goes away leaves a
             // broken pipe. Expected, not an error.
-            if let Err(err) = writer.write_all(&bytes) {
+            let result = match payload {
+                Payload::Bytes(bytes) => writer.write_all(&bytes),
+                Payload::File(path) => match std::fs::File::open(&path) {
+                    Ok(mut file) => std::io::copy(&mut file, &mut writer).map(|_| ()),
+                    Err(err) => {
+                        tracing::warn!("cannot paste {}: {err}", path.display());
+                        return;
+                    }
+                },
+            };
+            if let Err(err) = result {
                 tracing::debug!("clipboard paste was not read to the end: {err}");
             }
         });
@@ -965,12 +990,13 @@ impl crate::state::Lwfa {
             tracing::warn!("could not offer the clipboard to X11: {err}");
         }
 
-        // The desktop outside.
+        // The desktop outside. It is given the entry's id rather than its
+        // bytes: an entry has a *different* representation per type, and
+        // sending one of them for the whole list put a PNG on the host
+        // under `text/plain`, so pasting a photo into a terminal filled it
+        // with the file. See `hostclip::Host::send`.
         if from != Where::Desktop && let Some(host) = self.host_clip.as_ref() {
-            let bytes = self.clipboard.lock().unwrap().bytes_for(id, &mimes[0]);
-            if let Some(bytes) = bytes {
-                host.offer(mimes, bytes);
-            }
+            host.offer(id, mimes);
         }
     }
 
@@ -991,9 +1017,9 @@ impl crate::state::Lwfa {
         }
     }
 
-    /// The bytes for a paste, whoever is asking.
-    pub fn clip_bytes(&self, id: u64, mime: &str) -> Option<Vec<u8>> {
-        self.clipboard.lock().unwrap().bytes_for(id, mime)
+    /// What to write for a paste, whoever is asking.
+    pub fn clip_payload(&self, id: u64, mime: &str) -> Option<Payload> {
+        self.clipboard.lock().unwrap().payload_for(id, mime)
     }
 
     // -- what the shell asks for -------------------------------------------
@@ -1131,6 +1157,16 @@ impl crate::state::Lwfa {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Payload {
+        /// The bytes, for a test that expects them inline.
+        fn unwrap_bytes(self) -> Vec<u8> {
+            match self {
+                Payload::Bytes(bytes) => bytes,
+                Payload::File(path) => panic!("expected bytes, got the file {}", path.display()),
+            }
+        }
+    }
 
     fn text(body: &str) -> Capture {
         Capture {
@@ -1295,7 +1331,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(item.path.as_deref(), Some("/home/user/notes.md"));
-        let pasted = board.bytes_for(item.id, "text/plain").unwrap();
+        let pasted = board.payload_for(item.id, "text/plain").unwrap().unwrap_bytes();
         assert_eq!(pasted, b"/home/user/notes.md");
     }
 
@@ -1333,7 +1369,7 @@ mod tests {
         assert_eq!(offered.first().unwrap(), "application/vnd.oasis.opendocument.text");
         assert!(offered.iter().any(|m| m == "text/uri-list"));
         assert_eq!(
-            board.bytes_for(item.id, "text/uri-list").unwrap(),
+            board.payload_for(item.id, "text/uri-list").unwrap().unwrap_bytes(),
             b"file:///home/user/Uploads/report.odt\r\n"
         );
     }
@@ -1366,6 +1402,50 @@ mod tests {
             Served::Inline { .. } => panic!("a real file should be served from disk"),
         }
         std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn one_entry_answers_each_type_with_a_different_thing() {
+        // The contract the host bridge leans on. It used to fetch one
+        // representation and serve it under every type it advertised, so a
+        // photo sent from a tablet arrived on the desktop as PNG bytes
+        // under `text/plain` and pasting it into a terminal filled the
+        // terminal with the file.
+        let mut board = Clipboard::new();
+        let item = board
+            .arrived(Arrival {
+                device: Some("iPad".to_string()),
+                path: PathBuf::from("/home/user/Uploads/photo.png"),
+                mime: "image/png".to_string(),
+                bytes: 4096,
+            })
+            .unwrap();
+
+        assert!(
+            matches!(board.payload_for(item.id, "image/png"), Some(Payload::File(path)) if path.ends_with("photo.png")),
+            "an image editor asking for the picture gets the file"
+        );
+        assert_eq!(
+            board.payload_for(item.id, "text/plain").unwrap().unwrap_bytes(),
+            b"/home/user/Uploads/photo.png",
+            "a terminal asking for text gets the path, not the picture"
+        );
+        assert_eq!(
+            board.payload_for(item.id, "text/uri-list").unwrap().unwrap_bytes(),
+            b"file:///home/user/Uploads/photo.png\r\n",
+            "a file manager asking for a URI gets one"
+        );
+    }
+
+    #[test]
+    fn text_is_the_same_text_under_every_name_for_it() {
+        // The case that made one-representation-fits-all look correct:
+        // every spelling of "text" really is the same bytes.
+        let mut board = Clipboard::new();
+        let item = board.capture(text("hello there")).unwrap();
+        for mime in ["text/plain", "text/plain;charset=utf-8", "UTF8_STRING", "STRING"] {
+            assert_eq!(board.payload_for(item.id, mime).unwrap().unwrap_bytes(), b"hello there");
+        }
     }
 
     #[test]

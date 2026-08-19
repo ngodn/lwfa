@@ -34,7 +34,6 @@ use std::ffi::{OsStr, OsString};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use smithay::reexports::calloop;
 use smithay::reexports::calloop::channel::Sender as LoopSender;
@@ -62,11 +61,8 @@ const MARKER: &str = "application/x-lwfa-echo";
 
 /// What the compositor asks the host clipboard to do.
 enum Command {
-    /// Own the host selection, offering these types, backed by these bytes.
-    Offer {
-        mimes: Vec<String>,
-        bytes: Arc<Vec<u8>>,
-    },
+    /// Own the host selection, offering these types, for this entry.
+    Offer { id: u64, mimes: Vec<String> },
     /// Stop owning it.
     Withdraw,
 }
@@ -77,16 +73,15 @@ pub struct Link {
 }
 
 impl Link {
-    /// Put these bytes on the host's clipboard, under these types.
+    /// Put a history entry on the host's clipboard, under these types.
     ///
-    /// One set of bytes for every type offered: what lwfa captured is one
-    /// thing described several ways, and a program asking for `UTF8_STRING`
-    /// and one asking for `text/plain` want the same text.
-    pub fn offer(&self, mimes: Vec<String>, bytes: Vec<u8>) {
-        let _ = self.commands.send(Command::Offer {
-            mimes,
-            bytes: Arc::new(bytes),
-        });
+    /// The entry, not its bytes. A type is a *representation*: the same
+    /// photo is PNG bytes to an image editor, a `file://` line to a file
+    /// manager, and a path to a terminal, and each is fetched when it is
+    /// actually asked for. Sending one representation for the whole list
+    /// is how a pasted photo once filled a terminal with PNG.
+    pub fn offer(&self, id: u64, mimes: Vec<String>) {
+        let _ = self.commands.send(Command::Offer { id, mimes });
     }
 
     pub fn withdraw(&self) {
@@ -103,6 +98,7 @@ impl Link {
 pub fn start(
     display: Option<OsString>,
     ours: &OsStr,
+    store: crate::clipboard::Store,
     events: LoopSender<ShellEvent>,
 ) -> Option<Link> {
     let display = display?;
@@ -115,7 +111,7 @@ pub fn start(
 
     let spawned = std::thread::Builder::new()
         .name("lwfa-hostclip".to_string())
-        .spawn(move || match run(&socket, receiver, events) {
+        .spawn(move || match run(&socket, receiver, store, events) {
             Ok(()) => tracing::info!("the host clipboard connection closed"),
             Err(err) => tracing::info!("no host clipboard: {err}"),
         });
@@ -141,6 +137,7 @@ fn socket_path(display: &OsStr) -> Option<PathBuf> {
 fn run(
     socket: &PathBuf,
     commands: calloop::channel::Channel<Command>,
+    store: crate::clipboard::Store,
     events: LoopSender<ShellEvent>,
 ) -> Result<(), String> {
     let stream =
@@ -191,6 +188,7 @@ fn run(
         device,
         offers: HashMap::new(),
         held: None,
+        store,
         events,
     };
     event_loop
@@ -242,9 +240,11 @@ impl Offer {
     }
 }
 
-/// The bytes behind a selection we own, and the source offering them.
+/// The entry behind a selection we own, and the source offering it.
 struct Held {
-    bytes: Arc<Vec<u8>>,
+    /// Which history entry. Looked up per paste, so each type gets its own
+    /// representation and a large one is never held in memory here.
+    id: u64,
     source: SourceHandle,
 }
 
@@ -278,13 +278,15 @@ struct Host {
     offers: HashMap<ObjectId, Vec<String>>,
     /// What we put on the host clipboard, while we own it.
     held: Option<Held>,
+    /// The history, shared with the compositor, for answering a paste.
+    store: crate::clipboard::Store,
     events: LoopSender<ShellEvent>,
 }
 
 impl Host {
     fn command(&mut self, command: Command) {
         match command {
-            Command::Offer { mimes, bytes } => self.offer(mimes, bytes),
+            Command::Offer { id, mimes } => self.offer(id, mimes),
             Command::Withdraw => {
                 if let Some(old) = self.held.take() {
                     old.source.destroy();
@@ -298,7 +300,7 @@ impl Host {
         }
     }
 
-    fn offer(&mut self, mut mimes: Vec<String>, bytes: Arc<Vec<u8>>) {
+    fn offer(&mut self, id: u64, mut mimes: Vec<String>) {
         // The one being replaced goes first, so the compositor is not left
         // holding an object nothing will ever answer for.
         if let Some(old) = self.held.take() {
@@ -323,7 +325,7 @@ impl Host {
                 SourceHandle::Wlr(source)
             }
         };
-        self.held = Some(Held { bytes, source });
+        self.held = Some(Held { id, source });
         let _ = self.connection.flush();
     }
 
@@ -382,11 +384,22 @@ impl Host {
     }
 
     /// A program on the host is pasting what we offered.
-    fn send(&self, fd: OwnedFd) {
+    ///
+    /// Which representation depends entirely on what it asked for, so the
+    /// type has to reach the store: a terminal asking a photo for text
+    /// wants its path, and an image editor asking the same entry for
+    /// `image/png` wants the picture.
+    fn send(&self, mime: &str, fd: OwnedFd) {
         let Some(held) = self.held.as_ref() else {
             return;
         };
-        crate::clipboard::write_offer(fd.into(), held.bytes.as_ref().clone());
+        if mime == MARKER {
+            return; // Our own tag. Nothing legitimate ever asks for it.
+        }
+        match self.store.lock().unwrap().payload_for(held.id, mime) {
+            Some(payload) => crate::clipboard::write_offer(fd.into(), payload),
+            None => tracing::debug!("the host asked for {mime} and there was none"),
+        }
     }
 }
 
@@ -470,7 +483,7 @@ impl Dispatch<ext::ext_data_control_source_v1::ExtDataControlSourceV1, ()> for H
     ) {
         use ext::ext_data_control_source_v1::Event;
         match event {
-            Event::Send { fd, .. } => host.send(fd),
+            Event::Send { mime_type, fd } => host.send(&mime_type, fd),
             // Somebody else copied, or we replaced this source ourselves.
             Event::Cancelled => host.cancelled(source.id()),
             _ => {}
@@ -528,7 +541,7 @@ impl Dispatch<wlr::zwlr_data_control_source_v1::ZwlrDataControlSourceV1, ()> for
     ) {
         use wlr::zwlr_data_control_source_v1::Event;
         match event {
-            Event::Send { fd, .. } => host.send(fd),
+            Event::Send { mime_type, fd } => host.send(&mime_type, fd),
             Event::Cancelled => host.cancelled(source.id()),
             _ => {}
         }

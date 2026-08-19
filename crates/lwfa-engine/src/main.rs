@@ -323,7 +323,12 @@ fn init_host_clipboard(data: &mut CalloopData, host_display: Option<std::ffi::Os
     let Some(events) = data.events.clone() else {
         return;
     };
-    data.host_clip = crate::hostclip::start(host_display, &data.socket_name, events);
+    data.host_clip = crate::hostclip::start(
+        host_display,
+        &data.socket_name,
+        data.clipboard.clone(),
+        events,
+    );
 }
 
 /// Start the shell listener and route its events into the compositor.

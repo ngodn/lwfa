@@ -43,7 +43,7 @@ import {
   Upload,
 } from "lucide-react"
 import type { ClipItem } from "@lwfa/proto"
-import { useSessionActions } from "@/session"
+import { useSessionActions, useSessionState } from "@/session"
 import {
   clipUrl,
   copyToDevice,
@@ -52,6 +52,7 @@ import {
   loadMore,
   sendDeviceClipboard,
   sendFiles,
+  savable,
   sendText,
   useClipboard,
   type Outgoing,
@@ -62,6 +63,7 @@ import { cn } from "@/lib/utils"
 
 function ClipboardPanel() {
   const actions = useSessionActions()
+  const { permissions, session } = useSessionState()
   const { items, more, loading, paging, error, outgoing, channel } = useClipboard()
 
   // Once per opening. The engine pushes every change while the panel is
@@ -70,11 +72,25 @@ function ClipboardPanel() {
     if (channel) loadFirstPage(actions.send)
   }, [channel, actions.send])
 
-  if (!channel) {
+  // Three states, and two of them were being told the same way. A session
+  // that may only watch is never given a channel; one that has been
+  // replaced, or has not finished connecting, does not have one *yet*.
+  // Saying "you can only watch" to somebody whose tab was superseded is a
+  // wrong answer to a question they did not ask, and permissions read as
+  // watch-only until the greeting arrives, so this waits for it.
+  const greeted = session !== 0
+  if (greeted && permissions.mode !== "interact") {
     return (
       <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
         The clipboard needs a session that can interact with the machine. This
         one can only watch.
+      </p>
+    )
+  }
+  if (!channel) {
+    return (
+      <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+        {greeted ? "Not connected to the machine." : "Connecting\u2026"}
       </p>
     )
   }
@@ -304,7 +320,7 @@ const EntryRow = memo(function EntryRow({
   }, [item])
 
   const download = clipUrl(item.id, "download")
-  const canDownload = download !== null && item.path !== null
+  const canDownload = download !== null && savable(item)
 
   return (
     <li

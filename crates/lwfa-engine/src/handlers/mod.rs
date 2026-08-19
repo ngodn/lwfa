@@ -131,8 +131,8 @@ impl SelectionHandler for Lwfa {
         _seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
-        match self.clip_bytes(user_data.0, &mime_type) {
-            Some(bytes) => crate::clipboard::write_offer(fd.into(), bytes),
+        match self.clip_payload(user_data.0, &mime_type) {
+            Some(payload) => crate::clipboard::write_offer(fd.into(), payload),
             // The entry aged out of the history between being offered and
             // being pasted. Dropping the fd is an empty paste, which is
             // better than a stall.

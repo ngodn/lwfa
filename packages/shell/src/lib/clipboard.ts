@@ -315,6 +315,18 @@ export function clipUrl(id: number, want: Fetch = "raw"): string | null {
 }
 
 /**
+ * Whether an entry has one thing worth saving to this device.
+ *
+ * An image always has: a screenshot copied on the machine lives only on the
+ * clipboard, with no path, and gating on a path left the one thing people
+ * most want to save with no way to save it. A list of several files is the
+ * exception, because there is no single thing for the link to be.
+ */
+export function savable(item: ClipItem): boolean {
+  return item.kind === "image" || item.path !== null
+}
+
+/**
  * Put an entry on *this device's* clipboard.
  *
  * Must be called from inside the click that asked for it. The

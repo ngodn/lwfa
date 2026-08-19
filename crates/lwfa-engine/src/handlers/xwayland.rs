@@ -282,8 +282,8 @@ impl XwmHandler for Lwfa {
         fd: OwnedFd,
     ) {
         let id = self.clipboard.lock().unwrap().current().map(|(id, _)| id);
-        match id.and_then(|id| self.clip_bytes(id, &mime_type)) {
-            Some(bytes) => crate::clipboard::write_offer(fd.into(), bytes),
+        match id.and_then(|id| self.clip_payload(id, &mime_type)) {
+            Some(payload) => crate::clipboard::write_offer(fd.into(), payload),
             None => tracing::debug!("an X11 program pasted {mime_type} and there was none"),
         }
     }

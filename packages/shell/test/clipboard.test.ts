@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it } from "vitest"
 import type { ClipItem, ToEngine } from "@lwfa/proto"
 import {
+  savable,
   clipAdded,
   clipCleared,
   clipDropped,
@@ -204,6 +205,26 @@ describe("reconnecting", () => {
     clipReady(43, "cd".repeat(16))
     clipHistory(before, [entry(9)], false)
     expect(clipStateNow().items).toEqual([])
+  })
+})
+
+describe("what can be saved to this device", () => {
+  it("offers an image copied on the machine, which is not a file anywhere", () => {
+    // The one people most want to save. It lives only on the clipboard, so
+    // it has no path, and requiring one left it with no Download button.
+    expect(savable(entry(1, { kind: "image", mime: "image/png", path: null }))).toBe(true)
+  })
+
+  it("offers a single file", () => {
+    expect(savable(entry(2, { kind: "files", path: "/home/u/notes.md" }))).toBe(true)
+  })
+
+  it("does not offer a list of several files, having nothing single to link to", () => {
+    expect(savable(entry(3, { kind: "files", path: null }))).toBe(false)
+  })
+
+  it("does not offer text, which is what Copy here is for", () => {
+    expect(savable(entry(4))).toBe(false)
   })
 })
 
