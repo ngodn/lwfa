@@ -126,6 +126,20 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
         ),
         ("window-closed", ToShell::WindowClosed { id: WindowId(7) }),
         (
+            "window-blank",
+            ToShell::WindowBlank {
+                id: WindowId(7),
+                blank: true,
+            },
+        ),
+        (
+            "window-painted-at-last",
+            ToShell::WindowBlank {
+                id: WindowId(7),
+                blank: false,
+            },
+        ),
+        (
             "focus-changed",
             ToShell::FocusChanged {
                 id: Some(WindowId(2)),
@@ -461,6 +475,12 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
             },
         ),
         ("take-control", ToEngine::TakeControl),
+        (
+            "crashed",
+            ToEngine::Crashed {
+                message: "Cannot read properties of undefined (reading 'width')".into(),
+            },
+        ),
         ("end-session", ToEngine::EndSession { session: 3 }),
         (
             "set-audio",

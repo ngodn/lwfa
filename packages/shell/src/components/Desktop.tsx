@@ -51,6 +51,8 @@ export interface DesktopProps {
   focused: WindowId | null
   /** Ids the engine is actually sending pixels for. */
   streamedIds: ReadonlySet<WindowId>
+  /** Ids the engine has said have drawn nothing at all. See `windowBlank`. */
+  blankIds: ReadonlySet<WindowId>
   onFocus: (id: WindowId) => void
   onInput: (id: WindowId, event: SurfaceInput) => void
 }
@@ -61,6 +63,7 @@ export const Desktop = memo(function Desktop({
   windows,
   focused,
   streamedIds,
+  blankIds,
   onViewport,
   onFocus,
   onInput,
@@ -217,6 +220,7 @@ export const Desktop = memo(function Desktop({
             focused={w.id === focused}
             label={labelFor(windows.get(w.id), w.id)}
             streamed={streamedIds.has(w.id)}
+            blank={blankIds.has(w.id)}
             onFocus={onFocus}
             onInput={onInput}
           />

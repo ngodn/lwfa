@@ -30,7 +30,7 @@
  */
 
 import { Component, type ReactNode } from "react"
-import { clearCrashes, crashCount, onCrash } from "@/lib/crashLoop"
+import { clearCrashes, crashCount, noteCrashToReport, onCrash } from "@/lib/crashLoop"
 import { log } from "@/lib/log"
 
 /**
@@ -87,6 +87,14 @@ export class Crashed extends Component<Props, State> {
     log("error", `crashed: ${error instanceof Error ? error.message : String(error)}`)
 
     const store = safeStore()
+    if (store) {
+      // Left for the next page load to send to the engine. A reload closes the
+      // socket cleanly, which the engine cannot tell from somebody pressing
+      // reload, and this component's own log is in memory and dies with the
+      // page: without this the crash leaves no trace anywhere at all, and the
+      // only evidence a user ever has is that the session "came back strange".
+      noteCrashToReport(store, error instanceof Error ? error.message : String(error))
+    }
     if (store && onCrash(store, Date.now()) === "reload") {
       globalThis.location.reload()
       return

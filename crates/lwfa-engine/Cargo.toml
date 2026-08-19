@@ -44,7 +44,14 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 # Hardware H.264 via the system ffmpeg's h264_nvenc. Chosen over
 # nvidia-video-codec-sdk because that crate's cudarc dependency hard-panics on
 # CUDA 13.3, which is what this machine has. See crates/lwfa-engine/src/encode.rs.
-ffmpeg-next = "8.1.0"
+#
+# The major version tracks the system ffmpeg's, because the bindings are
+# generated from whatever headers are installed. Arch moved to ffmpeg 9 on
+# 2026-08-16 and the 8.x crate stopped compiling against it: constants it names
+# (AV_CODEC_ID_V410 and friends) are gone, and `AVCodec` no longer has
+# `supported_framerates`. The failure hid for three days behind cargo's cache,
+# so a release build kept working until something invalidated it.
+ffmpeg-next = "9.0.0"
 serde_json = "1.0.151"
 
 tracing = "0.1"

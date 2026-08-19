@@ -123,6 +123,15 @@ pub const QUEUE_DELAY_LIMIT: Duration = Duration::from_millis(75);
 /// is a feedback loop.
 const SETTLE: Duration = Duration::from_secs(2);
 
+/// How long a departed client's level is still worth resuming from.
+///
+/// Matched to the engine's own session grace (`state::SESSION_GRACE`, 45s) with
+/// room to spare, because they answer the same question: within this long, a
+/// connection arriving is the one that just left, coming back. Every reconnect
+/// actually measured landed inside four seconds; the ones that took hours were
+/// a different sitting entirely, and their link tells this one nothing.
+const RESUME_WINDOW: Duration = Duration::from_secs(60);
+
 /// The longest a single cut may wait for its own queue to drain.
 ///
 /// Without a bound, a pathologically buffered path (a wifi access point with
@@ -166,6 +175,8 @@ impl Signal {
 /// Tracks one connection's bitrate.
 pub struct Controller {
     step: usize,
+    /// The step the last client left behind, and when it left. See `attach`.
+    departed: Option<(usize, Instant)>,
     changed_at: Instant,
     clear_since: Instant,
     /// How long to stay clear before climbing. Doubles once per episode of
@@ -218,6 +229,7 @@ impl Controller {
     pub fn new(now: Instant) -> Self {
         Self {
             step: START,
+            departed: None,
             changed_at: now,
             clear_since: now,
             climb_wait: EAGER_CLIMB,
@@ -253,14 +265,32 @@ impl Controller {
     /// exactly as unknown as a first one and has earned neither more optimism
     /// nor less.
     ///
-    /// Only ever a floor, never a raise: a session that was happily at the
-    /// ceiling keeps it, because there the evidence really was gathered.
+    /// A level the last client was holding is kept, but only while it is still
+    /// evidence. It was gathered about a particular device on a particular
+    /// link, and neither is known to be the one arriving now: a tablet coming
+    /// straight back from a dropped socket is the same link measured seconds
+    /// ago, where a phone opening the page the next morning shares nothing with
+    /// it but a port number. So the level survives [`RESUME_WINDOW`] and not
+    /// past it. See [`Controller::detach`].
     pub fn attach(&mut self, now: Instant) {
-        self.step = self.step.max(START);
+        self.step = match self.departed {
+            Some((step, at)) if now.duration_since(at) <= RESUME_WINDOW => step.max(START),
+            _ => START,
+        };
+        self.departed = None;
         self.clear_since = now;
         self.changed_at = now;
         self.hold = SETTLE;
         self.was_congested = false;
+    }
+
+    /// Everybody left.
+    ///
+    /// Records where the budget had got to, so a client that comes straight
+    /// back does not have to rediscover a link it was using moments ago. See
+    /// [`Controller::attach`].
+    pub fn detach(&mut self, now: Instant) {
+        self.departed = Some((self.step, now));
     }
 
     /// Report how the connection is doing, and get the new bitrate if it moved.
@@ -711,10 +741,11 @@ mod tests {
     }
 
     #[test]
-    fn a_returning_client_does_not_cost_a_healthy_session_its_ceiling() {
+    fn a_client_straight_back_does_not_cost_a_healthy_session_its_ceiling() {
         // The floor is a floor, not a reset. A session sitting at the top has
         // genuinely earned it, and knocking it back down on every reconnect
-        // would make a flapping link permanently worse than a dead one.
+        // would make a flapping link permanently worse than a dead one. Every
+        // reconnect actually measured came back within four seconds.
         let base = Instant::now();
         let mut controller = Controller::new(base);
         for i in 1..40 {
@@ -723,8 +754,54 @@ mod tests {
         let earned = controller.bitrate();
         assert!(earned > STEPS[START], "{earned} should be above the start");
 
-        controller.attach(at(base, 100));
+        controller.detach(at(base, 40));
+        controller.attach(at(base, 44));
         assert_eq!(controller.bitrate(), earned);
+    }
+
+    #[test]
+    fn but_a_level_measured_an_hour_ago_is_not_measurement_of_this_link() {
+        // The other half of the same rule. A level is evidence about the
+        // device and link that produced it. Kept indefinitely, a tablet that
+        // spent last night at the ceiling would hand that ceiling to a phone
+        // on mobile data opening the page the next morning, and the first
+        // thing that phone would experience is the engine discovering it.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        for i in 1..40 {
+            controller.observe(Signal::clear(), at(base, i));
+        }
+        assert!(controller.bitrate() > STEPS[START]);
+
+        controller.detach(at(base, 40));
+        controller.attach(at(base, 40 + RESUME_WINDOW.as_secs() + 1));
+        assert_eq!(
+            controller.bitrate(),
+            STEPS[START],
+            "a link nothing recent has measured starts where a first one does",
+        );
+    }
+
+    #[test]
+    fn leaving_twice_does_not_resurrect_the_first_level() {
+        // `attach` clears what it consumed, so a second attach with no
+        // departure in between cannot reach back past it.
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        for i in 1..40 {
+            controller.observe(Signal::clear(), at(base, i));
+        }
+        controller.detach(at(base, 40));
+        controller.attach(at(base, 41));
+        let resumed = controller.bitrate();
+        assert!(resumed > STEPS[START]);
+
+        controller.attach(at(base, 42));
+        assert_eq!(
+            controller.bitrate(),
+            STEPS[START],
+            "the second attach had no departure of its own to resume from",
+        );
     }
 
     #[test]

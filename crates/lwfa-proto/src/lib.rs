@@ -230,6 +230,19 @@ pub enum ToShell {
     WindowChanged { window: WindowInfo },
     #[serde(rename_all = "camelCase")]
     WindowClosed { id: WindowId },
+
+    /// This window is being streamed and has drawn nothing.
+    ///
+    /// Sent once a window has been asked for and has produced no frame at all
+    /// for several seconds, and again with `blank: false` if one ever arrives.
+    ///
+    /// The shell cannot work this out for itself: "no frames" and "an idle
+    /// window whose picture has not changed" look identical from the far end,
+    /// which is exactly why a window that never drew read as a broken stream.
+    /// Seen in production on a game's splash window that was mapped, streamed,
+    /// and never painted once.
+    #[serde(rename_all = "camelCase")]
+    WindowBlank { id: WindowId, blank: bool },
     /// Focus moved for a reason the shell did not initiate, such as a click or
     /// a window closing.
     #[serde(rename_all = "camelCase")]
@@ -1190,6 +1203,20 @@ pub enum ToEngine {
     /// sent from browser JavaScript, so the shell asks at the application
     /// layer and treats silence as death. See `connection.ts`.
     Ping,
+
+    /// The shell hit an error it could not continue from and is reloading.
+    ///
+    /// Sent on the connection *after* the reload, because the one that saw the
+    /// crash is being torn down as the page goes away and cannot be relied on
+    /// to flush anything.
+    ///
+    /// It exists because a reloading shell closes its socket cleanly, which is
+    /// indistinguishable from somebody pressing reload, and the shell's own log
+    /// is in memory and dies with the page. So the one failure a user actually
+    /// notices, the session that "came back strange", left no evidence anywhere
+    /// at all. Now it leaves a line in the engine's journal.
+    #[serde(rename_all = "camelCase")]
+    Crashed { message: String },
 }
 
 #[cfg(test)]

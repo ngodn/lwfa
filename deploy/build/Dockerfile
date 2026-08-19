@@ -18,10 +18,15 @@
 #
 # # Why FFmpeg is built here rather than installed
 #
-# `ffmpeg-next 8.1` needs FFmpeg 8 headers, and no old distribution ships
+# `ffmpeg-next 9.0` needs FFmpeg 9 headers, and no old distribution ships
 # them; Debian 11 has 4.3. Since the release bundles FFmpeg anyway, building
 # it here costs nothing extra at run time and removes the last reason to care
 # what the host has installed.
+#
+# The version here tracks the crate, which tracks FFmpeg's own major. Leaving
+# it behind does not fail the way a missing dependency does: the image goes on
+# building an FFmpeg the crate cannot bind to, and the error names constants
+# rather than versions.
 #
 # `--enable-nvenc` needs only nv-codec-headers, not the CUDA toolkit: FFmpeg
 # opens libcuda at run time, from the driver on the machine that runs it. That
@@ -95,14 +100,14 @@ RUN git clone --depth 1 --branch "$NV_CODEC_HEADERS" \
 # fails, because it nests another bridge under the MTU it advertises.
 #
 # GitHub is the same source. FFmpeg tags its releases there and the tarball
-# ffmpeg.org serves is made from the tag, so `n8.1` and `ffmpeg-8.1.tar.xz`
-# carry the same tree; the fetched copy reports 8.1 in RELEASE and ships the
+# ffmpeg.org serves is made from the tag, so `n9.0.1` and `ffmpeg-9.0.1.tar.xz`
+# carry the same tree; the fetched copy reports 9.0.1 in RELEASE and ships the
 # same handwritten configure. It is behind a CDN that copes, and this file
 # already trusts GitHub for nv-codec-headers directly above.
 #
 # `tar xf` sniffs the compression, so one extract handles .tar.gz and .tar.xz
 # alike and the fallback needs no second code path.
-ARG FFMPEG_VERSION=8.1
+ARG FFMPEG_VERSION=9.0.1
 RUN { curl -fsSL --connect-timeout 10 --retry 2 \
         "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${FFMPEG_VERSION}.tar.gz" \
         -o /tmp/ffmpeg.tar \

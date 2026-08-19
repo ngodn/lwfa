@@ -58,6 +58,15 @@ export interface WindowSurfaceProps {
    */
   streamed: boolean
   /**
+   * Whether the engine has said this window has drawn nothing at all.
+   *
+   * Different from "no frame yet" in the way that matters: pixels are being
+   * asked for, the engine is willing, and the application has simply never
+   * painted. Without this the tile says it is waiting for pixels, forever, for
+   * something that is never coming.
+   */
+  blank: boolean
+  /**
    * Both take the window id, so one callback instance serves every surface.
    * A per-window closure would change identity on each parent render and defeat
    * the memo below, which is the whole reason this component is cheap.
@@ -84,6 +93,7 @@ export const WindowSurface = memo(function WindowSurface({
   focused,
   label,
   streamed,
+  blank,
   onFocus,
   onInput,
 }: WindowSurfaceProps): React.ReactElement {
@@ -338,7 +348,11 @@ export const WindowSurface = memo(function WindowSurface({
         */}
       {frame ? null : (
         <span className="absolute inset-0 grid place-items-center px-4 text-center text-sm text-white/50">
-          {streamed ? "Waiting for pixels\u2026" : "Off screen"}
+          {!streamed
+            ? "Off screen"
+            : blank
+              ? "This window has never drawn anything"
+              : "Waiting for pixels\u2026"}
         </span>
       )}
       {/*
