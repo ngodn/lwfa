@@ -59,6 +59,7 @@ import * as audio from "@/lib/audio"
 import { engineFor } from "@/lib/engineUrl"
 import { requestLeadership } from "@/lib/leader"
 import { log } from "@/lib/log"
+import { takeCrashToReport } from "@/lib/crashLoop"
 import { pendingKeys, resolvePending } from "@/lib/pending"
 import { blocked, clearBlocked } from "@/lib/alreadyRunning"
 import {
@@ -166,6 +167,30 @@ function describeDevice(): string {
 }
 
 /**
+ * Tell the engine about a crash the previous page load left behind.
+ *
+ * The whole point of the round trip through storage: the connection that saw
+ * the crash was being torn down as the page went away, so the report has to
+ * travel on the next one. A reloading shell closes its socket cleanly, and the
+ * engine cannot tell that from somebody pressing reload, so without this the
+ * only failure a user actually notices leaves no record anywhere.
+ */
+function reportAnyCrash(connection: Connection | null): void {
+  if (!connection) return
+  let store: Storage | null = null
+  try {
+    store = globalThis.sessionStorage ?? null
+  } catch {
+    return // storage blocked entirely; nothing was recorded either
+  }
+  if (!store) return
+  const message = takeCrashToReport(store)
+  if (message === null) return
+  log("warn", `reported the last crash to the engine: ${message}`)
+  connection.send({ type: "crashed", message })
+}
+
+/**
  * A stable id for this browser, so a reconnection can be recognised as one.
  *
  * Survives refreshes because it lives in `localStorage`, which is exactly the
@@ -240,6 +265,14 @@ export function App(): React.ReactElement {
   const [statusDetail, setStatusDetail] = useState<string>();
   const [output, setOutput] = useState<Output>({ width: 0, height: 0 });
   const [windows, setWindows] = useState<Map<WindowId, WindowInfo>>(new Map());
+  /**
+   * Windows the engine has said have drawn nothing at all.
+   *
+   * Seen in production on a game's splash window: mapped, streamed, and never
+   * painted once. The tile said "waiting for pixels" for the rest of the
+   * session, which is the one thing that was certainly not happening.
+   */
+  const [blankIds, setBlankIds] = useState<ReadonlySet<WindowId>>(new Set());
   const [strip, setStrip] = useState<StripState>(EMPTY);
   // Streaming is a preference, not fixed state. See `Prefs.stream`.
   const streaming = streamPrefs.enabled;
@@ -480,6 +513,11 @@ export function App(): React.ReactElement {
     const handleMessage = (message: ToShell) => {
       switch (message.type) {
         case "hello": {
+          // Report a crash from the previous page load, now that there is a
+          // session to report it to. Here rather than on the socket opening,
+          // because the engine has to have a session for this connection
+          // before it can attribute anything to it. See `takeCrashToReport`.
+          reportAnyCrash(connection.current);
           setPermissions(message.permissions);
           setAccount(message.account);
           setSessionId(message.session);
@@ -630,9 +668,33 @@ export function App(): React.ReactElement {
           );
           break;
 
+        case "windowBlank":
+          // The engine has watched this window produce nothing for several
+          // seconds, or has watched it finally produce something. Only the
+          // engine can tell: from here a window sending no frames and an idle
+          // window whose picture has not changed look the same.
+          setBlankIds((prev) => {
+            if (prev.has(message.id) === message.blank) return prev;
+            const next = new Set(prev);
+            if (message.blank) {
+              next.add(message.id);
+              log("warn", `window ${message.id} has drawn nothing`);
+            } else {
+              next.delete(message.id);
+            }
+            return next;
+          });
+          break;
+
         case "windowClosed":
           setWindows((prev) => {
             const next = new Map(prev);
+            next.delete(message.id);
+            return next;
+          });
+          setBlankIds((prev) => {
+            if (!prev.has(message.id)) return prev;
+            const next = new Set(prev);
             next.delete(message.id);
             return next;
           });
@@ -1161,6 +1223,7 @@ export function App(): React.ReactElement {
             windows={windows}
             focused={focusedId}
             streamedIds={streamedIds}
+            blankIds={blankIds}
             onFocus={focusById}
             onInput={sendInput}
           />

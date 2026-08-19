@@ -83,6 +83,33 @@ pub struct Session {
 /// takes a moment. Anything past this is not slow, it is stuck.
 const FIRST_FRAME_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long the first frames wait for a new driver to say how big it is.
+///
+/// A shell that has just connected measures itself and reports a viewport, and
+/// the output resizes to match. Everything encoded before that lands is encoded
+/// at the size the output happened to be, which is about to change: measured on
+/// a real join, a full encoder session was built for a frame that lived 57ms,
+/// and once for a 2560x1440 window that lived 30ms. Since an encoder build is
+/// 90-160ms, waiting is cheaper than not waiting.
+///
+/// Bounded because nothing obliges a client to report anything. A shell that
+/// never does pays this once on connecting and is never delayed again.
+const VIEWPORT_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How long a window is left alone after being asked to change size.
+///
+/// Encoding a frame at a size the window is about to leave costs a session
+/// build now and another one moments later, because neither H.264 nor HEVC can
+/// change resolution mid-stream, and a build is 90-160ms of the encoder thread
+/// plus a keyframe. Measured over a day of use, every session join paid this
+/// once, and one of them opened a 2560x1440 encoder that lived for 30ms.
+///
+/// The value covers what was actually observed. Clients adopted their new size
+/// in 30 to 180ms, so 250ms waits out the slow ones without letting a client
+/// that will never match its configure exactly (terminals rounding to character
+/// cells, dialogs with a minimum) hold the picture for long.
+const SETTLE_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// How often an unfocused window is captured: 20 fps.
 ///
 /// The focused window gets the full redraw rate. The others are peripheral
@@ -155,6 +182,12 @@ pub struct Lwfa {
     /// genuinely broken case: pixels were requested for a window and none have
     /// ever arrived. See `warn_if_nothing_ever_arrived`.
     pub awaiting_first_frame: std::collections::HashMap<WindowId, std::time::Instant>,
+    /// Windows the shell has been told are blank, so it can be told when they
+    /// stop being. See `warn_if_nothing_ever_arrived`.
+    reported_blank: std::collections::HashSet<WindowId>,
+    /// When a session took the wheel without having said how big it is yet.
+    /// See `VIEWPORT_GRACE`.
+    viewport_expected: Option<std::time::Instant>,
     /// The last arrangement the primary declared.
     ///
     /// Kept so a device joining mid-session has something to render straight
@@ -336,6 +369,8 @@ impl Lwfa {
             audio_sink: crate::sink::PrivateSink::default(),
             gamepads: std::collections::HashMap::new(),
             awaiting_first_frame: std::collections::HashMap::new(),
+            reported_blank: std::collections::HashSet::new(),
+            viewport_expected: None,
             primary: None,
             accounts: None,
             capture: SurfaceCapture::default(),
@@ -498,6 +533,8 @@ impl Lwfa {
         self.forget_reported(id);
         self.capture.forget(id);
         self.streaming.remove(&id);
+        self.awaiting_first_frame.remove(&id);
+        self.reported_blank.remove(&id);
         self.capture_pacing.remove(&id);
         if let Some(worker) = self.encoders.as_ref() {
             worker.forget(id);
@@ -670,6 +707,37 @@ impl Lwfa {
         // Once per window per request, not once per frame.
         for id in overdue {
             self.awaiting_first_frame.remove(&id);
+            // And tell the shell, which cannot work this out for itself: from
+            // the far end a window sending nothing and an idle window whose
+            // picture has not changed are the same thing. Saying so turns a
+            // black rectangle, which reads as a broken stream, into something
+            // that names what happened.
+            if self.reported_blank.insert(id) {
+                self.send_to_shell(ToShell::WindowBlank { id, blank: true });
+            }
+        }
+    }
+
+    /// A session has taken the wheel and has yet to say how big it is.
+    pub fn expect_a_viewport(&mut self) {
+        self.viewport_expected = Some(std::time::Instant::now());
+    }
+
+    /// It said. Or it turned out to be the size we already were.
+    pub fn got_a_viewport(&mut self) {
+        self.viewport_expected = None;
+    }
+
+    /// Whether to hold the first frames back a moment longer.
+    fn expecting_a_viewport(&self, now: std::time::Instant) -> bool {
+        self.viewport_expected
+            .is_some_and(|at| now.duration_since(at) < VIEWPORT_GRACE)
+    }
+
+    /// A window that was reported blank has drawn something after all.
+    fn note_it_painted(&mut self, id: WindowId) {
+        if self.reported_blank.remove(&id) {
+            self.send_to_shell(ToShell::WindowBlank { id, blank: false });
         }
     }
 
@@ -692,13 +760,20 @@ impl Lwfa {
         }
         for id in self.streaming.difference(&wanted) {
             self.awaiting_first_frame.remove(id);
-            // Streaming is over for this window, so its encoder session is
-            // pure cost: consumer NVIDIA drivers cap concurrent NVENC
-            // sessions, and an idle one still holds a slot another window
-            // could be using. The next request rebuilds it with an IDR
-            // anyway, which a newly attached decoder needs regardless.
+            // Nobody is looking at it, so there is no tile to explain and
+            // nothing to take back later.
+            self.reported_blank.remove(id);
+            // Streaming is over for this window, but its encoder session is
+            // not yet worthless: a window scrolled out of view is usually the
+            // same one that scrolls back, and the client still holds a decoder
+            // for it. Dropping the session here was costing a 90-160ms rebuild
+            // and a keyframe on every return, 47 times in one day of use, to
+            // free a slot that was never contended (the logs show 1 to 3 of 8
+            // in use throughout). So it is offered up rather than destroyed,
+            // and only actually taken when a slot is wanted.
+            // See `encode::Encoders::retire`.
             if let Some(worker) = self.encoders.as_ref() {
-                worker.forget(*id);
+                worker.retire(*id);
             }
         }
         self.streaming = wanted;
@@ -1426,7 +1501,9 @@ impl Lwfa {
         if self.focused != focused {
             self.set_focus(focused, true);
         }
-        let configures = self.layout.apply_safe_mode(focused);
+        let configures = self
+            .layout
+            .apply_safe_mode(focused, std::time::Instant::now());
         self.send_configures(configures);
         self.apply_layout();
     }
@@ -1653,6 +1730,32 @@ impl Lwfa {
     ///    first place, so a slow link costs no GPU read-back rather than
     ///    building an unbounded queue.
     pub fn stream_frames(&mut self, renderer: &mut smithay::backend::renderer::gles::GlesRenderer) {
+        // Session boundaries are noticed first, before anything that can
+        // return early.
+        //
+        // This used to sit two hundred lines down, after the check below, and
+        // the effect was that it never fired for the case it was written for.
+        // The last client leaving empties `streaming`, so every pass from then
+        // on returned here, `was_listening` was never set back to false, and
+        // the client that reconnected was greeted as though it had been here
+        // all along: no attach, and the budget the departed link had beaten
+        // down inherited whole. Which is the bug `attach` exists to prevent.
+        let listening = self
+            .shell
+            .as_ref()
+            .is_some_and(crate::shell::ShellLink::has_clients);
+        let now = std::time::Instant::now();
+        if listening != self.was_listening {
+            if listening {
+                // See `bitrate::Controller::attach`.
+                self.bitrate.attach(now);
+                self.pressure.attach(now);
+            } else {
+                self.bitrate.detach(now);
+            }
+            self.was_listening = listening;
+        }
+
         if self.streaming.is_empty() {
             return;
         }
@@ -1673,19 +1776,11 @@ impl Lwfa {
         // cause, and reading it as congestion made every climb refute itself.
         // A busy encoder still skips capture below; it just is not evidence
         // about the link.
-        // With nobody connected there is no link, so there is nothing to learn
-        // about one. See `ShellLink::has_clients`.
-        let listening = shell.has_clients();
-        let now = std::time::Instant::now();
-        // Somebody arrived after a stretch with nobody here. The controller is
-        // otherwise blind to session boundaries, which makes an absence read
-        // as a clear link and hands a returning client a budget that the link
-        // which disconnected it beat down. See `bitrate::Controller::attach`.
-        if listening && !self.was_listening {
-            self.bitrate.attach(now);
-            self.pressure.attach(now);
-        }
-        self.was_listening = listening;
+        //
+        // Every signal below is gated on `listening` for the same reason: with
+        // nobody connected there is no link, so there is nothing to learn about
+        // one. See `ShellLink::has_clients`.
+        //
         // Two congestion signals, and delay is the earlier one. Backpressure
         // only fires once the send path is actually full; the probe RTT rises
         // as soon as a queue starts to form, the way WebRTC's congestion
@@ -1740,7 +1835,12 @@ impl Lwfa {
             );
         }
         self.was_congested = congested;
-        let skip = !listening || backpressured || !worker.has_capacity();
+        // Nothing is worth encoding at a size that is about to change. See
+        // `VIEWPORT_GRACE`.
+        let skip = !listening
+            || backpressured
+            || !worker.has_capacity()
+            || self.expecting_a_viewport(now);
         // Not observed at all rather than observed as clear: an absent client
         // is not evidence the link is good either, and a stretch of invented
         // calm would let the budget climb into a level nothing has tested.
@@ -1842,6 +1942,15 @@ impl Lwfa {
             //
             // Skipping costs nothing: damage keeps its commit counters, so
             // whatever changed is picked up whole on the next eligible pass.
+            // Still on its way to a new size. Encoding it now would build a
+            // session for a resolution it is leaving, and building another one
+            // as soon as it arrives. Damage keeps its commit counters while
+            // this waits, so nothing is lost, only deferred.
+            // See `SETTLE_GRACE`.
+            if self.layout.settling(id, now, SETTLE_GRACE) {
+                continue;
+            }
+
             let rate = self.rates_last.get(&id).copied().unwrap_or(budget);
             let mut interval = crate::bitrate::capture_interval(rate);
             if Some(id) != self.focused {
@@ -1881,6 +1990,7 @@ impl Lwfa {
             // Whatever else happens to this frame, the window has now produced
             // one, which is the thing `warn_if_nothing_ever_arrived` watches.
             self.awaiting_first_frame.remove(&id);
+            self.note_it_painted(id);
 
             if let Some(worker) = self.encoders.as_ref() {
                 if !worker.submit(frame) {

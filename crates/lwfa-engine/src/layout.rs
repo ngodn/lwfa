@@ -21,7 +21,7 @@
 //! machine usable enough to start a shell, and it should stay that dumb.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use lwfa_proto::{SpringSpec, WindowId, WindowLayout};
 use lwfa_spring::{Spring, SpringOptions};
@@ -133,6 +133,9 @@ struct Tracked {
     /// The location half only matters for X11. An `xdg_toplevel` configure
     /// carries no position at all, and an X11 one carries both.
     sent: Option<Rectangle<i32, Logical>>,
+    /// When that rectangle was sent, so a client that has not adopted it yet
+    /// can be told apart from one that never will. See [`Layout::settling`].
+    sent_at: Option<Instant>,
     z: i32,
     /// False when the shell omitted this window from the last `SetLayout`.
     visible: bool,
@@ -152,6 +155,39 @@ impl Tracked {
             Some(sent) => sent.size != rect.size,
         }
     }
+
+    /// Record what was asked for, and when.
+    fn configured(&mut self, rect: Rectangle<i32, Logical>, now: Instant) {
+        self.sent = Some(rect);
+        self.sent_at = Some(now);
+    }
+
+    fn settling(&self, now: Instant, grace: Duration) -> bool {
+        let asked = self.sent.zip(self.sent_at).map(|(r, at)| (r.size, at));
+        still_settling(asked, self.window.geometry().size, now, grace)
+    }
+}
+
+/// Whether a window is still on its way to a size it was asked for.
+///
+/// A client is not obliged to answer promptly, or at all. Some never reach the
+/// exact size asked for, because they round to character cells or have a
+/// minimum of their own, so this is deliberately not "wait until it matches":
+/// it is a short window after the request during which the size a window
+/// currently has is known to be provisional.
+///
+/// Free-standing because `Tracked` needs a real `Window`, which needs a Wayland
+/// surface: the same reason the tests below cover `Animated` directly.
+fn still_settling(
+    asked: Option<(Size<i32, Logical>, Instant)>,
+    actual: Size<i32, Logical>,
+    now: Instant,
+    grace: Duration,
+) -> bool {
+    let Some((wanted, at)) = asked else {
+        return false; // never configured, so nothing is on its way
+    };
+    wanted != actual && now.duration_since(at) < grace
 }
 
 /// Reconciles shell-declared layout into positions the compositor can apply.
@@ -205,6 +241,7 @@ impl Layout {
                 x: Animated::new(0.0),
                 y: Animated::new(0.0),
                 sent: None,
+                sent_at: None,
                 z: 0,
                 // Hidden until something places it, so a window cannot flash at
                 // the origin for one frame before the shell responds.
@@ -313,7 +350,7 @@ impl Layout {
                     .into(),
             );
             if tracked.needs_configure(rect) {
-                tracked.sent = Some(rect);
+                tracked.configured(rect, now);
                 configures.push(PendingConfigure {
                     window: tracked.window.clone(),
                     rect,
@@ -327,7 +364,11 @@ impl Layout {
     /// Place the focused window full-screen and hide everything else.
     ///
     /// See the module comment: this is a fallback, not a layout engine.
-    pub fn apply_safe_mode(&mut self, focused: Option<WindowId>) -> Vec<PendingConfigure> {
+    pub fn apply_safe_mode(
+        &mut self,
+        focused: Option<WindowId>,
+        now: Instant,
+    ) -> Vec<PendingConfigure> {
         let size = self.output_size;
         let mut configures = Vec::new();
 
@@ -342,7 +383,7 @@ impl Layout {
             tracked.y.snap_to(0.0);
             let rect = Rectangle::new((0, 0).into(), size);
             if tracked.needs_configure(rect) {
-                tracked.sent = Some(rect);
+                tracked.configured(rect, now);
                 configures.push(PendingConfigure {
                     window: tracked.window.clone(),
                     rect,
@@ -413,6 +454,18 @@ impl Layout {
             .collect()
     }
 
+    /// Whether this window is still on its way to the size it was last asked for.
+    ///
+    /// Streaming reads this to avoid encoding a frame at a size that is already
+    /// on its way out. Every such frame costs a session rebuild now and another
+    /// one moments later, because neither H.264 nor HEVC can change resolution
+    /// mid-stream. See `state::stream_frames` and `SETTLE_GRACE`.
+    pub fn settling(&self, id: WindowId, now: Instant, grace: Duration) -> bool {
+        self.tracked
+            .get(&id)
+            .is_some_and(|tracked| tracked.settling(now, grace))
+    }
+
     /// Windows the shell left out of the current layout.
     pub fn hidden(&self) -> Vec<Window> {
         self.tracked
@@ -449,6 +502,61 @@ mod tests {
     /// clock inside `Animated`.
     fn at(base: Instant, ms: u64) -> Instant {
         base + Duration::from_millis(ms)
+    }
+
+    fn size(w: i32, h: i32) -> Size<i32, Logical> {
+        Size::from((w, h))
+    }
+
+    #[test]
+    fn a_window_that_has_reached_its_size_is_not_settling() {
+        let now = Instant::now();
+        let asked = Some((size(1192, 860), now));
+        assert!(!still_settling(
+            asked,
+            size(1192, 860),
+            now,
+            Duration::from_millis(250)
+        ));
+    }
+
+    #[test]
+    fn one_that_has_not_is() {
+        // The measured case: a session joins, the output resizes, and for the
+        // next 180ms the window is still the size it was. Encoding it there
+        // built a 2560x1440 encoder that lived for thirty milliseconds.
+        let now = Instant::now();
+        let asked = Some((size(1192, 860), now));
+        assert!(still_settling(
+            asked,
+            size(2560, 1440),
+            at(now, 180),
+            Duration::from_millis(250)
+        ));
+    }
+
+    #[test]
+    fn a_client_that_never_adopts_its_size_is_waited_on_only_briefly() {
+        // A terminal rounding to character cells never matches exactly. It
+        // must not hold its own picture hostage forever, so the grace, not the
+        // match, is what ends the wait.
+        let now = Instant::now();
+        let asked = Some((size(1192, 860), now));
+        let grace = Duration::from_millis(250);
+        assert!(still_settling(asked, size(1190, 856), at(now, 249), grace));
+        assert!(!still_settling(asked, size(1190, 856), at(now, 251), grace));
+    }
+
+    #[test]
+    fn a_window_nobody_has_configured_is_not_settling() {
+        // A window in its first moments has been asked for nothing, so there
+        // is nothing to wait for and its first frame should not be delayed.
+        assert!(!still_settling(
+            None,
+            size(800, 600),
+            Instant::now(),
+            Duration::from_millis(250)
+        ));
     }
 
     #[test]

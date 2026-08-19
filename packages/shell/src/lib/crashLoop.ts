@@ -28,6 +28,16 @@
 
 const KEY = "lwfa.crashes"
 
+/**
+ * Where the last crash's message waits to be reported.
+ *
+ * Separate from the count, and read once: the count decides whether to reload,
+ * this is what gets told to the engine afterwards. It has to go through storage
+ * because the connection that saw the crash is being torn down as the page
+ * goes away, so nothing sent on it can be relied on to arrive.
+ */
+const REPORT_KEY = "lwfa.crash.report"
+
 /** How many automatic reloads before giving up and showing the error. */
 export const LIMIT = 3
 
@@ -92,6 +102,37 @@ export function clearCrashes(store: Store): void {
     store.removeItem(KEY)
   } catch {
     // Nothing to do, and nothing depends on it succeeding.
+  }
+}
+
+/**
+ * Leave the crash's message for the next page load to report.
+ *
+ * Truncated, because a React error can carry an entire component stack and this
+ * has to survive in a storage quota shared with everything else.
+ */
+export function noteCrashToReport(store: Store, message: string): void {
+  try {
+    store.setItem(REPORT_KEY, message.slice(0, 300))
+  } catch {
+    // Storage full or blocked. The reload still happens; only the report is
+    // lost, which is exactly where things stood before this existed.
+  }
+}
+
+/**
+ * Take the message left by a crash, if there is one.
+ *
+ * Taking rather than reading: a report is made once. Leaving it would send the
+ * same crash again on every reconnect for the rest of the session.
+ */
+export function takeCrashToReport(store: Store): string | null {
+  try {
+    const message = store.getItem(REPORT_KEY)
+    if (message !== null) store.removeItem(REPORT_KEY)
+    return message
+  } catch {
+    return null
   }
 }
 

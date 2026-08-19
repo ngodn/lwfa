@@ -52,10 +52,24 @@ use crate::layout::Mode;
 use crate::shell::{ShellEvent, ShellLink};
 use crate::state::{CalloopData, Lwfa};
 
+/// What gets logged when `RUST_LOG` says nothing.
+///
+/// Everything at info, except one talkative line in smithay's X11 window
+/// manager. It reports every X error it survives at info, and the one it
+/// survives constantly is a `BadWindow` on the reparent that unmaps a window:
+/// the client destroyed the window before the unmap reached the server, which
+/// is a race nothing can prevent and nothing needs to. A day of ordinary use
+/// logged 49 of them, all during game launches, all harmless, and a reader
+/// looking for the cause of a real problem has to rule them out every time.
+/// Its warnings and errors still come through.
+const DEFAULT_LOG: &str = "info,smithay::xwayland::xwm=warn";
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match tracing_subscriber::EnvFilter::try_from_default_env() {
         Ok(env_filter) => tracing_subscriber::fmt().with_env_filter(env_filter).init(),
-        Err(_) => tracing_subscriber::fmt().init(),
+        Err(_) => tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(DEFAULT_LOG))
+            .init(),
     }
 
     let mut event_loop: EventLoop<'static, CalloopData> = EventLoop::try_new()?;
@@ -618,6 +632,12 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // so making it primary would freeze the layout for everyone.
             if state.primary.is_none() && interactive {
                 state.primary = Some(session);
+                // Whoever is driving is about to say how big it is, and the
+                // output will change to match. Anything encoded before then is
+                // encoded at a size that is on its way out, which costs a full
+                // encoder session for a frame that lives about fifty
+                // milliseconds. See `Lwfa::expecting_a_viewport`.
+                state.expect_a_viewport();
             }
 
             // A browser attaching mid-stream cannot decode until it sees an
@@ -810,8 +830,10 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
         | ToEngine::RequestIcons { .. } => true,
 
         // Liveness is universal: a view-only session needs to know whether its
-        // socket is real exactly as much as anyone else does.
-        ToEngine::Ping => true,
+        // socket is real exactly as much as anyone else does. Reporting your
+        // own crash is the same: it changes nothing on the machine, and a
+        // view-only session's shell breaks in exactly the same ways.
+        ToEngine::Ping | ToEngine::Crashed { .. } => true,
 
         ToEngine::SetLayout { .. } | ToEngine::SetViewport { .. } => is_primary,
 
@@ -913,6 +935,11 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             // deliberately far below any real device: the rail eats ~64px, so
             // a 320px phone in portrait offers ~256, and a guard set at phone
             // width would reject exactly the devices this project exists for.
+            // Cleared first, and before the unchanged check below: a shell
+            // reconnecting at the size the output already is has still
+            // answered, and leaving the engine waiting for an answer it has
+            // had would hold its first frames for the whole grace.
+            state.got_a_viewport();
             if width < 160 || height < 160 {
                 tracing::debug!("ignoring an implausible viewport {width}x{height}");
                 return;
@@ -942,6 +969,15 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             // uses the round trip to tell a live socket from the corpse iOS
             // hands back after a resume; see the variant's docs in lwfa-proto.
             state.send_to_session(session, lwfa_proto::ToShell::Pong);
+        }
+
+        ToEngine::Crashed { message } => {
+            // At warn, because it is the shell telling us it fell over, and
+            // the journal is the only place that record now exists. Truncated
+            // because the text is a browser error message and comes from the
+            // far end.
+            let message: String = message.chars().take(300).collect();
+            tracing::warn!("shell {session} reported it crashed and reloaded: {message}");
         }
 
         ToEngine::ListDir { request, path } => state.list_dir(session, request, &path),

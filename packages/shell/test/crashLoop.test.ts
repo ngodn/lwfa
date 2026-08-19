@@ -13,7 +13,15 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest"
-import { LIMIT, WINDOW_MS, clearCrashes, crashCount, onCrash } from "../src/lib/crashLoop"
+import {
+  LIMIT,
+  WINDOW_MS,
+  clearCrashes,
+  crashCount,
+  noteCrashToReport,
+  onCrash,
+  takeCrashToReport,
+} from "../src/lib/crashLoop"
 
 /** A `sessionStorage` that lives in a variable. */
 function fakeStore(): Storage & { failing?: boolean } {
@@ -121,5 +129,59 @@ describe("counting", () => {
     onCrash(store, T0)
     onCrash(store, T0 + WINDOW_MS + 1000)
     expect(crashCount(store, T0 + WINDOW_MS + 1000)).toBe(1)
+  })
+})
+
+describe("telling the engine what happened", () => {
+  // The reason this exists: a reloading shell closes its socket cleanly, and
+  // that is exactly what a deliberate reload looks like from the engine. The
+  // shell's own log is in memory and dies with the page. So the failure a user
+  // actually notices, the session that "came back strange", used to leave no
+  // record anywhere at all.
+
+  it("keeps the message for the next page load", () => {
+    noteCrashToReport(store, "Cannot read properties of undefined")
+    expect(takeCrashToReport(store)).toBe("Cannot read properties of undefined")
+  })
+
+  it("reports it once and not again", () => {
+    // Taken, not read. Left in place it would be sent again on every
+    // reconnect for the rest of the session, and a crash that happened once
+    // would look like a crash that keeps happening.
+    noteCrashToReport(store, "boom")
+    expect(takeCrashToReport(store)).toBe("boom")
+    expect(takeCrashToReport(store)).toBeNull()
+  })
+
+  it("says nothing when nothing crashed", () => {
+    expect(takeCrashToReport(store)).toBeNull()
+  })
+
+  it("truncates, because a React error carries a component stack", () => {
+    noteCrashToReport(store, "x".repeat(5000))
+    expect(takeCrashToReport(store)?.length).toBe(300)
+  })
+
+  it("survives storage that refuses to write", () => {
+    // Private browsing, or a full quota. Losing the report is acceptable;
+    // throwing inside the crash handler is not, because the handler is the
+    // thing standing between one bug and a blank page.
+    const broken = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("quota")
+      },
+      removeItem: () => {},
+    } as unknown as Storage
+    expect(() => noteCrashToReport(broken, "boom")).not.toThrow()
+    expect(takeCrashToReport(broken)).toBeNull()
+  })
+
+  it("is not disturbed by the crash count sharing the same storage", () => {
+    noteCrashToReport(store, "boom")
+    onCrash(store, T0)
+    clearCrashes(store)
+    expect(takeCrashToReport(store)).toBe("boom")
+    expect(crashCount(store, T0)).toBe(0)
   })
 })

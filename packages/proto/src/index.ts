@@ -132,6 +132,17 @@ export type ToShell =
   | { type: "windowOpened"; window: WindowInfo }
   | { type: "windowChanged"; window: WindowInfo }
   | { type: "windowClosed"; id: WindowId }
+  /**
+   * This window is being streamed and has drawn nothing.
+   *
+   * Sent once a window has been asked for and has produced no frame at all for
+   * several seconds, and again with `blank: false` if one ever arrives.
+   *
+   * The shell cannot work this out for itself: "no frames" and "an idle window
+   * whose picture has not changed" look identical from here, which is exactly
+   * why a window that never drew read as a broken stream.
+   */
+  | { type: "windowBlank"; id: WindowId; blank: boolean }
   | { type: "focusChanged"; id: WindowId | null }
   /**
    * A modified key the engine did not claim for itself.
@@ -496,6 +507,16 @@ export type ToEngine =
    * when that device is a tablet on a table in another room.
    */
   | { type: "takeControl" }
+  /**
+   * The shell hit an error it could not continue from and is reloading.
+   *
+   * Sent on the connection *after* the reload: the one that saw the crash is
+   * being torn down as the page goes away, so nothing sent on it can be relied
+   * on to arrive. A reloading shell closes its socket cleanly, which the engine
+   * cannot tell from somebody pressing reload, and this log is in memory and
+   * dies with the page, so without this the failure leaves no trace anywhere.
+   */
+  | { type: "crashed"; message: string }
   /**
    * Disconnect another session. The owner's alone.
    *
@@ -890,6 +911,15 @@ export function decodeToShell(text: string): ToShell {
       const where = `${at}.windowClosed`
       noExtraKeys(o, ["type", "id"], where)
       return { type: "windowClosed", id: int(o, "id", where) }
+    }
+    case "windowBlank": {
+      const where = `${at}.windowBlank`
+      noExtraKeys(o, ["type", "id", "blank"], where)
+      return {
+        type: "windowBlank",
+        id: int(o, "id", where),
+        blank: bool(o, "blank", where),
+      }
     }
     case "focusChanged": {
       const where = `${at}.focusChanged`
@@ -1334,6 +1364,11 @@ export function decodeToEngine(text: string): ToEngine {
       const where = `${at}.touchUp`
       noExtraKeys(o, ["type", "id"], where)
       return { type: "touchUp", id: int(o, "id", where) }
+    }
+    case "crashed": {
+      const where = `${at}.crashed`
+      noExtraKeys(o, ["type", "message"], where)
+      return { type: "crashed", message: str(o, "message", where) }
     }
     case "takeControl": {
       noExtraKeys(o, ["type"], `${at}.takeControl`)

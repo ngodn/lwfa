@@ -107,6 +107,20 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         ),
         ("window-closed", ToShell::WindowClosed { id: WindowId(7) }),
         (
+            "window-blank",
+            ToShell::WindowBlank {
+                id: WindowId(7),
+                blank: true,
+            },
+        ),
+        (
+            "window-painted-at-last",
+            ToShell::WindowBlank {
+                id: WindowId(7),
+                blank: false,
+            },
+        ),
+        (
             "focus-changed",
             ToShell::FocusChanged {
                 id: Some(WindowId(2)),
@@ -454,6 +468,12 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         ),
     ];
     to_engine.push(("take-control", ToEngine::TakeControl));
+    to_engine.push((
+        "crashed",
+        ToEngine::Crashed {
+            message: "Cannot read properties of undefined (reading 'width')".into(),
+        },
+    ));
     to_engine.push(("end-session", ToEngine::EndSession { session: 3 }));
     to_engine.push((
         "set-audio",
