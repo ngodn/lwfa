@@ -3,9 +3,9 @@
 Mark: **Across the panels**. Three columns of the scrollable strip, the middle one square on, with the spring curve running across them.
 
 ## Colour
-- Signal orange `#E8552D` — the curve, and the only accent. One accent, never two.
-- Ink `#0C0D10` — backgrounds, app tiles.
-- Paper `#F2EFE9` — light ground.
+- Signal orange `#E8552D`: the curve, and the only accent. One accent, never two.
+- Ink `#0C0D10`: backgrounds and app tiles.
+- Paper `#F2EFE9`: the light ground.
 - Panels are never their own colour. They are the ink or paper colour at 30% opacity.
 
 ## Rules
@@ -17,11 +17,11 @@ Mark: **Across the panels**. Three columns of the scrollable strip, the middle o
 ## Files
 
 ### svg/ (master artwork, scales to any size)
-- `mark-on-dark.svg`, `mark-on-light.svg` — the full mark
-- `mark-curve.svg`, `mark-curve-black.svg`, `mark-curve-white.svg` — the reduction
-- `mark-mono-black.svg`, `mark-mono-white.svg` — one colour
-- `icon-tile-ink.svg`, `icon-tile-accent.svg` — rounded app tiles
-- `lockup-horizontal-on-dark.svg`, `lockup-horizontal-on-light.svg` — mark plus wordmark. The wordmark is live text in JetBrains Mono Bold, so install the font or ask for a version with the letters converted to outlines.
+- `mark-on-dark.svg` and `mark-on-light.svg`: the full mark
+- `mark-curve.svg`, `mark-curve-black.svg`, `mark-curve-white.svg`: the reduction
+- `mark-mono-black.svg` and `mark-mono-white.svg`: one colour
+- `icon-tile-ink.svg` and `icon-tile-accent.svg`: rounded app tiles
+- `lockup-horizontal-on-dark.svg` and `lockup-horizontal-on-light.svg`: mark plus wordmark. The wordmark is live text in JetBrains Mono Bold, so install the font or ask for a version with the letters converted to outlines.
 
 ### png/
 - Web: `favicon-16/32/48/64`, plus `../favicon.ico` (16, 32 and 48 in one file)
@@ -44,4 +44,4 @@ Drop in at the web root and adjust the icon paths.
 <meta name="theme-color" content="#0C0D10">
 ```
 
-Not included yet, say the word: Windows `.ico` at 256, macOS `.icns`, Linux hicolor theme directories, and a wordmark with outlined letters.
+Not included yet, ask if you want them: Windows `.ico` at 256, macOS `.icns`, Linux hicolor theme directories, and a wordmark with outlined letters.

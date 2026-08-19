@@ -122,6 +122,13 @@ cp "$ROOT/configs/defaults.toml" "$STAGE/share/lwfa/defaults.toml"
 cp -r "$ROOT/deploy/." "$STAGE/deploy/" 2>/dev/null
 rm -rf "$STAGE/deploy/local" "$STAGE/deploy/docker/certs"
 cp "$ROOT/README.md" "$STAGE/README.md" 2>/dev/null
+# The README is a landing page that links into docs/, so the pages travel with
+# it. Without them an extracted release has a table of contents pointing at
+# nothing.
+mkdir -p "$STAGE/docs"
+for doc in "$ROOT"/docs/*.md; do
+  cp "$doc" "$STAGE/docs/" 2>/dev/null
+done
 cp "$ROOT/LICENSE" "$STAGE/LICENSE" 2>/dev/null
 
 say "collecting libraries"

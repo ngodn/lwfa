@@ -11,7 +11,7 @@
 # verified by PID afterwards and corrected if it drifted. Do not simplify this
 # to just the exec rule.
 #
-# On a host with the window rules from the README installed, placement is
+# On a host with the window rules from docs/remote-access.md installed, placement is
 # already handled and this check simply finds nothing to correct. It stays
 # because the script has to work on a host without them too.
 #
