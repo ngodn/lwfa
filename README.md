@@ -243,8 +243,9 @@ sees keys first and usually has Super bound.
 
 Settings live in [`configs/defaults.toml`](configs/defaults.toml): ports, the
 terminal, Xwayland, encoder limits, render timings, layout defaults, the shared
-animation spring, audio capture, the persistent gamepad, and which workspace
-lwfa's own window should take in a host compositor. It is commented, and it is
+animation spring, audio capture, the persistent gamepad, whether the desktop
+outside shares the clipboard, and which workspace lwfa's own window should take
+in a host compositor. It is commented, and it is
 the place to look before going hunting for a constant.
 
 Precedence, highest first: environment variables, then `.env` (gitignored,
