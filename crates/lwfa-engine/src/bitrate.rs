@@ -159,6 +159,31 @@ const RESUME_WINDOW: Duration = Duration::from_secs(60);
 /// entirely.
 const MAX_HOLD: Duration = Duration::from_secs(10);
 
+/// The longest the controller will sit below a level before probing it again.
+///
+/// Where `climb_wait` paces climbing *below* the soft ceiling, this paces
+/// pushing the ceiling itself back up. It doubles every time a probe of the
+/// next rung congests again, so a path with a real capacity limit backs away
+/// from that limit fast: an eager 8s the first time, minutes after the level
+/// has proven bad several times over. Without this the controller only ever
+/// backed off in time through `climb_wait`, which caps at two minutes and
+/// decays, so a relay whose capacity sat below the LAN ceiling was re-probed
+/// into a multi-second stall every minute for the whole session. Measured on
+/// the DERP path during a game: an 8 Mbit/s link, a 2.9s queue, eleven fresh
+/// collapses in ten minutes.
+const CEILING_WAIT_MAX: Duration = Duration::from_secs(600);
+
+/// How soon after a probe congestion is still that probe's fault.
+///
+/// Raising the soft ceiling is a bet that the next rung is now affordable.
+/// Congestion inside this window says the bet lost, so the level is marked bad
+/// and the wait before trying it again grows. Congestion *outside* it is a new
+/// event, transient interference like a download, and must not inflate the
+/// ceiling wait, or one busy moment would make the top rungs unreachable for
+/// the session. Clearing this window without congestion is the probe winning:
+/// the level holds now, and the wait shrinks again.
+const PROBE_VERDICT: Duration = Duration::from_secs(5);
+
 /// What the connection looks like on one pass.
 #[derive(Clone, Copy, Debug)]
 pub struct Signal {
@@ -243,6 +268,39 @@ pub struct Controller {
     /// [`SETTLE`] plus however deep the queue was when the cut was made. See
     /// [`Signal::queueing`].
     hold: Duration,
+    /// The highest rung the controller will occupy right now.
+    ///
+    /// The ceiling in [`STEPS`] is chosen for a LAN. A relay, or any path worth
+    /// a fraction of that, cannot hold the top rungs, and climbing into one
+    /// builds seconds of queue before the controller may react. This remembers
+    /// the level congestion last began at and refuses to climb back to it,
+    /// turning "re-probe the same bad level every minute" into "find the level
+    /// the path holds and stay there". It relaxes upward only when a probe of
+    /// the next rung survives, so a link that genuinely improves is still
+    /// rediscovered. Starts at the top: an unmeasured link is assumed to be the
+    /// LAN this was tuned for until it proves otherwise.
+    soft_ceiling: usize,
+    /// How long to hold at the soft ceiling before probing one rung past it.
+    ///
+    /// Doubles each time such a probe congests again, up to [`CEILING_WAIT_MAX`],
+    /// so a level that keeps failing is tried ever more rarely. See
+    /// [`CEILING_WAIT_MAX`].
+    ceiling_wait: Duration,
+    /// When the budget first reached the soft ceiling and stayed clear, so the
+    /// probe waits [`ceiling_wait`] of genuine calm at the top rather than
+    /// firing the moment it arrives. `None` while still climbing up to it.
+    at_ceiling_since: Option<Instant>,
+    /// When the soft ceiling was last pushed up to probe the next rung. Congestion
+    /// within [`PROBE_VERDICT`] of it is that probe failing; surviving that long
+    /// is it passing. See [`PROBE_VERDICT`].
+    probed_at: Option<Instant>,
+    /// Whether the last budget change was a climb rather than a cut.
+    ///
+    /// A climb into a level the path cannot hold is the one case where waiting
+    /// out the full settle is wrong: the queue is building the whole time. This
+    /// lets a runaway queue cut straight back out of a bad probe, while a cut's
+    /// own settle, which exists to wait out a real backlog, is left intact.
+    last_change_climb: bool,
 }
 
 impl Controller {
@@ -256,6 +314,11 @@ impl Controller {
             was_congested: false,
             congested_at: now,
             hold: SETTLE,
+            soft_ceiling: STEPS.len() - 1,
+            ceiling_wait: CLIMB_AFTER,
+            at_ceiling_since: None,
+            probed_at: None,
+            last_change_climb: false,
         }
     }
 
@@ -311,6 +374,14 @@ impl Controller {
         self.changed_at = now;
         self.hold = SETTLE;
         self.was_congested = false;
+        // A client nothing has measured is as unknown as a first one: rediscover
+        // the ceiling from the top rather than inheriting a limit learned about
+        // whatever link just left.
+        self.soft_ceiling = STEPS.len() - 1;
+        self.ceiling_wait = CLIMB_AFTER;
+        self.at_ceiling_since = None;
+        self.probed_at = None;
+        self.last_change_climb = false;
     }
 
     /// Everybody left.
@@ -343,10 +414,36 @@ impl Controller {
             // the patient schedule: the first congestion is also what ends the
             // eager climb of a fresh connection.
             self.climb_wait = (self.climb_wait * 2).clamp(CLIMB_AFTER, MAX_CLIMB_WAIT);
+
+            // The level congestion began at is one the path cannot hold, so
+            // stop climbing back into it. Lowered only at the *start* of an
+            // episode: the cuts that follow walk down through levels that are
+            // all congested by the same event, and following them would pin
+            // the ceiling at the floor.
+            self.soft_ceiling = self.soft_ceiling.min(self.step.saturating_sub(1));
+            self.at_ceiling_since = None;
+
+            // If this landed right after a probe, that probe failed: the rung
+            // is bad, so wait longer before trying it again. Congestion later
+            // than the verdict window is a new event, a download or the like,
+            // and must not be charged to the probe, or one busy moment would
+            // make the top rungs unreachable for the session.
+            if self.probed_at.is_some_and(|t| now.duration_since(t) <= PROBE_VERDICT) {
+                self.ceiling_wait = (self.ceiling_wait * 2).clamp(CLIMB_AFTER, CEILING_WAIT_MAX);
+            }
+            self.probed_at = None;
         }
 
-        // Nothing changes during the settling period, in either direction.
-        if now.duration_since(self.changed_at) < self.hold {
+        // Nothing changes during the settling period, in either direction, with
+        // one exception. A climb into a level the path cannot hold builds queue
+        // for as long as it waits, and the post-climb settle is two seconds: on
+        // a relay that is two seconds of picture piling up before the controller
+        // is even allowed to look. So a runaway queue may cut straight back out
+        // of a climb. A *cut's* settle, which exists to wait out a real backlog
+        // rather than to protect a climb, is never bypassed.
+        let runaway_probe =
+            self.last_change_climb && congested && signal.queueing > QUEUE_DELAY_LIMIT;
+        if now.duration_since(self.changed_at) < self.hold && !runaway_probe {
             return None;
         }
 
@@ -371,6 +468,8 @@ impl Controller {
             // or the same backlog is counted once per settling period and the
             // budget falls far past where it should have stopped.
             self.hold = SETTLE + signal.queueing.min(MAX_HOLD);
+            self.last_change_climb = false;
+            self.at_ceiling_since = None;
             return Some(self.bitrate());
         }
 
@@ -386,8 +485,18 @@ impl Controller {
             self.climb_wait = EAGER_CLIMB;
         }
 
+        // A probe that has gone this long without congesting is a rung the path
+        // holds after all: grow bolder about the next one. Kept separate from
+        // the episode block, which handles the probe that fails.
+        if self.probed_at.is_some_and(|t| now.duration_since(t) >= PROBE_VERDICT) {
+            self.ceiling_wait = (self.ceiling_wait / 2).max(CLIMB_AFTER);
+            self.probed_at = None;
+        }
+
         let clear_for = now.duration_since(self.clear_since);
-        if !congested && self.step + 1 < STEPS.len() && clear_for >= self.climb_wait {
+        if !congested && self.step + 1 < STEPS.len() && self.step < self.soft_ceiling
+            && clear_for >= self.climb_wait
+        {
             // Confidence has to return as well as leave. Checked here, at the
             // moment of a climb, so it can fire at most once per climb rather
             // than sixty times a second while the condition holds.
@@ -409,7 +518,31 @@ impl Controller {
             // Reset, so the next climb waits the full period again rather than
             // stepping up every tick once the timer has expired once.
             self.clear_since = now;
+            self.last_change_climb = true;
+            // Arriving at the ceiling starts the clock the probe waits on.
+            self.at_ceiling_since = (self.step == self.soft_ceiling).then_some(now);
             return Some(self.bitrate());
+        }
+
+        // Sitting at the soft ceiling with the link clear: after a genuine
+        // stretch of calm at the top, probe one rung past it. This is the only
+        // path back up for a link that once congested, and the wait it honours
+        // grows with every failed probe and shrinks with every good one, so a
+        // real capacity limit is tried rarely and a link that has improved is
+        // rediscovered.
+        if !congested && self.step == self.soft_ceiling && self.soft_ceiling + 1 < STEPS.len() {
+            let since = *self.at_ceiling_since.get_or_insert(now);
+            if now.duration_since(since) >= self.ceiling_wait {
+                self.soft_ceiling += 1;
+                self.step += 1;
+                self.changed_at = now;
+                self.hold = SETTLE;
+                self.clear_since = now;
+                self.last_change_climb = true;
+                self.probed_at = Some(now);
+                self.at_ceiling_since = None;
+                return Some(self.bitrate());
+            }
         }
 
         None
@@ -422,6 +555,78 @@ mod tests {
 
     fn at(base: Instant, secs: u64) -> Instant {
         base + Duration::from_secs(secs)
+    }
+
+    /// Drive the controller through a link whose real capacity sits below the
+    /// ceiling, and report the peak queue it built and how often it climbed
+    /// back into the over-capacity level. The relay is modelled honestly: any
+    /// budget above `capacity` grows a backlog at the overshoot rate, and it
+    /// drains at `capacity`; the delay probe reads that backlog as queueing.
+    fn run_relay(capacity: u32, total_s: u64) -> (u128, u32) {
+        let base = Instant::now();
+        let mut c = Controller::new(base);
+        let dt = Duration::from_millis(250); // shell::PROBE_INTERVAL.
+        let dt_s = dt.as_secs_f64();
+        let ticks = (total_s as f64 / dt_s) as u64;
+
+        let mut backlog: f64 = 0.0; // bits waiting to drain at `capacity`.
+        let mut clock = base;
+        let mut peak_queue_ms = 0u128;
+        let mut reprobes_last_600 = 0u32; // rising edges of budget > capacity, late in the run.
+        let mut was_over = false;
+
+        for i in 0..ticks {
+            clock += dt;
+            let budget = c.bitrate();
+            let cap = capacity as f64;
+
+            backlog += (budget as f64 - cap) * dt_s;
+            if backlog < 0.0 {
+                backlog = 0.0;
+            }
+            let queue_ms = ((backlog / cap) * 1000.0) as u128;
+            peak_queue_ms = peak_queue_ms.max(queue_ms);
+
+            let over = budget > capacity;
+            if over && !was_over && (i as f64 * dt_s) > (total_s - 600) as f64 {
+                reprobes_last_600 += 1;
+            }
+            was_over = over;
+
+            let congested = queue_ms as u64 > QUEUE_DELAY_LIMIT.as_millis() as u64;
+            let signal = Signal {
+                congested,
+                queueing: Duration::from_millis(queue_ms as u64),
+            };
+            c.observe(signal, clock);
+        }
+        (peak_queue_ms, reprobes_last_600)
+    }
+
+    #[test]
+    fn a_relay_below_the_ceiling_settles_instead_of_stalling_on_repeat() {
+        // The Wuchang remote session. The iPad was on the Tailscale DERP path,
+        // whose real capacity is well under the 32 Mbit/s ceiling that was
+        // "chosen for a LAN" (see STEPS). 8 Mbit/s here is a *healthy* relay,
+        // five rungs above the floor. What the journal showed, and what this
+        // reproduces, is that the controller climbs a full rung past what the
+        // path holds, builds seconds of queue before it may react, cuts, and
+        // then climbs straight back into the same level a minute later, for
+        // the whole session. Measured today: a 2000ms peak queue and eleven
+        // reprobes in the last ten minutes.
+        let (peak_queue_ms, reprobes_last_600) = run_relay(STEPS[4], 900);
+
+        assert!(
+            peak_queue_ms <= 750,
+            "a probe above capacity queued {peak_queue_ms}ms of video; the \
+             viewer feels that as the picture freezing and controls going dead",
+        );
+        assert!(
+            reprobes_last_600 <= 2,
+            "climbed back into the over-capacity level {reprobes_last_600} \
+             times in ten minutes; each one is a fresh stall on a link that \
+             already said no",
+        );
     }
 
     #[test]
