@@ -54,6 +54,7 @@ import {
   iconsRequested,
   setAppIcons,
   setApps,
+  setWindowless,
 } from "@/lib/apps"
 import * as audio from "@/lib/audio"
 import { engineFor } from "@/lib/engineUrl"
@@ -746,6 +747,10 @@ export function App(): React.ReactElement {
           })
           break
         }
+
+        case "windowless":
+          setWindowless(message.apps)
+          break
 
         case "appIcons":
           setAppIcons(message.icons)

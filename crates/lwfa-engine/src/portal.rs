@@ -268,6 +268,9 @@ fn find_frontend() -> Result<std::path::PathBuf, String> {
 /// covers every exit path at once.
 fn dies_with_us(command: &mut Command) {
     use std::os::unix::process::CommandExt;
+    // The death signal is `SIGTERM`, which a child that inherited the engine's
+    // blocked mask would never act on. See `crate::childsig`.
+    crate::childsig::unblock_signals(command);
     // SAFETY: `set_parent_process_death_signal` is a single prctl syscall,
     // async-signal-safe, allocating nothing: exactly what pre_exec allows.
     unsafe {

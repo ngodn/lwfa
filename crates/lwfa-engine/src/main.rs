@@ -19,6 +19,7 @@ mod apps;
 mod audio;
 mod auth;
 mod capture;
+mod childsig;
 mod config;
 mod clipboard;
 mod clipserve;
@@ -113,6 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 |_, _, data| {
                     data.guard_x_focus();
                     reap_children();
+                    data.announce_windowless();
                     TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
                 },
             )
@@ -810,6 +812,8 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // The new arrival also has to reach everyone else's connections
             // list, and it may have just changed who is primary.
             state.announce_peers();
+            // A shell that has just arrived missed every earlier message.
+            state.resend_windowless();
             tracing::info!(
                 "session {session} joined; {} connected, primary is {:?}",
                 state.sessions.len(),
@@ -1048,6 +1052,7 @@ fn kind_of(message: &ToEngine) -> &'static str {
         ToEngine::CloseAndSpawn { .. } => "closeAndSpawn",
         ToEngine::CloseWindow { .. } => "closeWindow",
         ToEngine::QuitApp { .. } => "quitApp",
+        ToEngine::QuitWindowless { .. } => "quitWindowless",
         ToEngine::Key { .. } => "key",
         ToEngine::PointerButton { .. } | ToEngine::PointerMotion { .. } => "pointer",
         ToEngine::TouchDown { .. } | ToEngine::TouchMotion { .. } | ToEngine::TouchUp { .. } => {
@@ -1095,6 +1100,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
         }
         ToEngine::CloseWindow { id } => state.request_close(id),
         ToEngine::QuitApp { id } => state.quit_app(id, session),
+        ToEngine::QuitWindowless { pid } => state.quit_windowless(pid),
         ToEngine::SetViewport {
             width,
             height,

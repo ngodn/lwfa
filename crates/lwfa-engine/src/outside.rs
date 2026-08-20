@@ -209,3 +209,86 @@ mod tests {
         assert!(is_main_process(&[]));
     }
 }
+
+/// Every process descended from `root`, including `root` itself.
+///
+/// # Why the tree and not the pid
+///
+/// The pid lwfa spawns is rarely the pid that owns the window. `steam` is a
+/// shell script that execs a launcher that starts the client that starts
+/// `steamwebhelper`, and the window belongs to the last of those. Asking
+/// whether the spawned pid owns a window would answer "no" for a Steam sitting
+/// there with its library open, which is the opposite of the truth and would
+/// invite someone to quit it mid-download.
+///
+/// Reads `ppid` out of `/proc/<pid>/stat`. The field is the fourth, and the
+/// second is the executable name in parentheses which may itself contain spaces
+/// and parentheses, so the scan starts after the last `)` rather than splitting
+/// the whole line.
+pub fn descendants(root: u32) -> std::collections::HashSet<u32> {
+    let mut children: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return std::iter::once(root).collect();
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        let Some(after) = stat.rfind(')').map(|i| &stat[i + 1..]) else {
+            continue;
+        };
+        // After the closing parenthesis: state, then ppid.
+        let Some(ppid) = after
+            .split_whitespace()
+            .nth(1)
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        children.entry(ppid).or_default().push(pid);
+    }
+
+    let mut found = std::collections::HashSet::new();
+    let mut queue = vec![root];
+    while let Some(pid) = queue.pop() {
+        if !found.insert(pid) {
+            continue;
+        }
+        if let Some(kids) = children.get(&pid) {
+            queue.extend(kids.iter().copied());
+        }
+    }
+    found
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::descendants;
+
+    #[test]
+    fn a_process_is_its_own_descendant() {
+        let me = std::process::id();
+        assert!(descendants(me).contains(&me));
+    }
+
+    #[test]
+    fn a_child_is_found_under_its_parent() {
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 5"])
+            .spawn();
+        let Ok(mut child) = child else { return };
+        let tree = descendants(std::process::id());
+        assert!(tree.contains(&child.id()));
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn an_unrelated_process_is_not_in_the_tree() {
+        // Pid 1 is nobody's child but its own tree's root.
+        assert!(!descendants(std::process::id()).contains(&1));
+    }
+}

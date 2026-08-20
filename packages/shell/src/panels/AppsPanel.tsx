@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils"
 
 function AppsPanel() {
   const actions = useSessionActions()
-  const { apps, icons, loading } = useApps()
+  const { apps, icons, loading, windowless } = useApps()
   const [query, setQuery] = useState("")
 
   // The list can be several hundred entries; deferring keeps typing responsive
@@ -88,6 +88,37 @@ function AppsPanel() {
                   actions.spawn(app.exec, app.terminal)
                 }}
               />
+            ))}
+          </ul>
+        </PanelSection>
+      )}
+
+      {windowless.length > 0 && (
+        <PanelSection title="Running with no window">
+          <p className="mb-2 text-xs text-muted-foreground">
+            Still running here, with nothing on screen. There is no tray in this
+            session, so they cannot be reached any other way. Steam does this
+            when you close its window, and it keeps the machine's own copy from
+            starting until it lets go.
+          </p>
+          <ul className="flex flex-col gap-1">
+            {windowless.map((app) => (
+              <li
+                key={app.pid}
+                className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-2 py-1.5"
+              >
+                <span className="min-w-0 truncate text-sm">
+                  {app.program}
+                  <span className="ml-1.5 text-xs text-muted-foreground">{app.pid}</span>
+                </span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => actions.send({ type: "quitWindowless", pid: app.pid })}
+                >
+                  Quit
+                </Button>
+              </li>
             ))}
           </ul>
         </PanelSection>

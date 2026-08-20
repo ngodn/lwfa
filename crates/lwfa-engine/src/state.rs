@@ -130,6 +130,20 @@ const SESSION_GRACE: std::time::Duration = std::time::Duration::from_secs(45);
 pub struct Lwfa {
     /// Settings from `configs/defaults.toml`, resolved once at startup.
     pub config: crate::config::Config,
+    /// Applications this session started, by pid, with the program name.
+    ///
+    /// Kept so one that outlives its last window can still be named and ended.
+    /// Pruned as processes die; see [`Lwfa::windowless`].
+    pub started: std::collections::HashMap<u32, String>,
+    /// What was last reported to the shell, so an unchanged list is not resent.
+    windowless_last: Vec<lwfa_proto::WindowlessApp>,
+    /// Forces the next announcement even if the list has not moved.
+    ///
+    /// Set when a shell joins. Sending only on change is right for a shell that
+    /// has been listening all along and wrong for one that has just arrived: it
+    /// missed every earlier message, so without this a session that went
+    /// windowless before anyone connected would never say so.
+    windowless_stale: bool,
     pub start_time: std::time::Instant,
     pub socket_name: OsString,
     pub display_handle: DisplayHandle,
@@ -360,6 +374,9 @@ impl Lwfa {
 
         Self {
             config,
+            started: std::collections::HashMap::new(),
+            windowless_last: Vec::new(),
+            windowless_stale: true,
             start_time: std::time::Instant::now(),
             display_handle: dh,
             // Real size arrives from the backend once the output exists.
@@ -2184,5 +2201,161 @@ mod gamepad_restore_tests {
     #[test]
     fn nothing_parked_means_nothing_to_give_back() {
         assert!(!is_the_browser_that_parked_it(None, "abc"));
+    }
+}
+
+impl Lwfa {
+    /// Say the windowless list again on the next tick, whatever it is.
+    pub fn resend_windowless(&mut self) {
+        self.windowless_stale = true;
+    }
+
+    /// Applications this session started that no longer have a window.
+    ///
+    /// # Why this is not simply "the pid has no window"
+    ///
+    /// The pid lwfa spawns is rarely the one that owns the window. `steam` is a
+    /// shell script that execs a launcher that starts the client, and the
+    /// window belongs to a descendant several steps down. So each remembered
+    /// pid is expanded to its whole process tree and a window counts if it
+    /// belongs to anything in it. Getting this wrong in the other direction
+    /// would report a perfectly healthy Steam as windowless and invite someone
+    /// to end it mid-download.
+    ///
+    /// Prunes as it goes: a pid whose tree is empty has exited, and there is
+    /// nothing to report or remember about it.
+    pub fn windowless(&mut self) -> Vec<lwfa_proto::WindowlessApp> {
+        if self.started.is_empty() {
+            return Vec::new();
+        }
+
+        let windows: std::collections::HashSet<u32> = self
+            .space
+            .elements()
+            .filter_map(|window| self.window_pid(window))
+            .collect();
+
+        let mut gone = Vec::new();
+        let mut idle = Vec::new();
+        for (pid, program) in &self.started {
+            let tree = crate::outside::descendants(*pid);
+            // `descendants` always contains the root, so a tree of one for a
+            // pid with no `/proc` entry means the process is gone.
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                gone.push(*pid);
+                continue;
+            }
+            if tree.is_disjoint(&windows) {
+                idle.push(lwfa_proto::WindowlessApp {
+                    pid: *pid,
+                    program: program.clone(),
+                });
+            }
+        }
+        for pid in gone {
+            self.started.remove(&pid);
+        }
+        idle.sort_by(|a, b| a.program.cmp(&b.program).then(a.pid.cmp(&b.pid)));
+        idle
+    }
+
+    /// The process behind a window, where the protocol will say.
+    ///
+    /// Xwayland only reports pids for its own clients, which is why the X11
+    /// arm exists separately rather than reading client credentials.
+    fn window_pid(&self, window: &smithay::desktop::Window) -> Option<u32> {
+        use smithay::reexports::wayland_server::Resource;
+        match window.underlying_surface() {
+            smithay::desktop::WindowSurface::Wayland(toplevel) => toplevel
+                .wl_surface()
+                .client()
+                .and_then(|client| client.get_credentials(&self.display_handle).ok())
+                .map(|creds| creds.pid as u32),
+            smithay::desktop::WindowSurface::X11(x11) => x11.pid(),
+        }
+    }
+
+    /// Tell the shell which applications are running with nothing on screen.
+    ///
+    /// Only when the answer changes. This runs once a second next to the focus
+    /// guardian, and a list that has not moved is not worth a message, let
+    /// alone the re-render at the other end.
+    pub fn announce_windowless(&mut self) {
+        let apps = self.windowless();
+        if apps == self.windowless_last && !self.windowless_stale {
+            return;
+        }
+        self.windowless_stale = false;
+        if apps.is_empty() {
+            tracing::info!("every application this session started has a window again");
+        } else {
+            tracing::info!(
+                "running with no window: {}",
+                apps.iter()
+                    .map(|app| format!("{} ({})", app.program, app.pid))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        self.windowless_last = apps.clone();
+        self.send_to_shell(lwfa_proto::ToShell::Windowless { apps });
+    }
+
+    /// End a windowless application, by pid, if it is still one of ours.
+    ///
+    /// `SIGTERM`, never `SIGKILL`: the point is to let it shut down, which for
+    /// Steam means releasing `~/.steam/steam.pipe` so the host can start its
+    /// own copy. The pid is checked against the name this session recorded for
+    /// it immediately before signalling, so a pid the kernel has since handed
+    /// to something else cannot be hit by mistake.
+    pub fn quit_windowless(&mut self, pid: u32) {
+        let Some(program) = self.started.get(&pid).cloned() else {
+            tracing::warn!("asked to quit {pid}, which this session did not start");
+            return;
+        };
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        let comm = comm.trim_end();
+        if comm.is_empty() || !program.as_bytes().starts_with(comm.as_bytes()) {
+            tracing::warn!("pid {pid} is no longer {program}; not signalling it");
+            self.started.remove(&pid);
+            return;
+        }
+
+        // The whole tree, not just the pid.
+        //
+        // The thing lwfa starts is usually a launcher script: `steam` is
+        // `steam.sh`, which execs a bootstrapper which runs the client. A shell
+        // waiting on a foreground child does not act on `SIGTERM` until that
+        // child returns, so signalling only the root can leave everything
+        // running while looking like it worked. Signalling every descendant
+        // reaches whichever process is the one that actually quits.
+        let tree = crate::outside::descendants(pid);
+        let mut reached = 0usize;
+        for member in &tree {
+            let sent = rustix::process::Pid::from_raw(*member as i32)
+                .ok_or_else(|| std::io::Error::other("not a valid pid"))
+                .and_then(|target| {
+                    rustix::process::kill_process(target, rustix::process::Signal::TERM)
+                        .map_err(Into::into)
+                });
+            match sent {
+                Ok(()) => reached += 1,
+                // Racing its own exit is the ordinary case, not a problem.
+                Err(err) => tracing::debug!("could not signal {member}: {err}"),
+            }
+        }
+
+        if reached == 0 {
+            tracing::warn!("could not quit {program} ({pid}): nothing in its tree took a signal");
+            return;
+        }
+        tracing::info!(
+            "asked {program} ({pid}) to quit; SIGTERM to {reached} of {} processes",
+            tree.len()
+        );
+        // Deliberately still remembered. An application that ignores SIGTERM
+        // stays on the list, which is the honest thing to show: the button did
+        // what it could and the thing is still there. The liveness check in
+        // `windowless` drops it once it really goes.
     }
 }

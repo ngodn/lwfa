@@ -207,6 +207,22 @@ export type ToShell =
       program: string
       pid: number
     }
+  | {
+      /**
+       * Applications this session started that are still running with nothing
+       * on screen.
+       *
+       * There is no system tray in here, so an application that keeps running
+       * after its last window closes cannot be seen, focused or quit, and it
+       * goes on holding whatever it holds. Steam is the one that bites:
+       * closing its window is "minimise to tray", and it then keeps
+       * `~/.steam/steam.pipe` open, which is what the host's `steam.sh`
+       * checks before starting. Launching Steam on the machine itself fails
+       * until this session lets go.
+       */
+      type: "windowless"
+      apps: WindowlessApp[]
+    }
   /**
    * An application asked the desktop for a file dialog; the shell is it.
    *
@@ -445,6 +461,13 @@ export interface AccountInfo {
 }
 
 /** One launchable application, from a freedesktop `.desktop` entry. */
+export interface WindowlessApp {
+  /** The process this session started. */
+  pid: number
+  /** What to call it: the binary's name, which is what people recognise. */
+  program: string
+}
+
 export interface AppEntry {
   /** The desktop file's basename without its extension. */
   id: string
@@ -463,6 +486,13 @@ export type ToEngine =
   | { type: "focusWindow"; id: WindowId }
   | { type: "closeWindow"; id: WindowId }
   | { type: "quitApp"; id: WindowId }
+  /**
+   * End an application that is running with no window.
+   *
+   * SIGTERM, never SIGKILL, and the engine re-checks the program name against
+   * the pid before signalling so a reused pid cannot be hit by mistake.
+   */
+  | { type: "quitWindowless"; pid: number }
   /**
    * Launch a command line.
    *
@@ -1104,6 +1134,22 @@ export function decodeToShell(text: string): ToShell {
       if (!Array.isArray(list)) throw new ProtocolError(`${where}.apps: expected an array`)
       return { type: "apps", apps: list.map((app, i) => decodeApp(app, `${where}.apps[${i}]`)) }
     }
+    case "windowless": {
+      const where = `${at}.windowless`
+      noExtraKeys(o, ["type", "apps"], where)
+      const list = array(o, "apps", where)
+      return {
+        type: "windowless",
+        apps: list.map((app, i) => {
+          const entry = asObject(app, `${where}.apps[${i}]`)
+          noExtraKeys(entry, ["pid", "program"], `${where}.apps[${i}]`)
+          return {
+            pid: int(entry, "pid", `${where}.apps[${i}]`),
+            program: str(entry, "program", `${where}.apps[${i}]`),
+          }
+        }),
+      }
+    }
     case "fileChooser": {
       const where = `${at}.fileChooser`
       noExtraKeys(
@@ -1469,6 +1515,11 @@ export function decodeToEngine(text: string): ToEngine {
       const where = `${at}.${t}`
       noExtraKeys(o, ["type", "id"], where)
       return { type: t, id: int(o, "id", where) }
+    }
+    case "quitWindowless": {
+      const where = `${at}.quitWindowless`
+      noExtraKeys(o, ["type", "pid"], where)
+      return { type: "quitWindowless", pid: int(o, "pid", where) }
     }
     case "setViewport": {
       const where = `${at}.setViewport`

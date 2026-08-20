@@ -10,13 +10,19 @@
  */
 
 import { useSyncExternalStore } from "react"
-import type { AppEntry, AppIcon } from "@lwfa/proto"
+import type { AppEntry, AppIcon, WindowlessApp } from "@lwfa/proto"
 import { objectUrlFor, readCached, revokeAll, writeCached } from "@/lib/iconCache"
 
 let apps: AppEntry[] = []
 let icons = new Map<string, string>()
 let loading = false
-let snapshot: { apps: AppEntry[]; icons: Map<string, string>; loading: boolean } = {
+let windowless: WindowlessApp[] = []
+let snapshot: {
+  apps: AppEntry[]
+  icons: Map<string, string>
+  loading: boolean
+  windowless: WindowlessApp[]
+} = {
   apps,
   icons,
   loading,
@@ -25,7 +31,7 @@ const listeners = new Set<() => void>()
 
 function emit(): void {
   // Replaced, not mutated: React compares by identity.
-  snapshot = { apps, icons, loading }
+  snapshot = { apps, icons, loading, windowless }
   for (const listener of listeners) listener()
 }
 
@@ -129,9 +135,22 @@ export function appsRequested(): void {
   emit()
 }
 
+/**
+ * Applications still running here with nothing on screen.
+ *
+ * Sent unprompted whenever the answer changes, not in reply to a request, so
+ * there is no loading state to go with it: an empty list means nothing is
+ * stranded, which is the normal case.
+ */
+export function setWindowless(next: WindowlessApp[]): void {
+  windowless = next
+  emit()
+}
+
 /** Dropped on disconnect: another machine has a different list. */
 export function clearApps(): void {
   apps = []
+  windowless = []
   icons = new Map()
   loading = false
   // Every one of these holds its bytes alive until revoked.
@@ -150,6 +169,7 @@ export function useApps(): {
   apps: AppEntry[]
   icons: Map<string, string>
   loading: boolean
+  windowless: WindowlessApp[]
 } {
   return useSyncExternalStore(subscribe, get, get)
 }

@@ -410,6 +410,21 @@ pub enum ToShell {
         pid: u32,
     },
 
+    /// Applications this session started that are still running with nothing
+    /// on screen.
+    ///
+    /// There is no system tray in here, so an application that keeps running
+    /// after its last window closes becomes unreachable: it cannot be seen,
+    /// focused or quit, and it goes on holding whatever it holds. Steam is the
+    /// one that bites, because closing its window is "minimise to tray" and it
+    /// then keeps `~/.steam/steam.pipe` open, which is exactly what `steam.sh`
+    /// checks before starting. Launching Steam on the host after using it in
+    /// here fails until this session lets go.
+    ///
+    /// Reported rather than quit automatically: a windowless Steam may well be
+    /// downloading, and ending it would be worse than the problem.
+    Windowless { apps: Vec<WindowlessApp> },
+
     /// An application asked the desktop for a file dialog; the shell is it.
     ///
     /// Sent to exactly one session, the one that may interact, because the
@@ -922,6 +937,15 @@ pub enum SessionMode {
 /// One launchable application, from a freedesktop `.desktop` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowlessApp {
+    /// The process this session started.
+    pub pid: u32,
+    /// What to call it: the binary's name, which is what people recognise.
+    pub program: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AppEntry {
     /// The desktop file's basename without its extension, e.g. `org.gnome.Nautilus`.
     pub id: String,
@@ -1042,6 +1066,14 @@ pub enum ToEngine {
         /// Device pixel ratio, so the engine can capture at native resolution.
         scale: f64,
     },
+
+    /// End an application that is running with no window.
+    ///
+    /// `SIGTERM`, never `SIGKILL`, and only for a pid this session started and
+    /// still believes is windowless. The program name is re-checked against the
+    /// pid immediately before signalling, so a pid reused by something else in
+    /// the meantime cannot be hit by mistake.
+    QuitWindowless { pid: u32 },
 
     /// Ask for the installed applications. Answered with [`ToShell::Apps`].
     ///

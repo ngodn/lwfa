@@ -300,7 +300,7 @@ impl Lwfa {
     /// program writes to a tty and has no window of its own. Launching one
     /// without a terminal around it produces a process that runs, prints into
     /// the void, and never appears.
-    pub fn spawn(&self, command: &str, in_terminal: bool) {
+    pub fn spawn(&mut self, command: &str, in_terminal: bool) {
         let argv = split_command_line(command);
         let Some((program, args)) = argv.split_first() else {
             tracing::warn!("refusing to spawn an empty command");
@@ -369,8 +369,19 @@ impl Lwfa {
             }
         }
 
+        // Without this the child inherits the engine's blocked SIGTERM and can
+        // never be asked to quit. See `crate::childsig`.
+        crate::childsig::unblock_signals(&mut cmd);
+
         match cmd.spawn() {
-            Ok(child) => tracing::info!("spawned {command} as pid {}", child.id()),
+            Ok(child) => {
+                tracing::info!("spawned {command} as pid {}", child.id());
+                // Remembered so an application that outlives its last window
+                // can still be found. See `Lwfa::windowless`.
+                if let Some(program) = crate::outside::program_name(&command) {
+                    self.started.insert(child.id(), program);
+                }
+            }
             Err(err) => tracing::error!("failed to spawn {command}: {err}"),
         }
     }
@@ -493,8 +504,9 @@ impl Lwfa {
         );
     }
 
-    pub fn spawn_terminal(&self) {
-        self.spawn(&self.config.terminal(), false);
+    pub fn spawn_terminal(&mut self) {
+        let terminal = self.config.terminal();
+        self.spawn(&terminal, false);
     }
 
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
