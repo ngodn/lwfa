@@ -22,6 +22,7 @@ mod capture;
 mod config;
 mod clipboard;
 mod clipserve;
+mod hostbus;
 mod hostclip;
 mod cuda;
 mod encode;

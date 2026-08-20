@@ -134,6 +134,29 @@ impl Portal {
             return Err("dbus-daemon printed no address".into());
         }
 
+        // Anything the host serves that an application in here still needs.
+        //
+        // Started before the frontend so the names are owned by the time the
+        // first application connects; a client that asks early and gets
+        // "no such name" caches that answer for its lifetime. Not fatal if it
+        // fails: the session works without a keyring, it just cannot remember
+        // a password. See `crate::hostbus`.
+        //
+        // The host's address is read from the environment rather than passed
+        // in, and read here rather than kept from startup, because nothing in
+        // this process ever overwrites it: `DBUS_SESSION_BUS_ADDRESS` is set on
+        // the children this module spawns, never on the engine itself.
+        match std::env::var("DBUS_SESSION_BUS_ADDRESS") {
+            Ok(host) => {
+                if let Err(err) = crate::hostbus::start(&address, &host, crate::hostbus::RELAYED) {
+                    tracing::warn!("no host services inside the session: {err}");
+                }
+            }
+            Err(_) => tracing::warn!(
+                "no DBUS_SESSION_BUS_ADDRESS, so the host's keyring is not reachable in here"
+            ),
+        }
+
         // The backend, on that bus, under the name the portal definition
         // promises.
         let connection = match backend(&address, events) {
