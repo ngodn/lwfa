@@ -144,10 +144,100 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Not `run(..)?`: a loop that fell over still leaves a socket behind, and
     // that is exactly the case where nobody is around to tidy up afterwards.
     let outcome = event_loop.run(None, &mut data, |_| {});
-    remove_socket(&socket_name);
-    outcome?;
 
-    Ok(())
+    // From here on, nothing is allowed to take longer than a moment. See
+    // `arm_exit_watchdog` for why that is worth a thread.
+    arm_exit_watchdog(SHUTDOWN_DEADLINE);
+
+    // Explicit, and before the socket goes: `Portal` kills its private bus and
+    // portal frontend, and `PrivateSink` hands back the `pactl` modules it
+    // loaded. Both shell out or wait on a child, which is exactly the kind of
+    // thing the watchdog above exists to survive.
+    drop(data);
+    remove_socket(&socket_name);
+
+    if let Err(err) = outcome {
+        tracing::error!("the event loop stopped with an error: {err}");
+        finish(1);
+    }
+    finish(0)
+}
+
+/// How long the whole teardown gets before the process is ended for it.
+///
+/// Measured on this machine, a healthy shutdown is 63ms with nothing streaming
+/// and 126ms with a shell, an encoder session and the private audio sink live.
+/// Two seconds is fifteen times the worst of those and still far inside
+/// `TimeoutStopSec`, so a normal exit never meets it and a stuck one never
+/// reaches systemd's `SIGKILL`.
+const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// End the process without running libc's exit handlers.
+///
+/// Returning from `main` unwinds and then runs every `atexit` handler, and one
+/// of those belongs to the NVIDIA EGL driver. It segfaults: three core dumps in
+/// two days, every one of them with the same stack, `exit` into
+/// `libEGL_nvidia.so` into an `ioctl`. The crash is harmless in the sense that
+/// the work is already done, but systemd sees `code=dumped, status=11/SEGV`,
+/// records a failure, and `Restart=on-failure` then restarts a compositor that
+/// had been asked to stop.
+///
+/// Nothing this process owns needs an exit handler. The interesting cleanup is
+/// in `Drop`, which has already run by here; everything else, file descriptors,
+/// GPU contexts, the uinput device, mappings, is the kernel's to reclaim, and
+/// the private bus and portal frontend die by `PR_SET_PDEATHSIG` regardless.
+/// The one thing `_exit` skips that matters is buffered output, so that is
+/// flushed first.
+#[allow(unsafe_code)]
+fn finish(code: i32) -> ! {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    // SAFETY: `_exit` is async-signal-safe and never returns. It is called here
+    // with every destructor already run and both streams flushed.
+    unsafe { libc::_exit(code) }
+}
+
+/// Guarantee the process ends, however badly the teardown goes.
+///
+/// The engine has twice failed to exit within `TimeoutStopSec` on this machine
+/// and been `SIGKILL`ed, and the cost of that is much higher than it looks: the
+/// unit uses the default `KillMode=control-group`, so the kill takes down
+/// everything in the cgroup, which on a gaming session is Steam and whatever it
+/// was running. A restart is supposed to cost a reconnect, not a save.
+///
+/// It is also what puts the host's "application not responding" dialog on
+/// screen. Once the loop has stopped, nothing is dispatching the host
+/// connection, so the preview window stops answering `xdg_wm_base` pings, and
+/// with `misc:anr_missed_pings` at its default the host gives up in a couple of
+/// seconds. A shutdown that is over before then never gets asked twice.
+///
+/// Neither cause is reproducible here: shutdown was measured at 63ms to 126ms
+/// across every combination of shell, Xwayland, preview window, encoder session
+/// and audio sink. So this does not try to fix a specific stuck step. It bounds
+/// all of them, including the ones added later.
+#[allow(unsafe_code)]
+fn arm_exit_watchdog(deadline: std::time::Duration) {
+    let spawned = std::thread::Builder::new()
+        .name("lwfa-exit-watchdog".to_string())
+        .spawn(move || {
+            std::thread::sleep(deadline);
+            // Deliberately not a panic or a log through `tracing`: the reason
+            // this thread is running at all is that something in the teardown
+            // may be holding a lock, and taking one here would join it.
+            let msg = b"lwfa: shutdown did not finish in time; ending the process\n";
+            // SAFETY: a single `write` to fd 2 and then `_exit`, both
+            // async-signal-safe, allocating nothing and touching no lock.
+            unsafe {
+                libc::write(2, msg.as_ptr().cast(), msg.len());
+                libc::_exit(0);
+            }
+        });
+    if let Err(err) = spawned {
+        // Not fatal. Without it the old behaviour is back, which is a slow
+        // exit rather than no exit.
+        tracing::warn!("no shutdown watchdog: {err}");
+    }
 }
 
 /// Make a shutdown signal an ordinary loop event rather than a process kill.
