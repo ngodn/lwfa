@@ -3,6 +3,7 @@
   "window": {
     "id": 7,
     "appId": "firefox",
-    "title": null
+    "title": null,
+    "fullscreen": false
   }
 }

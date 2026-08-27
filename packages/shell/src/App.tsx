@@ -566,19 +566,18 @@ export function App(): React.ReactElement {
           //
           // The engine's hello names windows and focus but not arrangement,
           // because arrangement is this side's job, so the rebuilt strip
-          // starts with nothing fullscreen. Pushing that as-is tells the
+          // starts with nothing fullscreen. Laying it out as-is tells the
           // engine to un-fullscreen the game, the game immediately asks
-          // again, and the round trip costs two encoder rebuilds and a
-          // visible flicker, in a loop while the connection is flapping.
-          // This page reconnected rather than reloaded, so it still knows
-          // what was fullscreen; carry it over while the window is alive.
-          const before = stripRef.current.workspaces[stripRef.current.focus];
-          const wasFullscreen = before?.fullscreen ?? null;
-          if (
-            wasFullscreen !== null &&
-            message.windows.some((w) => w.id === wasFullscreen)
-          ) {
-            next = setFullscreen(next, wasFullscreen, true, out, configRef.current);
+          // again, and the round trip costs an encoder rebuild and a visible
+          // flicker on every reconnect. The engine now says which windows
+          // fill the output (`WindowInfo.fullscreen`), so the fullscreen state
+          // is restored from the wire rather than from this page's own memory:
+          // that also covers a page that reloaded or a fresh device, where the
+          // old carry-over from local state knew nothing.
+          for (const w of message.windows) {
+            if (w.fullscreen) {
+              next = setFullscreen(next, w.id, true, out, configRef.current);
+            }
           }
 
           stripRef.current = next;

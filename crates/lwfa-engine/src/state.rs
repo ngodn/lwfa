@@ -531,7 +531,23 @@ impl Lwfa {
                 (blank(x11.class()), blank(x11.title()))
             }
         };
-        Some(WindowInfo { id, app_id, title })
+        Some(WindowInfo { id, app_id, title, fullscreen: self.window_fills_output(id) })
+    }
+
+    /// Whether a window currently fills the whole output, which is what the
+    /// engine treats as fullscreen.
+    ///
+    /// The same rule `send_configures` uses to tell a client it is fullscreen:
+    /// a window covering the output *is* fullscreen, however it got that size.
+    /// Read on demand from the committed geometry, so a window still fullscreen
+    /// through a disconnect grace reports so to whoever reconnects.
+    fn window_fills_output(&self, id: WindowId) -> bool {
+        let Some(window) = self.layout.window(id) else {
+            return false;
+        };
+        let output = self.layout.output_size();
+        let size = window.geometry().size;
+        size.w >= output.w && size.h >= output.h
     }
 
     /// Report a title or app id change, but only when something actually

@@ -41,6 +41,14 @@ export interface WindowInfo {
   id: WindowId
   appId: string | null
   title: string | null
+  /**
+   * Whether the window currently fills the whole output.
+   *
+   * Lets a shell that has just connected lay a fullscreen window out at full
+   * size straight away, rather than windowed-then-fullscreen once the live
+   * `fullscreenRequest` event catches up (which never fires on a reconnect).
+   */
+  fullscreen: boolean
 }
 
 export interface SpringSpec {
@@ -897,11 +905,12 @@ function decodeRect(value: unknown, at: string): Rect {
 
 function decodeWindowInfo(value: unknown, at: string): WindowInfo {
   const o = asObject(value, at)
-  noExtraKeys(o, ["id", "appId", "title"], at)
+  noExtraKeys(o, ["id", "appId", "title", "fullscreen"], at)
   return {
     id: int(o, "id", at),
     appId: nullableStr(o, "appId", at),
     title: nullableStr(o, "title", at),
+    fullscreen: bool(o, "fullscreen", at),
   }
 }
 

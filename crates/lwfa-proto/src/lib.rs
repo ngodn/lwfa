@@ -92,6 +92,14 @@ pub struct WindowInfo {
     pub app_id: Option<String>,
     /// From `xdg_toplevel.set_title`. Changes over a window's life.
     pub title: Option<String>,
+    /// Whether the window currently fills the whole output.
+    ///
+    /// Carried here so a shell that has just connected can lay a fullscreen
+    /// window out at full size straight away. Without it a reconnecting shell
+    /// only learns of fullscreen from the live `FullscreenRequest` event, which
+    /// never fires on a reconnect, so it lays the window out windowed and the
+    /// encoder is rebuilt when the size is corrected a beat later.
+    pub fullscreen: bool,
 }
 
 /// Spring parameters for an animation intent.
@@ -1430,6 +1438,7 @@ mod tests {
                 id: WindowId(1),
                 app_id: Some("Alacritty".into()),
                 title: None,
+                fullscreen: false,
             }],
             focused: Some(WindowId(1)),
         };
@@ -1477,6 +1486,7 @@ mod tests {
             id: WindowId(1),
             app_id: Some("foo".into()),
             title: None,
+            fullscreen: false,
         })
         .unwrap();
         assert!(json.contains("\"appId\""), "got {json}");

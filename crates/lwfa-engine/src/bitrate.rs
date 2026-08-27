@@ -145,12 +145,17 @@ fn rungs_to_drop(queueing: Duration) -> usize {
 
 /// How long a departed client's level is still worth resuming from.
 ///
-/// Matched to the engine's own session grace (`state::SESSION_GRACE`, 45s) with
-/// room to spare, because they answer the same question: within this long, a
-/// connection arriving is the one that just left, coming back. Every reconnect
-/// actually measured landed inside four seconds; the ones that took hours were
-/// a different sitting entirely, and their link tells this one nothing.
-const RESUME_WINDOW: Duration = Duration::from_secs(60);
+/// Comfortably past the engine's own session grace (`state::SESSION_GRACE`,
+/// 45s), because they answer the same question: within this long, a connection
+/// arriving is the one that just left, coming back. Most reconnects land inside
+/// a few seconds, but iOS suspends a backgrounded web app and drops its socket,
+/// so a genuine reconnect can arrive a minute or more later; a journal caught
+/// one at ~62s that missed the old 60s window and re-ramped from a low budget,
+/// rebuilding the encoder several times on the way back up. Two minutes covers
+/// that without pretending a link measured an hour ago is this one: a resumed
+/// level that no longer fits is one congestion episode and a cut, far cheaper
+/// than the ramp it replaces.
+const RESUME_WINDOW: Duration = Duration::from_secs(120);
 
 /// The longest a single cut may wait for its own queue to drain.
 ///

@@ -10,12 +10,14 @@
     {
       "id": 1,
       "appId": "Alacritty",
-      "title": "~/development/lwfa"
+      "title": "~/development/lwfa",
+      "fullscreen": true
     },
     {
       "id": 2,
       "appId": null,
-      "title": null
+      "title": null,
+      "fullscreen": false
     }
   ],
   "focused": 1,
