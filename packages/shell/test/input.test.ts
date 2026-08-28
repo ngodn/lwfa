@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { edgePark, isTextEntry, shouldForwardKeydown, windowPoint } from "../src/input"
+import { edgeLeave, edgePark, isTextEntry, shouldForwardKeydown, windowPoint } from "../src/input"
 
 /** A DOM-free stand-in, since these run in node. */
 class FakeElement {
@@ -191,5 +191,37 @@ describe("edgePark", () => {
   it("treats just past the margin as inside", () => {
     expect(edgePark({ x: margin + 1, y: 450 }, content, margin).parked).toBe(false)
     expect(edgePark({ x: 1599 - margin - 1, y: 450 }, content, margin).parked).toBe(false)
+  })
+})
+
+describe("edgeLeave", () => {
+  const content = { width: 1600, height: 900 }
+  const reach = 200
+
+  it("pans true up from the top, keeping x (no diagonal)", () => {
+    // The bug the user hit: leaving the top must snap only y, so the pan is
+    // straight up, not the up-left corner.
+    expect(edgeLeave({ x: 800, y: 30 }, content, reach)).toEqual({ x: 800, y: 0 })
+  })
+
+  it("pans true down from the bottom, keeping x", () => {
+    expect(edgeLeave({ x: 800, y: 870 }, content, reach)).toEqual({ x: 800, y: 899 })
+  })
+
+  it("pans true left and right, keeping y", () => {
+    expect(edgeLeave({ x: 15, y: 450 }, content, reach)).toEqual({ x: 0, y: 450 })
+    expect(edgeLeave({ x: 1580, y: 450 }, content, reach)).toEqual({ x: 1599, y: 450 })
+  })
+
+  it("picks the nearer edge when a fast sample fell short", () => {
+    // 120px shy of the right edge, but far from top/bottom: it left through the
+    // right, so pan right, not up or down.
+    expect(edgeLeave({ x: 1480, y: 450 }, content, reach)).toEqual({ x: 1599, y: 450 })
+  })
+
+  it("ignores a leave from the middle (idle or focus loss)", () => {
+    // No edge within reach: this is not the pointer crossing out, so it must
+    // not start a pan. This is the stray up-left park the user saw.
+    expect(edgeLeave({ x: 800, y: 450 }, content, reach)).toBeNull()
   })
 })

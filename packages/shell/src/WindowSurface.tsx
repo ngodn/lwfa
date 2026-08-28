@@ -19,7 +19,7 @@
 import { tap } from "@/lib/haptics"
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import type { Rect, WindowId } from "@lwfa/proto"
-import { edgePark, evdevFromButton, wheelDelta, windowPoint } from "./input.js"
+import { edgeLeave, edgePark, evdevFromButton, wheelDelta, windowPoint } from "./input.js"
 import { describe, measure, probeEnabled } from "@/lib/captureProbe"
 import { LongPress } from "@/lib/longPress"
 import { useDock } from "@/lib/dock"
@@ -58,6 +58,21 @@ const PINCH_ZOOM_FACTOR = 0.35
  * an easy target. See `edgePark`.
  */
 const EDGE_PARK_MARGIN = 24
+
+/**
+ * How far, in output pixels, a leaving pointer's last inside position may be
+ * from an edge and still count as it crossing out that edge. Generous, because
+ * a fast flick is sampled well short of the edge before the leave fires. See
+ * `edgeLeave`.
+ */
+const LEAVE_EDGE_REACH = 200
+
+/**
+ * How recently, in ms, the pointer must have moved for a leave to count as it
+ * actively crossing an edge. An older leave is an idle or focus-loss one and
+ * must not start a pan. See `edgeLeave`.
+ */
+const LEAVE_ACTIVE_MS = 250
 
 export interface WindowSurfaceProps {
   id: WindowId
@@ -166,6 +181,11 @@ export const WindowSurface = memo(function WindowSurface({
     },
     [filling, contentSize],
   )
+  // The last place a real pointer was seen inside this window, and when. The
+  // leave handler reads it to tell which edge a fast pointer left through,
+  // because the leave event's own coordinates are unreliable at the viewport
+  // edge. See `edgeLeave`.
+  const hover = useRef<{ x: number; y: number; t: number } | null>(null)
   // Each finger in flight while the mouse surface is open, so its move and
   // release match its start. Untouched, and unread, in every other mode.
   const mousePts = useRef(
@@ -388,6 +408,7 @@ export const WindowSurface = memo(function WindowSurface({
           return
         }
         const button = evdevFromButton(event.button)
+        hover.current = { x: point.x, y: point.y, t: performance.now() }
         send({ kind: "motion", ...edgeAdjust(point) })
         if (button !== null) send({ kind: "button", button, pressed: true })
       }}
@@ -449,6 +470,9 @@ export const WindowSurface = memo(function WindowSurface({
         const last = lastMove.current.get(event.pointerId)
         if (last && last.x === point.x && last.y === point.y) return
         lastMove.current.set(event.pointerId, point)
+        if (event.pointerType !== "touch") {
+          hover.current = { x: point.x, y: point.y, t: performance.now() }
+        }
         send(
           event.pointerType === "touch"
             ? { kind: "touchMotion", id: event.pointerId, ...point }
@@ -456,17 +480,21 @@ export const WindowSurface = memo(function WindowSurface({
         )
       }}
       onPointerLeave={(event) => {
-        // A pointer leaving a fullscreen window is a pointer heading past its
-        // edge, which a fast move can do without ever being sampled *at* the
-        // edge. Send one last motion pinned to the edge it left through, so the
-        // game keeps edge-scrolling instead of losing the pointer. Only for a
-        // real pointer with no button held: a drag stays captured and never
-        // leaves, and touch has its own path. See `edgePark`.
+        // A pointer leaving a fullscreen window is a fast move heading past an
+        // edge, sampled short of it: the signal to start the pan. Which edge
+        // comes from the last position the pointer held *inside* the window,
+        // not from this event, whose coordinates read (0,0) at the viewport
+        // edge and made every top or bottom exit pan up-left. Snaps one axis
+        // only, so the pan is straight, and ignores an idle or focus-loss
+        // leave. Real pointer, no button held (a drag stays captured); touch
+        // has its own path. See `edgeLeave`.
         if (event.pointerType === "touch" || !filling || event.buttons !== 0) return
-        const point = windowPoint(event, event.currentTarget, contentSize())
-        if (!point) return
-        const edge = edgeAdjust(point)
+        const at = hover.current
+        if (!at || performance.now() - at.t > LEAVE_ACTIVE_MS) return
+        const edge = edgeLeave(at, contentSize(), LEAVE_EDGE_REACH)
+        if (!edge) return
         lastMove.current.set(event.pointerId, edge)
+        hover.current = { ...edge, t: performance.now() }
         send({ kind: "motion", ...edge })
       }}
       onPointerUp={(event) => {

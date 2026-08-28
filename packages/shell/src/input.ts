@@ -172,6 +172,42 @@ export function edgePark(
 }
 
 /**
+ * Which fullscreen edge a leaving pointer was heading through.
+ *
+ * A pointer moved fast at an edge is sampled short of it and then leaves the
+ * window, so the game never sees it arrive. The `pointerleave` event is the
+ * signal, but its own coordinates are unreliable (they read `(0, 0)` when the
+ * pointer leaves the viewport), so this works from `at`, the last position the
+ * pointer actually held *inside* the window.
+ *
+ * It snaps only the single nearest edge's axis, keeping the other where the
+ * pointer was, so the pan is pure up, down, left or right and never the phantom
+ * up-left diagonal that trusting the event's `(0, 0)` produced. Returns null
+ * when the last position was not within `reach` of any edge, which is an idle or
+ * focus-loss leave rather than the pointer crossing out, and must not pan.
+ */
+export function edgeLeave(
+  at: { x: number; y: number },
+  content: { width: number; height: number },
+  reach: number,
+): { x: number; y: number } | null {
+  const maxX = content.width - 1
+  const maxY = content.height - 1
+  const x = at.x < 0 ? 0 : at.x > maxX ? maxX : at.x
+  const y = at.y < 0 ? 0 : at.y > maxY ? maxY : at.y
+  const left = x
+  const right = maxX - x
+  const top = y
+  const bottom = maxY - y
+  const min = Math.min(left, right, top, bottom)
+  if (min > reach) return null
+  if (min === left) return { x: 0, y }
+  if (min === right) return { x: maxX, y }
+  if (min === top) return { x, y: 0 }
+  return { x, y: maxY }
+}
+
+/**
  * Scroll deltas in logical pixels.
  *
  * `deltaMode` matters: browsers report lines or pages rather than pixels
