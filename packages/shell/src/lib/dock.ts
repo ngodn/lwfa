@@ -21,7 +21,7 @@
 
 import { useSyncExternalStore } from "react"
 
-export type DockSurface = "none" | "keyboard" | "gamepad"
+export type DockSurface = "none" | "keyboard" | "gamepad" | "mouse"
 
 let current: DockSurface = "none"
 const listeners = new Set<() => void>()

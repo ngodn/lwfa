@@ -22,6 +22,8 @@ import type { Rect, WindowId } from "@lwfa/proto"
 import { evdevFromButton, wheelDelta, windowPoint } from "./input.js"
 import { describe, measure, probeEnabled } from "@/lib/captureProbe"
 import { LongPress } from "@/lib/longPress"
+import { useDock } from "@/lib/dock"
+import { beginDrag, endDrag, getMouseMode } from "@/lib/mouse"
 import { getPrefs } from "@/lib/prefs"
 import { useFrame } from "@/lib/frames"
 import { log } from "@/lib/log"
@@ -36,6 +38,18 @@ const PROBE = probeEnabled(globalThis.location?.search ?? "")
 
 /** Linux `BTN_RIGHT`, the same code a real right button sends. */
 const RIGHT_BUTTON = 0x111
+
+/** The evdev code each virtual-mouse click type sends. */
+const MOUSE_BUTTON = { left: 0x110, right: 0x111, middle: 0x112 } as const
+
+/** Finger travel, in window pixels, past which a press becomes a drag. */
+const MOUSE_MOVE_THRESHOLD = 6
+
+/** evdev `KEY_LEFTCTRL`, held while a pinch zooms (zoom is Ctrl plus a wheel). */
+const LEFT_CTRL = 29
+
+/** How much a change in finger distance turns the wheel, for pinch-to-zoom. */
+const PINCH_ZOOM_FACTOR = 0.35
 
 export interface WindowSurfaceProps {
   id: WindowId
@@ -81,6 +95,7 @@ export type SurfaceInput =
   | { kind: "motion"; x: number; y: number }
   | { kind: "button"; button: number; pressed: boolean }
   | { kind: "axis"; horizontal: number; vertical: number }
+  | { kind: "key"; key: number; pressed: boolean }
   | { kind: "touchDown"; id: number; x: number; y: number }
   | { kind: "touchMotion"; id: number; x: number; y: number }
   | { kind: "touchUp"; id: number }
@@ -127,6 +142,21 @@ export const WindowSurface = memo(function WindowSurface({
   // this one. See lib/frames.ts.
   const frame = useFrame(id)
   const send = useCallback((event: SurfaceInput) => onInput(id, event), [onInput, id])
+  // Which input surface is on screen. The virtual-mouse behaviour below is
+  // gated strictly on this: when it is not `"mouse"`, none of that code runs
+  // and a tap is a touch exactly as it always was. See `lib/mouse.ts`.
+  const dock = useDock()
+  // Each finger in flight while the mouse surface is open, so its move and
+  // release match its start. Untouched, and unread, in every other mode.
+  const mousePts = useRef(
+    new Map<
+      number,
+      { startX: number; startY: number; x: number; y: number; moved: boolean; button: number; done: boolean }
+    >(),
+  )
+  // A two-finger pinch in progress: the distance it was last at, and whether
+  // Ctrl is being held so the far end reads the wheel as a zoom.
+  const pinch = useRef<{ dist: number; ctrl: boolean } | null>(null)
 
   // Hand the element to the animator, which owns its transform and box size
   // from here on. A layout effect, so the position is written before the
@@ -271,6 +301,52 @@ export const WindowSurface = memo(function WindowSurface({
         event.currentTarget.setPointerCapture(event.pointerId)
         lastMove.current.set(event.pointerId, point)
 
+        // Virtual mouse: a tap here becomes a real click at this exact point,
+        // on release, so a drag or a second finger (pinch) can pre-empt it. All
+        // of this is gated on the mouse surface being open; every other mode
+        // falls through to the untouched touch path below.
+        if (dock === "mouse" && event.pointerType === "touch") {
+          mousePts.current.set(event.pointerId, {
+            startX: point.x,
+            startY: point.y,
+            x: point.x,
+            y: point.y,
+            moved: false,
+            button: 0,
+            done: false,
+          })
+          // A second finger starts a pinch. Whatever the first finger was
+          // holding (a drag) is released; nothing is clicked.
+          if (mousePts.current.size === 2) {
+            for (const p of mousePts.current.values()) {
+              if (p.button) {
+                send({ kind: "button", button: p.button, pressed: false })
+                p.button = 0
+              }
+              p.done = true
+            }
+            const [a, b] = [...mousePts.current.values()]
+            if (a && b) {
+              pinch.current = { dist: Math.hypot(a.x - b.x, a.y - b.y), ctrl: false }
+            }
+            return
+          }
+          if (mousePts.current.size > 2) return
+          const m = getMouseMode()
+          // Ending a locked drag: arrive here and let go, immediately.
+          if (m.dragActive) {
+            send({ kind: "motion", ...point })
+            send({ kind: "button", button: m.dragButton, pressed: false })
+            endDrag()
+            const held = mousePts.current.get(event.pointerId)
+            if (held) held.done = true
+            return
+          }
+          // Just position the pointer for now; the click fires on release.
+          send({ kind: "motion", ...point })
+          return
+        }
+
         if (event.pointerType === "touch") {
           send({ kind: "touchDown", id: event.pointerId, ...point })
           // A finger held still is a right click. Started here rather than
@@ -296,6 +372,52 @@ export const WindowSurface = memo(function WindowSurface({
         if (button !== null) send({ kind: "button", button, pressed: true })
       }}
       onPointerMove={(event) => {
+        // Virtual mouse: pinch zooms, a finger past the threshold drags, a
+        // hover moves. Gated; the touch path below is untouched otherwise.
+        if (dock === "mouse" && event.pointerType === "touch") {
+          const p = mousePts.current.get(event.pointerId)
+          if (!p) return
+          const point = windowPoint(event, event.currentTarget, contentSize())
+          if (!point) return
+          p.x = point.x
+          p.y = point.y
+          // Pinch: a change in the distance between two fingers turns the wheel
+          // with Ctrl held, which is what every app reads as zoom.
+          if (pinch.current && mousePts.current.size >= 2) {
+            const [a, b] = [...mousePts.current.values()]
+            if (!a || !b) return
+            const dist = Math.hypot(a.x - b.x, a.y - b.y)
+            const delta = dist - pinch.current.dist
+            pinch.current.dist = dist
+            if (Math.abs(delta) >= 1) {
+              if (!pinch.current.ctrl) {
+                send({ kind: "key", key: LEFT_CTRL, pressed: true })
+                pinch.current.ctrl = true
+              }
+              // Fingers apart is zoom in, which is a wheel-up (negative).
+              send({ kind: "axis", horizontal: 0, vertical: -delta * PINCH_ZOOM_FACTOR })
+            }
+            return
+          }
+          if (p.done) return
+          const last = lastMove.current.get(event.pointerId)
+          if (last && last.x === point.x && last.y === point.y) return
+          lastMove.current.set(event.pointerId, point)
+          const m = getMouseMode()
+          if (m.hover) {
+            send({ kind: "motion", ...point })
+            return
+          }
+          // Crossing the threshold turns a press into a drag: press the button
+          // now, at the start, then let the motion below drag it.
+          if (!p.button && !p.moved && Math.hypot(point.x - p.startX, point.y - p.startY) >= MOUSE_MOVE_THRESHOLD) {
+            p.moved = true
+            p.button = MOUSE_BUTTON[m.button]
+            send({ kind: "button", button: p.button, pressed: true })
+          }
+          send({ kind: "motion", ...point })
+          return
+        }
         // A finger that wanders is a drag, not a press.
         if (event.pointerType === "touch") longPress.current.move(event)
         const point = windowPoint(event, event.currentTarget, contentSize())
@@ -315,6 +437,33 @@ export const WindowSurface = memo(function WindowSurface({
       }}
       onPointerUp={(event) => {
         lastMove.current.delete(event.pointerId)
+        // Virtual mouse: a plain tap clicks here now; a drag releases (or
+        // latches, under drag-lock); a lifted pinch finger just ends the pinch.
+        if (dock === "mouse" && event.pointerType === "touch") {
+          const p = mousePts.current.get(event.pointerId)
+          mousePts.current.delete(event.pointerId)
+          if (pinch.current) {
+            if (mousePts.current.size < 2) {
+              if (pinch.current.ctrl) send({ kind: "key", key: LEFT_CTRL, pressed: false })
+              pinch.current = null
+            }
+            return
+          }
+          if (!p || p.done) return
+          const m = getMouseMode()
+          if (m.hover) return
+          if (p.button) {
+            // A drag. Drag-lock latches it down; otherwise it lets go here.
+            if (m.dragLock) beginDrag(p.button)
+            else send({ kind: "button", button: p.button, pressed: false })
+            return
+          }
+          // A tap: one full click at the point, with the latched button.
+          const button = MOUSE_BUTTON[m.button]
+          send({ kind: "button", button, pressed: true })
+          send({ kind: "button", button, pressed: false })
+          return
+        }
         if (event.pointerType === "touch") {
           // A press that became a right click already sent its release, and
           // sending the tap as well would open a menu and immediately choose
@@ -328,6 +477,18 @@ export const WindowSurface = memo(function WindowSurface({
       }}
       onPointerCancel={(event) => {
         lastMove.current.delete(event.pointerId)
+        // Never leave a button or Ctrl stuck: a cancelled gesture lets go of
+        // whatever it was holding, whatever drag-lock says.
+        if (dock === "mouse" && event.pointerType === "touch") {
+          const p = mousePts.current.get(event.pointerId)
+          mousePts.current.delete(event.pointerId)
+          if (pinch.current && mousePts.current.size < 2) {
+            if (pinch.current.ctrl) send({ kind: "key", key: LEFT_CTRL, pressed: false })
+            pinch.current = null
+          }
+          if (p && p.button) send({ kind: "button", button: p.button, pressed: false })
+          return
+        }
         if (event.pointerType !== "touch") return
         if (longPress.current.finish()) return
         send({ kind: "touchUp", id: event.pointerId })

@@ -30,6 +30,7 @@ const WindowsPanel = lazy(() => import("@/panels/WindowsPanel"))
 const ClipboardPanel = lazy(() => import("@/panels/ClipboardPanel"))
 const KeyboardPanel = lazy(() => import("@/panels/KeyboardPanel"))
 const GamepadPanel = lazy(() => import("@/panels/GamepadPanel"))
+const MousePanel = lazy(() => import("@/panels/MousePanel"))
 
 /**
  * Partial on purpose: not every rail button has a panel.
@@ -48,6 +49,7 @@ const PANELS: Partial<Record<NavItemId, React.LazyExoticComponent<React.Componen
   clipboard: ClipboardPanel,
   keyboard: KeyboardPanel,
   gamepad: GamepadPanel,
+  mouse: MousePanel,
 }
 
 export interface PanelHostProps {

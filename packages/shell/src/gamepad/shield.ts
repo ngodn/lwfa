@@ -13,7 +13,7 @@ import type { SurfacePlacement } from "@/lib/prefs"
 
 export interface ShieldInput {
   /** Which surface is docked, if any. */
-  dock: "none" | "keyboard" | "gamepad"
+  dock: "none" | "keyboard" | "gamepad" | "mouse"
   /** The controller's placement. Only `overlay` sits over the window. */
   placement: SurfacePlacement
   /** The preference itself. */

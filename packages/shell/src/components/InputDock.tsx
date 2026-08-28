@@ -29,7 +29,7 @@
  * on every pointer move.
  */
 
-import { Suspense, lazy, memo, useCallback, useEffect, useRef } from "react"
+import { Suspense, lazy, memo, useCallback, useEffect, useRef, useState } from "react"
 import { GripHorizontal, Settings2, Shield, ShieldOff, X } from "lucide-react"
 import { setDock, useDock } from "@/lib/dock"
 import { patchPrefs, usePrefSection } from "@/lib/prefs"
@@ -44,6 +44,9 @@ const Keyboard = lazy(() =>
 )
 const GamepadOverlay = lazy(() =>
   import("@/gamepad/GamepadOverlay").then((m) => ({ default: m.GamepadOverlay })),
+)
+const MouseOverlay = lazy(() =>
+  import("@/mouse/MouseOverlay").then((m) => ({ default: m.MouseOverlay })),
 )
 
 /** Fractions of the content area's height. */
@@ -63,13 +66,17 @@ const DEFAULT_FRACTION = 0.42
 
 export interface InputDockProps {
   /** Opens the settings panel for whichever surface is docked. */
-  onOpenSettings: (surface: "keyboard" | "gamepad") => void
+  onOpenSettings: (surface: "keyboard" | "gamepad" | "mouse") => void
 }
 
 export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockProps) {
   const dock = useDock()
   const gamepadPrefs = usePrefSection("gamepad")
   const keyboardPrefs = usePrefSection("keyboard")
+  const mousePrefs = usePrefSection("mouse")
+  // Arranging the mouse clusters. Local, and cleared whenever the mouse is not
+  // the surface on screen, so it never lingers into another session.
+  const [mouseEditing, setMouseEditing] = useState(false)
   const gamepad = useGamepad()
   const setPads = useSetPads()
   const actions = useSessionActions()
@@ -102,6 +109,20 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
     [actions],
   )
 
+  // The virtual mouse's direct actions: the side buttons and the scroll strip
+  // go straight to the seat, since a button or a wheel has no window of its
+  // own (the click at a *point* travels through the window surface instead).
+  const onPointerButton = useCallback(
+    (button: number, pressed: boolean) => actions.send({ type: "pointerButton", button, pressed }),
+    [actions],
+  )
+
+  const onPointerAxis = useCallback(
+    (horizontal: number, vertical: number) =>
+      actions.send({ type: "pointerAxis", horizontal, vertical }),
+    [actions],
+  )
+
   // Attach a real controller for as long as the pad is on screen.
   //
   // The device the engine creates is visible to the whole machine, which is
@@ -120,6 +141,11 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
     actions.send({ type: "setGamepad", enabled: true })
     return () => actions.send({ type: "setGamepad", enabled: false })
   }, [padOpen, controllerMode, actions, session])
+
+  // Leaving the mouse surface ends its edit mode.
+  useEffect(() => {
+    if (dock !== "mouse") setMouseEditing(false)
+  }, [dock])
 
   // Straight to the DOM. The alternative re-renders the whole keyboard on every
   // pointermove of the drag, which on a tablet is visibly janky.
@@ -146,6 +172,11 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
   if (dock === "none") return null
 
   const isGamepad = dock === "gamepad"
+  const isMouse = dock === "mouse"
+  // The gamepad and the mouse both float over the desktop with taps passing
+  // through the gaps; the keyboard displaces it. This groups the two that share
+  // that geometry and chrome, so the styling below stays one rule, not two.
+  const floats = isGamepad || isMouse
 
   // Overlay or stacked, per surface. See `Prefs.gamepad.placement`.
   //
@@ -155,7 +186,8 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
   // game beats thumbs on top of it; held in landscape a keyboard that takes
   // 42% of the height leaves a letterbox to read.
   const floating =
-    (isGamepad ? gamepadPrefs.placement : keyboardPrefs.placement) === "overlay"
+    (isGamepad ? gamepadPrefs.placement : isMouse ? mousePrefs.placement : keyboardPrefs.placement) ===
+    "overlay"
 
   return (
     <div
@@ -167,21 +199,23 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         "z-20 flex flex-col pb-safe",
         // Stacked: a row of its own, in flow, and the desktop shrinks.
         !floating && "relative shrink-0 border-t border-border bg-card/95 backdrop-blur-xl",
-        // A floating controller covers the whole area, because its pads are
-        // scattered to the corners rather than gathered into a strip.
-        // `pointer-events-none` so taps between them still reach the window
-        // behind, and each pad turns them back on for itself.
-        floating && isGamepad && "pointer-events-none absolute inset-0",
+        // A floating controller or mouse covers the whole area, because its
+        // controls are scattered to the edges rather than gathered into a
+        // strip. `pointer-events-none` so taps between them still reach the
+        // window behind, and each control turns them back on for itself. For
+        // the mouse this pass-through is the whole point: the tap on the
+        // window is the click.
+        floating && floats && "pointer-events-none absolute inset-0",
         // A floating keyboard is still a strip along the bottom; it just sits
         // over the desktop instead of pushing it up. It keeps its pointer
         // events, since a key with none would do nothing.
         floating &&
-          !isGamepad &&
+          !floats &&
           "absolute inset-x-0 bottom-0 border-t border-border bg-card/85 backdrop-blur-xl",
       )}
       style={
-        // A floating controller is the one case with no height of its own.
-        floating && isGamepad
+        // A floating controller or mouse is the case with no height of its own.
+        floating && floats
           ? undefined
           : ({ "--dock": DEFAULT_FRACTION, height: "calc(var(--dock) * 100%)" } as React.CSSProperties)
       }
@@ -218,21 +252,21 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
       <header
         className={cn(
           "flex shrink-0 items-center gap-1 px-2 py-1",
-          // Above the shield, so the controller's own controls keep working
-          // while everything around them is being swallowed.
-          isGamepad && "relative z-20",
-          // Over a game this is a card sitting in the corner of the picture,
-          // so it gets the pads' own treatment instead: small, dark, barely
-          // there, and faded to whatever the pads are faded to. It is the
-          // controller's furniture, not the shell's.
-          isGamepad &&
+          // Above the shield, so the surface's own controls keep working while
+          // everything around them is being swallowed.
+          floats && "relative z-20",
+          // Over the desktop this is a card sitting in the corner of the
+          // picture, so it gets the controls' own treatment instead: small,
+          // dark, barely there. It is the surface's furniture, not the shell's.
+          floats &&
             "pointer-events-auto self-end gap-0 rounded-bl-md border-b border-l border-white/20 bg-black/45 px-0.5 py-0.5 backdrop-blur-sm",
         )}
         // Matching the pads exactly, rather than a fixed value that would be
-        // the wrong amount of visible at either end of the opacity slider.
+        // the wrong amount of visible at either end of the opacity slider. The
+        // mouse is not faded, so it keeps full opacity.
         style={isGamepad ? { opacity: gamepadPrefs.opacity } : undefined}
       >
-        {isGamepad ? null : (
+        {floats ? null : (
           <button
             onPointerDown={onResize}
             className="flex flex-1 cursor-ns-resize justify-center py-1 text-muted-foreground"
@@ -251,6 +285,17 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
             onClick={() => setGamepad({ editing: !gamepad.editing })}
           >
             {gamepad.editing ? "Done" : "Edit"}
+          </Button>
+        ) : null}
+        {isMouse ? (
+          <Button
+            size="sm"
+            variant={mouseEditing ? "default" : "ghost"}
+            className={cn("text-xs", HIT_AREA, "h-8 px-2.5 text-white/90")}
+            aria-pressed={mouseEditing}
+            onClick={() => setMouseEditing((value) => !value)}
+          >
+            {mouseEditing ? "Done" : "Edit"}
           </Button>
         ) : null}
         {/*
@@ -290,7 +335,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         <Button
           size="icon"
           variant="ghost"
-          className={cn(HIT_AREA, isGamepad ? "size-8 text-white/90" : "size-8")}
+          className={cn(HIT_AREA, floats ? "size-8 text-white/90" : "size-8")}
           aria-label="Settings"
           onClick={() => onOpenSettings(dock)}
         >
@@ -299,7 +344,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         <Button
           size="icon"
           variant="ghost"
-          className={cn(HIT_AREA, isGamepad ? "size-8 text-white/90" : "size-8")}
+          className={cn(HIT_AREA, floats ? "size-8 text-white/90" : "size-8")}
           aria-label="Hide"
           onClick={() => setDock("none")}
         >
@@ -319,6 +364,17 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
               onChange={setPads}
               onKey={onKey}
               {...(controllerMode ? { onButton, onAxis } : {})}
+            />
+          ) : isMouse ? (
+            <MouseOverlay
+              haptics={mousePrefs.haptics}
+              scrollSpeed={mousePrefs.scrollSpeed}
+              naturalScroll={mousePrefs.naturalScroll}
+              editing={mouseEditing}
+              positions={mousePrefs.positions}
+              onButton={onPointerButton}
+              onAxis={onPointerAxis}
+              onKey={onKey}
             />
           ) : (
             <Keyboard />

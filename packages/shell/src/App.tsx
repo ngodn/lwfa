@@ -410,6 +410,11 @@ export function App(): React.ReactElement {
           vertical: event.vertical,
         });
         break;
+      case "key":
+        // A key that rides the pointer path: the virtual mouse holds Ctrl for a
+        // pinch-to-zoom, which is Ctrl plus a wheel. See `WindowSurface`.
+        conn.send({ type: "key", key: event.key, pressed: event.pressed });
+        break;
       case "touchDown":
         conn.send({
           type: "touchDown",

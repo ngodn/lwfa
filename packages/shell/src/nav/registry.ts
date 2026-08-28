@@ -21,6 +21,7 @@ import {
   Info,
   KeyboardIcon,
   MoreHorizontal,
+  Mouse,
   Network,
   Settings,
   SlidersHorizontal,
@@ -109,6 +110,13 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
     icon: Gamepad2,
     kind: "dock",
   },
+  mouse: {
+    id: "mouse",
+    label: "Mouse",
+    hint: "Tap where you want, as a real mouse click",
+    icon: Mouse,
+    kind: "dock",
+  },
   keyboard: {
     id: "keyboard",
     label: "Keyboard",
@@ -150,9 +158,9 @@ export const NAV_GROUPS: Record<NavGroupId, NavGroup> = {
   input: {
     id: "input",
     label: "Input",
-    hint: "Keyboard and gamepad",
+    hint: "Keyboard, mouse and gamepad",
     icon: SlidersHorizontal,
-    members: ["keyboard", "gamepad"],
+    members: ["keyboard", "mouse", "gamepad"],
   },
   more: {
     id: "more",

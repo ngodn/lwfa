@@ -51,7 +51,7 @@ export const ShellChrome = memo(function ShellChrome({
       if (kind === "dock" && target.kind === "item") {
         // Input devices go on screen rather than opening a panel about
         // themselves; their settings live behind the gear in the dock.
-        toggleDock(target.id as "keyboard" | "gamepad")
+        toggleDock(target.id as "keyboard" | "gamepad" | "mouse")
         return
       }
 

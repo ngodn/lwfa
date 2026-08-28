@@ -72,6 +72,7 @@ export const NAV_ITEM_IDS = [
   "apps",
   "escape",
   "gamepad",
+  "mouse",
   "keyboard",
   "clipboard",
   "workspaces",
@@ -170,6 +171,43 @@ export interface Prefs {
     haptics: boolean
     /** See `gamepad.placement`. */
     placement: SurfacePlacement
+  }
+  /**
+   * The virtual mouse: a tap where you want, but as a real mouse click.
+   *
+   * Unlike a trackpad it keeps direct positioning, the finger is still the
+   * target, and unlike plain touch it fires a chosen mouse button at that
+   * exact point. The button, hover and drag-lock modes are session state (see
+   * `lib/mouse.ts`); only the persistent preferences live here.
+   */
+  mouse: {
+    /** See `gamepad.placement`. */
+    placement: SurfacePlacement
+    haptics: boolean
+    /**
+     * Vertical scroll speed, a multiplier on the raw finger travel.
+     *
+     * Defaults to the desktop's own `scroll_factor`, so a flick moves the same
+     * distance it would on the real mouse.
+     */
+    scrollSpeed: number
+    /** Contents follow the finger rather than opposing it. */
+    naturalScroll: boolean
+    /** The button a tap fires when the surface is first opened. */
+    defaultButton: "left" | "right" | "middle"
+    /**
+     * Where each control cluster sits, as a percentage of the surface.
+     *
+     * Rearranged in the surface's edit mode and kept here, the same way the
+     * gamepad keeps its pad positions. Clusters rather than single buttons: the
+     * three (the click selector, the tools, the modifiers) move as units, which
+     * is all the arranging a mouse needs.
+     */
+    positions: {
+      selector: { x: number; y: number }
+      tools: { x: number; y: number }
+      modifiers: { x: number; y: number }
+    }
   }
   stream: {
     /**
@@ -283,7 +321,7 @@ export const DEFAULT_PREFS: Prefs = {
     edge: "auto",
     order: [...NAV_ITEM_IDS],
     hidden: [],
-    anchored: ["escape", "gamepad", "keyboard", "clipboard", "workspaces"],
+    anchored: ["escape", "gamepad", "mouse", "keyboard", "clipboard", "workspaces"],
     centred: ["apps"],
     size: "md",
   },
@@ -299,6 +337,19 @@ export const DEFAULT_PREFS: Prefs = {
     stickyModifiers: true,
     haptics: true,
     placement: "stacked",
+  },
+  mouse: {
+    placement: "overlay",
+    haptics: true,
+    // Mirrors the desktop's `scroll_factor = 0.4`.
+    scrollSpeed: 0.4,
+    naturalScroll: false,
+    defaultButton: "left",
+    positions: {
+      selector: { x: 92, y: 50 },
+      tools: { x: 8, y: 50 },
+      modifiers: { x: 50, y: 90 },
+    },
   },
   stream: {
     enabled: true,
@@ -348,6 +399,7 @@ function hydrate(raw: unknown): Prefs {
     },
     gamepad: { ...DEFAULT_PREFS.gamepad, ...stored.gamepad },
     keyboard: { ...DEFAULT_PREFS.keyboard, ...stored.keyboard },
+    mouse: { ...DEFAULT_PREFS.mouse, ...stored.mouse },
     stream: { ...DEFAULT_PREFS.stream, ...stored.stream },
     motion: { ...DEFAULT_PREFS.motion, ...stored.motion },
     layout: { ...DEFAULT_PREFS.layout, ...stored.layout },
