@@ -19,7 +19,7 @@
 import { tap } from "@/lib/haptics"
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import type { Rect, WindowId } from "@lwfa/proto"
-import { evdevFromButton, wheelDelta, windowPoint } from "./input.js"
+import { edgePark, evdevFromButton, wheelDelta, windowPoint } from "./input.js"
 import { describe, measure, probeEnabled } from "@/lib/captureProbe"
 import { LongPress } from "@/lib/longPress"
 import { useDock } from "@/lib/dock"
@@ -50,6 +50,14 @@ const LEFT_CTRL = 29
 
 /** How much a change in finger distance turns the wheel, for pinch-to-zoom. */
 const PINCH_ZOOM_FACTOR = 0.35
+
+/**
+ * How close, in output pixels, a fullscreen pointer must get to an edge before
+ * it snaps onto it for edge-scroll panning. Wide enough that a fast flick whose
+ * last sample fell short still lands on the edge, and the navbar-inset side is
+ * an easy target. See `edgePark`.
+ */
+const EDGE_PARK_MARGIN = 24
 
 export interface WindowSurfaceProps {
   id: WindowId
@@ -146,6 +154,18 @@ export const WindowSurface = memo(function WindowSurface({
   // gated strictly on this: when it is not `"mouse"`, none of that code runs
   // and a tap is a touch exactly as it always was. See `lib/mouse.ts`.
   const dock = useDock()
+  // Snap a real-pointer motion onto a fullscreen edge it is reaching, so
+  // RTS/MOBA edge-scroll pans the way a physical mouse against the screen edge
+  // does. A no-op when the window is not fullscreen, and never touches touch or
+  // the virtual mouse. See `edgePark`.
+  const edgeAdjust = useCallback(
+    (p: { x: number; y: number }): { x: number; y: number } => {
+      if (!filling) return p
+      const { x, y } = edgePark(p, contentSize(), EDGE_PARK_MARGIN)
+      return { x, y }
+    },
+    [filling, contentSize],
+  )
   // Each finger in flight while the mouse surface is open, so its move and
   // release match its start. Untouched, and unread, in every other mode.
   const mousePts = useRef(
@@ -368,7 +388,7 @@ export const WindowSurface = memo(function WindowSurface({
           return
         }
         const button = evdevFromButton(event.button)
-        send({ kind: "motion", ...point })
+        send({ kind: "motion", ...edgeAdjust(point) })
         if (button !== null) send({ kind: "button", button, pressed: true })
       }}
       onPointerMove={(event) => {
@@ -432,8 +452,22 @@ export const WindowSurface = memo(function WindowSurface({
         send(
           event.pointerType === "touch"
             ? { kind: "touchMotion", id: event.pointerId, ...point }
-            : { kind: "motion", ...point },
+            : { kind: "motion", ...edgeAdjust(point) },
         )
+      }}
+      onPointerLeave={(event) => {
+        // A pointer leaving a fullscreen window is a pointer heading past its
+        // edge, which a fast move can do without ever being sampled *at* the
+        // edge. Send one last motion pinned to the edge it left through, so the
+        // game keeps edge-scrolling instead of losing the pointer. Only for a
+        // real pointer with no button held: a drag stays captured and never
+        // leaves, and touch has its own path. See `edgePark`.
+        if (event.pointerType === "touch" || !filling || event.buttons !== 0) return
+        const point = windowPoint(event, event.currentTarget, contentSize())
+        if (!point) return
+        const edge = edgeAdjust(point)
+        lastMove.current.set(event.pointerId, edge)
+        send({ kind: "motion", ...edge })
       }}
       onPointerUp={(event) => {
         lastMove.current.delete(event.pointerId)

@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { isTextEntry, shouldForwardKeydown, windowPoint } from "../src/input"
+import { edgePark, isTextEntry, shouldForwardKeydown, windowPoint } from "../src/input"
 
 /** A DOM-free stand-in, since these run in node. */
 class FakeElement {
@@ -132,5 +132,64 @@ describe("windowPoint", () => {
 
     const box = element({ x: 0, y: 0, width: 100, height: 100 })
     expect(windowPoint({ clientX: 1, clientY: 1 }, box, { width: 0, height: 0 })).toBeNull()
+  })
+})
+
+describe("edgePark", () => {
+  const content = { width: 1600, height: 900 }
+  const margin = 24
+
+  it("leaves a point well inside untouched", () => {
+    expect(edgePark({ x: 800, y: 450 }, content, margin)).toEqual({
+      x: 800,
+      y: 450,
+      parked: false,
+    })
+  })
+
+  it("pins the far edge one pixel inside, never at the width", () => {
+    // The whole bug: a motion at exactly the width is one past the surface and
+    // reads as the pointer leaving the window, so the game stops instead of
+    // panning. It must land at width-1, inside.
+    expect(edgePark({ x: 1595, y: 450 }, content, margin)).toEqual({
+      x: 1599,
+      y: 450,
+      parked: true,
+    })
+    expect(edgePark({ x: 800, y: 897 }, content, margin)).toEqual({
+      x: 800,
+      y: 899,
+      parked: true,
+    })
+  })
+
+  it("clamps a point that overshot past the edge back inside", () => {
+    // A fast move can report a coordinate beyond the surface; it must come back
+    // to the last inside pixel, not sail past into a leave.
+    expect(edgePark({ x: 5000, y: 5000 }, content, margin)).toEqual({
+      x: 1599,
+      y: 899,
+      parked: true,
+    })
+    expect(edgePark({ x: -40, y: -10 }, content, margin)).toEqual({ x: 0, y: 0, parked: true })
+  })
+
+  it("snaps a fast sample that fell short of the edge onto it", () => {
+    // 20px shy of the right edge, inside the margin: a quick flick that stopped
+    // here should still pan, so it is pulled to the edge.
+    expect(edgePark({ x: 1580, y: 450 }, content, margin)).toEqual({
+      x: 1599,
+      y: 450,
+      parked: true,
+    })
+  })
+
+  it("pins both axes at a corner, for a diagonal pan", () => {
+    expect(edgePark({ x: 4, y: 4 }, content, margin)).toEqual({ x: 0, y: 0, parked: true })
+  })
+
+  it("treats just past the margin as inside", () => {
+    expect(edgePark({ x: margin + 1, y: 450 }, content, margin).parked).toBe(false)
+    expect(edgePark({ x: 1599 - margin - 1, y: 450 }, content, margin).parked).toBe(false)
   })
 })

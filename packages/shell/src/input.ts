@@ -124,6 +124,54 @@ export function windowPoint(
 }
 
 /**
+ * Snap a fullscreen pointer to the edge it is reaching, for edge-scroll panning.
+ *
+ * RTS and MOBA games pan the camera while the pointer rests against a screen
+ * edge (moving the mouse to the edge in Dota moves the world). Two things stop
+ * that working through the shell, and this fixes both:
+ *
+ * - The far edge must land *inside* the window, at `width - 1`, never at `width`.
+ *   A motion at `width` is one pixel past the surface, which the engine reads as
+ *   the pointer leaving the window (a motion with no surface under it is a
+ *   leave), so the game stops scrolling instead of panning. Every value is
+ *   clamped into `[0, width - 1] x [0, height - 1]` first.
+ * - A pointer moved *fast* at the edge is only sampled every so often, so its
+ *   last position falls short of the edge and the game never sees it arrive. Any
+ *   point within `margin` of an edge is snapped onto it, so a fast flick, and
+ *   the navbar-inset side you cannot travel past, both still reach the edge the
+ *   game scrolls from.
+ *
+ * Corners snap on both axes, which pans diagonally. `parked` reports whether the
+ * point was pinned to any edge.
+ */
+export function edgePark(
+  point: { x: number; y: number },
+  content: { width: number; height: number },
+  margin: number,
+): { x: number; y: number; parked: boolean } {
+  const maxX = content.width - 1
+  const maxY = content.height - 1
+  let x = point.x < 0 ? 0 : point.x > maxX ? maxX : point.x
+  let y = point.y < 0 ? 0 : point.y > maxY ? maxY : point.y
+  let parked = false
+  if (x <= margin) {
+    x = 0
+    parked = true
+  } else if (x >= maxX - margin) {
+    x = maxX
+    parked = true
+  }
+  if (y <= margin) {
+    y = 0
+    parked = true
+  } else if (y >= maxY - margin) {
+    y = maxY
+    parked = true
+  }
+  return { x, y, parked }
+}
+
+/**
  * Scroll deltas in logical pixels.
  *
  * `deltaMode` matters: browsers report lines or pages rather than pixels
