@@ -123,12 +123,15 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
     [actions],
   )
 
-  // Attach a real controller for as long as the pad is on screen.
+  // Announce a controller to the engine while the on-screen pad is on screen.
   //
-  // The device the engine creates is visible to the whole machine, which is
-  // exactly what makes Steam find it, so it must not outlive the thing holding
-  // it: a session advertising a controller nobody is touching confuses games
-  // about how many players are present.
+  // With the persistent pad (the default, `[gamepad] persistent`), the uinput
+  // device already exists from engine startup, so this does not create or
+  // destroy it: enabling adopts the parked device, disabling parks it again
+  // (inputs released, device kept alive). Only in the non-persistent fallback
+  // does the device come and go with the pad. Either way the engine binds a pad
+  // on demand to any session that sends input (see `gamepad_for`), so this
+  // announcement is about continuity, not a gate on input reaching the pad.
   const padOpen = dock === "gamepad"
   useEffect(() => {
     if (!padOpen || !controllerMode) return

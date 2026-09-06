@@ -1,17 +1,17 @@
 /**
  * The on-screen gamepad's layout and what its controls send.
  *
- * # Why it sends keys
+ * # Two transports, one layout
  *
- * The shell protocol carries keyboard, pointer and touch, not gamepad axes.
- * Adding a gamepad transport would mean a protocol change, a Wayland virtual
- * input device on the engine side, and a compositor that pretends to be an
- * evdev joystick. Meanwhile every emulator, every browser game and most native
- * Linux games are perfectly happy being driven from the keyboard, and that is
- * the path that already works end to end today.
- *
- * So each pad is bound to a keycode. When a real gamepad transport lands, the
- * binding becomes a union and the layout does not have to change.
+ * The shell protocol carries both gamepad events and plain keys, so each pad
+ * holds both bindings. In `controller` mode a pad sends a W3C gamepad
+ * button/axis (see `FACE_TO_BUTTON`, `STICK_AXES`, `TRIGGER_AXES`), which the
+ * engine feeds to a virtual uinput controller: this is what Steam and anything
+ * built on SDL look for, and the only mode that can express an analog stick. In
+ * `keyboard` mode the same pad sends its fallback `code`, which is what
+ * emulators and older titles want, and the fallback when the machine will not
+ * grant `/dev/uinput`. The mode is `Prefs.gamepad.mode`; the layout is the same
+ * either way.
  *
  * # Units
  *

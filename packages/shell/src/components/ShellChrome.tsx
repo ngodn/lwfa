@@ -21,6 +21,7 @@ import { NavRail, shellDirection, usePortrait, type NavTarget } from "@/componen
 import { PanelHost } from "@/components/PanelHost"
 import { InputDock } from "@/components/InputDock"
 import { useArranging } from "@/lib/arrange"
+import { usePhysicalGamepad } from "@/gamepad/usePhysicalGamepad"
 import { AlreadyRunning } from "@/components/AlreadyRunning"
 import { FileDialog } from "@/components/FileDialog"
 import { toggleDock } from "@/lib/dock"
@@ -41,6 +42,10 @@ export const ShellChrome = memo(function ShellChrome({
   /** The action button that just fired, so it can flash. */
   const [fired, setFired] = useState<NavItemId | null>(null)
   const actions = useSessionActions()
+
+  // Read a physical controller and feed it to the engine, and auto-hide the
+  // on-screen pad while one is connected. See `usePhysicalGamepad`.
+  usePhysicalGamepad()
 
   const select = useCallback(
     (target: NavTarget) => {
