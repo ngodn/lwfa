@@ -16,6 +16,8 @@ import { DEFAULT_LAYOUT, type Pad } from "@/gamepad/model"
 
 export interface GamepadStore {
   visible: boolean
+  /** Hide only the touch controls, keeping the dock and controller enabled. */
+  padsHidden: boolean
   editing: boolean
   pads: Pad[]
 }
@@ -99,13 +101,16 @@ function withPadsAddedSince(stored: Pad[]): Pad[] {
   return missing.length === 0 ? stored : [...stored, ...missing]
 }
 
-let current: GamepadStore = { visible: false, editing: false, pads: readPads() }
+let current: GamepadStore = { visible: false, padsHidden: false, editing: false, pads: readPads() }
 const listeners = new Set<() => void>()
 
 export function setGamepad(patch: Partial<GamepadStore>): void {
   const next = { ...current, ...patch }
+  // Editing from either the toolbar or Settings always reveals the layout.
+  if (next.editing) next.padsHidden = false
   if (
     next.visible === current.visible &&
+    next.padsHidden === current.padsHidden &&
     next.editing === current.editing &&
     next.pads === current.pads
   ) {

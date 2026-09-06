@@ -8,6 +8,7 @@ const harness = vi.hoisted(() => ({
 
 // Run the real hook's polling effect without mounting the rest of the shell.
 vi.mock("react", () => ({
+  useMemo: <T>(factory: () => T) => factory(),
   useRef: <T>(current: T) => ({ current }),
   useEffect: (effect: () => void | (() => void)) => harness.effects.push(effect),
 }))

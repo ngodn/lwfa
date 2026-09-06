@@ -164,3 +164,38 @@ panel restoration, follower synchronization, and X11 focus repair changes.
 The deliberately injected blur in the 1.4.3 recovery test was not a reproduction
 of native iPad focus loss. The original physical-only missing-tap cause remains
 unconfirmed; production has not been restarted during these changes.
+
+## 1.4.5 controller controls
+
+The user suggested treating physical digital buttons like on-screen presses.
+Both already produced the same protocol messages in controller mode. They now
+call the same `useGamepadOutput` button and axis handlers, keeping normal holds,
+simultaneous buttons, and analog trigger/stick travel. Automatic timed taps were
+rejected because a held game action would release without the player letting go.
+This consolidation cannot reconstruct a transition absent from the Gamepad API
+and is not evidence that the original physical LB/RB failure is fixed.
+
+The gamepad toolbar adds a separate hide/show action between Edit and the shield.
+It hides only the touch layout; the dock, shield, and controller remain enabled.
+Edit reveals the layout. Hidden stacked controls return their reserved space.
+Toolbar buttons have actual targets at least 56 pixels wide and 44 pixels high.
+The visibility choice lasts for the current page session.
+
+Removing a held touch control previously had no guaranteed release cleanup.
+Buttons and sticks now release their touch input when removed, including when
+hiding the layout or opening its editor. Idle controls emit no cleanup messages.
+`scripts/e2e-gamepad-visibility.mjs` exercises the real dock in an isolated browser
+with no engine connection. Physical input in that fixture is simulated; the
+iPad's native controller reporting remains outside its coverage.
+
+Validation on Node 24.15.0: all 657 JavaScript tests, type checking, the production
+shell build, and the isolated controller-recovery browser test pass. The new
+visibility browser test also passes: physical and touch LB/RB produce identical
+press/release output, hiding idle touch controls preserves physical button and
+stick holds, and physical releases still reach output while hidden. It checks
+touch button, stick, and keyboard cleanup, shield preservation, Edit reveal,
+stacked space, and toolbar dimensions at 1194, 834, and 320 pixel viewport widths.
+No production restart or live game input was used for these checks.
+Removing button cleanup makes the browser test fail waiting for its release;
+removing stick cleanup separately makes it fail waiting for neutral. Restoring
+the cleanup makes both assertions pass.

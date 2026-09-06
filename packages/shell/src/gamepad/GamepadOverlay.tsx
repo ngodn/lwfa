@@ -283,6 +283,13 @@ const PlayPad = memo(function PlayPad({
     [emit],
   )
 
+  // Hiding the controls or opening the editor can remove a held pointer's
+  // element before pointerup arrives. Release only this pad's touch input.
+  useEffect(() => () => {
+    for (const binding of holding.current.values()) emit(binding, false)
+    holding.current.clear()
+  }, [emit])
+
   // Inset by half the pad, so a control near an edge stays fully reachable
   // rather than being half off-screen where a thumb cannot land on it.
   const style: React.CSSProperties = {
@@ -511,13 +518,6 @@ const Stick = memo(function Stick({
     [flush],
   )
 
-  // A frame queued by a stick that is being unmounted must not fire.
-  useEffect(() => {
-    return () => {
-      if (raf.current !== 0) cancelAnimationFrame(raf.current)
-    }
-  }, [])
-
   /** Measure the stick and choose this grab's zero. See [`RECENTRE`]. */
   const grab = useCallback((event: React.PointerEvent<HTMLElement>) => {
     const box = event.currentTarget.getBoundingClientRect()
@@ -553,6 +553,11 @@ const Stick = memo(function Stick({
     held.current.clear()
     nub.current?.style.setProperty("transform", "translate(-50%, -50%)")
   }, [onKey, onAxis, analog, axes])
+
+  useEffect(() => () => {
+    // An idle touch stick must not reset a physical stick sharing these axes.
+    if (grabbed.current || pending.current || held.current.size > 0) release()
+  }, [release])
 
   /** Hold exactly the keys the current direction implies, and no others. */
   const apply = useCallback(

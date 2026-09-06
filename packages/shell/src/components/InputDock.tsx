@@ -30,12 +30,13 @@
  */
 
 import { Suspense, lazy, memo, useCallback, useEffect, useRef, useState } from "react"
-import { GripHorizontal, Settings2, Shield, ShieldOff, X } from "lucide-react"
+import { Eye, EyeOff, GripHorizontal, Settings2, Shield, ShieldOff, X } from "lucide-react"
 import { setDock, useDock } from "@/lib/dock"
 import { patchPrefs, usePrefSection } from "@/lib/prefs"
 import { setGamepad, useGamepad, useSetPads } from "@/gamepad/store"
 import { shieldActive } from "@/gamepad/shield"
 import { hasPhysicalGamepad } from "@/gamepad/physical"
+import { useGamepadOutput } from "@/gamepad/output"
 import { useSessionActions, useSessionState } from "@/session"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -60,6 +61,8 @@ const MouseOverlay = lazy(() =>
  * without growing the furniture.
  */
 const HIT_AREA = "relative after:absolute after:-inset-1.5 after:content-['']"
+// Actual, non-overlapping touch targets for the gamepad toolbar.
+const GAMEPAD_BUTTON = "h-11 min-w-14 px-3 text-white/90"
 
 const MIN_FRACTION = 0.2
 const MAX_FRACTION = 0.75
@@ -81,6 +84,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
   const gamepad = useGamepad()
   const setPads = useSetPads()
   const actions = useSessionActions()
+  const { button: onButton, axis: onAxis } = useGamepadOutput()
   // Only the id, and only for the controller effect below: a reconnect gets
   // a fresh session, and the engine needs `setGamepad` said again to it.
   const { session } = useSessionState()
@@ -96,17 +100,6 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
 
   const onKey = useCallback(
     (code: number, pressed: boolean) => actions.send({ type: "key", key: code, pressed }),
-    [actions],
-  )
-
-  const onButton = useCallback(
-    (button: number, pressed: boolean) =>
-      actions.send({ type: "gamepadButton", button, pressed }),
-    [actions],
-  )
-
-  const onAxis = useCallback(
-    (axis: number, value: number) => actions.send({ type: "gamepadAxis", axis, value }),
     [actions],
   )
 
@@ -224,8 +217,9 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
           "absolute inset-x-0 bottom-0 border-t border-border bg-card/85 backdrop-blur-xl",
       )}
       style={
-        // A floating controller or mouse is the case with no height of its own.
-        floating && floats
+        // Hidden touch controls keep only the toolbar's height when stacked.
+        // Floating surfaces never reserve desktop space.
+        (floating && floats) || (isGamepad && gamepad.padsHidden)
           ? undefined
           : ({ "--dock": DEFAULT_FRACTION, height: "calc(var(--dock) * 100%)" } as React.CSSProperties)
       }
@@ -290,11 +284,24 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
           <Button
             size="sm"
             variant={gamepad.editing ? "default" : "ghost"}
-            className={cn("text-xs", HIT_AREA, isGamepad ? "h-8 px-2.5 text-white/90" : "h-8")}
+            className={cn("text-xs", GAMEPAD_BUTTON)}
             aria-pressed={gamepad.editing}
             onClick={() => setGamepad({ editing: !gamepad.editing })}
           >
             {gamepad.editing ? "Done" : "Edit"}
+          </Button>
+        ) : null}
+        {isGamepad ? (
+          <Button
+            size="icon"
+            variant={gamepad.padsHidden ? "default" : "ghost"}
+            className={GAMEPAD_BUTTON}
+            aria-label={gamepad.padsHidden ? "Show on-screen controls" : "Hide on-screen controls"}
+            aria-pressed={gamepad.padsHidden}
+            title={gamepad.padsHidden ? "Show on-screen controls" : "Hide controls and keep the controller enabled"}
+            onClick={() => setGamepad({ padsHidden: !gamepad.padsHidden, editing: false })}
+          >
+            {gamepad.padsHidden ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
           </Button>
         ) : null}
         {isMouse ? (
@@ -321,7 +328,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
           <Button
             size="icon"
             variant={gamepadPrefs.shield ? "default" : "ghost"}
-            className={cn(HIT_AREA, "size-8", gamepadPrefs.shield ? "" : "text-white/90")}
+            className={cn(GAMEPAD_BUTTON, gamepadPrefs.shield && "text-primary-foreground")}
             aria-label={
               gamepadPrefs.shield
                 ? "Let taps through to the window"
@@ -345,7 +352,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         <Button
           size="icon"
           variant="ghost"
-          className={cn(HIT_AREA, floats ? "size-8 text-white/90" : "size-8")}
+          className={cn(isGamepad ? GAMEPAD_BUTTON : cn(HIT_AREA, floats ? "size-8 text-white/90" : "size-8"))}
           aria-label="Settings"
           onClick={() => onOpenSettings(dock)}
         >
@@ -354,7 +361,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
         <Button
           size="icon"
           variant="ghost"
-          className={cn(HIT_AREA, floats ? "size-8 text-white/90" : "size-8")}
+          className={cn(isGamepad ? GAMEPAD_BUTTON : cn(HIT_AREA, floats ? "size-8 text-white/90" : "size-8"))}
           aria-label="Hide"
           onClick={() => setDock("none")}
         >
@@ -364,7 +371,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
 
       <div className="relative min-h-0 flex-1">
         <Suspense fallback={null}>
-          {isGamepad ? (
+          {isGamepad ? gamepad.padsHidden ? null : (
             <GamepadOverlay
               pads={gamepad.pads}
               skin={gamepadPrefs.skin}

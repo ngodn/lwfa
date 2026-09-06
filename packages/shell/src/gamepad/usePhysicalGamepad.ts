@@ -15,7 +15,8 @@
 
 import { useEffect, useRef } from "react"
 
-import { useSessionActions, useSessionState } from "@/session"
+import { useSessionState } from "@/session"
+import { useGamepadOutput } from "@/gamepad/output"
 import { controllerTrace } from "@/gamepad/diagnostics"
 import { GamepadRecovery, RESET_PHYSICAL_GAMEPAD } from "@/gamepad/recovery"
 import {
@@ -23,17 +24,18 @@ import {
   NEUTRAL,
   diffGamepad,
   pollStep,
+  type PadMessage,
   type PollState,
 } from "@/gamepad/physical"
 
 export function usePhysicalGamepad(): void {
-  const actions = useSessionActions()
+  const output = useGamepadOutput()
   const { session, status } = useSessionState()
 
   // The handlers and the polling loop read these through refs, so they are bound
   // once and never need the effect to re-run when a value changes.
-  const send = useRef(actions.send)
-  send.current = actions.send
+  const outputRef = useRef(output)
+  outputRef.current = output
   const live = useRef(status === "connected")
   live.current = status === "connected"
 
@@ -50,6 +52,10 @@ export function usePhysicalGamepad(): void {
   }, [session])
 
   useEffect(() => {
+    const send = (message: PadMessage) => {
+      if (message.type === "gamepadButton") outputRef.current.button(message.button, message.pressed)
+      else outputRef.current.axis(message.axis, message.value)
+    }
     const recovery = new GamepadRecovery()
     let suspended = document.visibilityState === "hidden" || !document.hasFocus()
     let rearm = suspended
@@ -60,7 +66,7 @@ export function usePhysicalGamepad(): void {
       if (controllerTrace.recording) {
         controllerTrace.sample(performance.now(), navigator.getGamepads?.() ?? [], live.current, messages, "release")
       }
-      for (const message of messages) send.current(message)
+      for (const message of messages) send(message)
       pollState.current = IDLE
     }
 
@@ -89,7 +95,7 @@ export function usePhysicalGamepad(): void {
       }
       const { messages, state } = pollStep(recovery.filter(pads), pollState.current)
       if (controllerTrace.recording) controllerTrace.sample(performance.now(), pads, true, messages)
-      for (const message of messages) send.current(message)
+      for (const message of messages) send(message)
       pollState.current = state
     }
 
