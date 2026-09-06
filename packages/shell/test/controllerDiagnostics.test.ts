@@ -31,3 +31,17 @@ it("copies raw API values independently of later gamepad mutation", () => {
   expect(saved.sampledPresses).toBe(0)
   expect(saved.samples[1]?.live).toBe(false)
 })
+
+it("keeps focus recovery releases separate from the polling gap measurement", () => {
+  const trace = new ControllerTrace()
+  trace.start()
+  trace.sample(0, [], true, [])
+  trace.sample(50, [], true, [{ type: "gamepadButton", button: 1, pressed: false }], "release")
+  trace.sample(100, [], true, [], "suspended")
+  const saved = trace.stop()
+  expect(saved.schemaVersion).toBe(2)
+  expect(saved.maxPollGapMs).toBe(100)
+  expect(saved.samples[1]?.mode).toBe("release")
+  expect(Number.isFinite(Date.parse(saved.startedAt))).toBe(true)
+  expect(saved.timeOrigin).toBeGreaterThan(0)
+})

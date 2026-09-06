@@ -5,8 +5,8 @@
  * reads `navigator.getGamepads` on an 8 ms timer, diffs it, and sends
  * what moved down the same wire the on-screen pad uses (see `physical.ts` and
  * `diffGamepad`). The engine already keeps a persistent virtual controller and
- * binds it to whoever sends input, so there is nothing to announce and no
- * lifecycle to manage: sending a button is enough.
+ * binds it to whoever sends input. Focus loss releases held input; recovery
+ * waits for each held control to return to neutral before forwarding it again.
  *
  * One controller (player one) for now: the first pad reporting the W3C standard
  * mapping. Connecting it leaves the selected input surface alone: closing the
@@ -17,6 +17,7 @@ import { useEffect, useRef } from "react"
 
 import { useSessionActions, useSessionState } from "@/session"
 import { controllerTrace } from "@/gamepad/diagnostics"
+import { GamepadRecovery, RESET_PHYSICAL_GAMEPAD } from "@/gamepad/recovery"
 import {
   IDLE,
   NEUTRAL,
@@ -49,10 +50,17 @@ export function usePhysicalGamepad(): void {
   }, [session])
 
   useEffect(() => {
+    const recovery = new GamepadRecovery()
+    let suspended = document.visibilityState === "hidden" || !document.hasFocus()
+    let rearm = suspended
     // Let go of everything the pad was holding. A disconnect mid-press must not
     // leave a button stuck down in the persistent controller.
     const release = () => {
-      for (const message of diffGamepad(pollState.current.last, NEUTRAL)) send.current(message)
+      const messages = diffGamepad(pollState.current.last, NEUTRAL)
+      if (controllerTrace.recording) {
+        controllerTrace.sample(performance.now(), navigator.getGamepads?.() ?? [], live.current, messages, "release")
+      }
+      for (const message of messages) send.current(message)
       pollState.current = IDLE
     }
 
@@ -68,10 +76,18 @@ export function usePhysicalGamepad(): void {
       if (!live.current && !controllerTrace.recording) return
       const pads = navigator.getGamepads?.() ?? []
       if (!live.current) {
-        if (controllerTrace.recording) controllerTrace.sample(performance.now(), pads, false, [])
+        if (controllerTrace.recording) controllerTrace.sample(performance.now(), pads, false, [], "offline")
         return
       }
-      const { messages, state } = pollStep(pads, pollState.current)
+      if (suspended) {
+        if (controllerTrace.recording) controllerTrace.sample(performance.now(), pads, true, [], "suspended")
+        return
+      }
+      if (rearm) {
+        recovery.reset(pads)
+        rearm = false
+      }
+      const { messages, state } = pollStep(recovery.filter(pads), pollState.current)
       if (controllerTrace.recording) controllerTrace.sample(performance.now(), pads, true, messages)
       for (const message of messages) send.current(message)
       pollState.current = state
@@ -88,13 +104,43 @@ export function usePhysicalGamepad(): void {
 
     const onDisconnect = (event: GamepadEvent) => {
       connected.current.delete(event.gamepad.index)
+      recovery.forget(event.gamepad.index)
       if (pollState.current.activeIndex === event.gamepad.index) release()
       if (connected.current.size > 0) return
       release()
     }
 
+    const suspend = () => {
+      suspended = true
+      rearm = true
+      release()
+    }
+    const resume = () => {
+      if (document.visibilityState === "hidden" || !document.hasFocus()) return
+      suspended = false
+      ensureLoop()
+    }
+    const visibility = () => {
+      if (document.visibilityState === "hidden") suspend()
+      else resume()
+    }
+    // A real tap on this action also lets Safari restore native view focus.
+    // Suppress each currently held control until neutral, not every button
+    // until one possibly stale button finally releases.
+    const reset = () => {
+      release()
+      rearm = true
+      resume()
+    }
+
     globalThis.addEventListener("gamepadconnected", onConnect)
     globalThis.addEventListener("gamepaddisconnected", onDisconnect)
+    globalThis.addEventListener("blur", suspend)
+    globalThis.addEventListener("focus", resume)
+    globalThis.addEventListener("pagehide", suspend)
+    globalThis.addEventListener("pageshow", resume)
+    globalThis.addEventListener(RESET_PHYSICAL_GAMEPAD, reset)
+    document.addEventListener("visibilitychange", visibility)
 
     // A pad paired before this mounted never fires `gamepadconnected` here, so
     // pick up anything already present.
@@ -108,6 +154,12 @@ export function usePhysicalGamepad(): void {
     return () => {
       globalThis.removeEventListener("gamepadconnected", onConnect)
       globalThis.removeEventListener("gamepaddisconnected", onDisconnect)
+      globalThis.removeEventListener("blur", suspend)
+      globalThis.removeEventListener("focus", resume)
+      globalThis.removeEventListener("pagehide", suspend)
+      globalThis.removeEventListener("pageshow", resume)
+      globalThis.removeEventListener(RESET_PHYSICAL_GAMEPAD, reset)
+      document.removeEventListener("visibilitychange", visibility)
       if (timer.current !== null) {
         clearTimeout(timer.current)
         timer.current = null

@@ -142,7 +142,7 @@ export function pollStep(
 ): { messages: PadMessage[]; state: PollState } {
   let pad: Gamepad | null = null
   for (const candidate of pads) {
-    if (candidate && candidate.mapping === "standard") {
+    if (candidate && candidate.connected !== false && candidate.mapping === "standard") {
       pad = candidate
       break
     }

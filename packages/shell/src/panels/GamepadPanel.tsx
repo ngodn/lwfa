@@ -21,6 +21,7 @@ import { DEFAULT_LAYOUT } from "@/gamepad/model"
 import { backupFilename, makeBackup, readBackup } from "@/gamepad/backup"
 import { setGamepad, useGamepad } from "@/gamepad/store"
 import { controllerTrace } from "@/gamepad/diagnostics"
+import { resetPhysicalGamepad } from "@/gamepad/recovery"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
@@ -67,6 +68,17 @@ function GamepadPanel() {
           </Button>
         </FieldRow>
         <Backup />
+      </PanelSection>
+
+      <PanelSection title="Physical controller">
+        <p className="text-xs text-muted-foreground">
+          If input gets stuck, release the controller buttons and tap reset.
+          Clears held input without restarting the game. Each control becomes
+          available again when it returns to its resting position.
+        </p>
+        <Button variant="outline" size="sm" onClick={resetPhysicalGamepad}>
+          Reset physical controller
+        </Button>
       </PanelSection>
 
       <PanelSection

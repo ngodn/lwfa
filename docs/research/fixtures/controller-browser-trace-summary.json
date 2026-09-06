@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "sourceSha256": "09970731e0a1d06a05adaa0eac5e2976be97a1f4afb658d6538ecdb04d205172",
+  "sourceBytes": 2779577,
+  "retainedSamples": 4096,
+  "totalSamples": 4612,
+  "discardedOldestSamples": 516,
+  "retainedDurationMs": 49168.0,
+  "medianPollGapMs": 12,
+  "maxPollGapMs": 26,
+  "offlineSamples": 0,
+  "pressesByButton": {
+    "4": 14,
+    "5": 10,
+    "1": 5,
+    "6": 1,
+    "7": 2
+  },
+  "messages": 370,
+  "replay": "All 4096 samples reproduced all 370 send-action messages exactly using physical.ts pollStep",
+  "caution": "Send-action messages are not WebSocket delivery acknowledgments; this recording has no wall-clock alignment with earlier kernel traces."
+}

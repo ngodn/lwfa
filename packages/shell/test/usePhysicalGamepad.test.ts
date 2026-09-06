@@ -22,6 +22,7 @@ import { usePhysicalGamepad } from "../src/gamepad/usePhysicalGamepad"
 let cleanup: (() => void)[]
 let events: EventTarget
 let buttons: { pressed: boolean; value: number }[]
+let doc: EventTarget & { visibilityState: string; hasFocus: () => boolean }
 let pads: unknown[]
 
 beforeEach(() => {
@@ -31,7 +32,10 @@ beforeEach(() => {
   harness.setDock.mockClear()
   cleanup = []
   events = new EventTarget()
-  buttons = [{ pressed: false, value: 0 }]
+  doc = Object.assign(new EventTarget(), { visibilityState: "visible", hasFocus: () => true })
+  vi.stubGlobal("document", doc)
+  vi.stubGlobal("dispatchEvent", events.dispatchEvent.bind(events))
+  buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }))
   pads = [{ index: 0, mapping: "standard", buttons, axes: [0, 0, 0, 0] }]
   vi.stubGlobal("navigator", { getGamepads: () => pads })
   vi.stubGlobal("addEventListener", events.addEventListener.bind(events))
@@ -105,4 +109,103 @@ it("releases the active controller immediately when another controller remains",
   pads[0] = null
   events.dispatchEvent(Object.assign(new Event("gamepaddisconnected"), { gamepad: { index: 0 } }))
   expect(harness.send).toHaveBeenLastCalledWith({ type: "gamepadButton", button: 0, pressed: false })
+})
+
+
+it("releases on blur, ignores stale input, and rearms each control independently", () => {
+  buttons[0] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(24)
+  events.dispatchEvent(new Event("blur"))
+  expect(harness.send).toHaveBeenLastCalledWith({ type: "gamepadButton", button: 0, pressed: false })
+  harness.send.mockClear()
+  vi.advanceTimersByTime(100)
+  expect(harness.send).not.toHaveBeenCalled()
+  events.dispatchEvent(new Event("focus"))
+  vi.advanceTimersByTime(24)
+  expect(harness.send).not.toHaveBeenCalled()
+  // A stale B must not lock out a fresh shoulder press.
+  buttons[4] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(24)
+  expect(harness.send).toHaveBeenLastCalledWith({ type: "gamepadButton", button: 4, pressed: true })
+  buttons[0] = { pressed: false, value: 0 }
+  vi.advanceTimersByTime(24)
+  buttons[0] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(24)
+  expect(harness.send).toHaveBeenLastCalledWith({ type: "gamepadButton", button: 0, pressed: true })
+})
+
+it("releases when hidden even without blur and does not replay a background press", () => {
+  buttons[0] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(24)
+  doc.visibilityState = "hidden"
+  doc.dispatchEvent(new Event("visibilitychange"))
+  expect(harness.send).toHaveBeenLastCalledWith({ type: "gamepadButton", button: 0, pressed: false })
+  harness.send.mockClear()
+  buttons[4] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(24)
+  doc.visibilityState = "visible"
+  doc.dispatchEvent(new Event("visibilitychange"))
+  vi.advanceTimersByTime(24)
+  expect(harness.send).not.toHaveBeenCalled()
+})
+
+it("manual recovery clears a stale hold without blocking other buttons", () => {
+  buttons[0] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(24)
+  events.dispatchEvent(new Event("lwfa:reset-physical-gamepad"))
+  expect(harness.send).toHaveBeenLastCalledWith({ type: "gamepadButton", button: 0, pressed: false })
+  harness.send.mockClear()
+  vi.advanceTimersByTime(24)
+  expect(harness.send).not.toHaveBeenCalled()
+  buttons[5] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(24)
+  expect(harness.send).toHaveBeenLastCalledWith({ type: "gamepadButton", button: 5, pressed: true })
+})
+
+it("preserves an intentional long hold with an unchanged browser timestamp", () => {
+  buttons[4] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(15_000)
+  expect(harness.send.mock.calls.map(([m]) => m)).toEqual([
+    { type: "gamepadButton", button: 4, pressed: true },
+  ])
+})
+
+it("clears trigger travel and stick deflection, then rearms them at neutral", () => {
+  const axes = [0.8, 0, 0, 0]
+  pads = [{ index: 0, mapping: "standard", buttons, axes }]
+  buttons[6] = { pressed: true, value: 1 }
+  vi.advanceTimersByTime(24)
+  events.dispatchEvent(new Event("lwfa:reset-physical-gamepad"))
+  expect(harness.send.mock.calls.map(([m]) => m)).toEqual(expect.arrayContaining([
+    { type: "gamepadButton", button: 6, pressed: false },
+    { type: "gamepadAxis", axis: 4, value: 0 },
+    { type: "gamepadAxis", axis: 0, value: 0 },
+  ]))
+  harness.send.mockClear()
+  vi.advanceTimersByTime(24)
+  expect(harness.send).not.toHaveBeenCalled()
+  buttons[6] = { pressed: false, value: 0 }
+  axes[0] = 0.03
+  vi.advanceTimersByTime(24)
+  buttons[6] = { pressed: true, value: 1 }
+  axes[0] = 0.8
+  vi.advanceTimersByTime(24)
+  expect(harness.send.mock.calls.map(([m]) => m)).toEqual(expect.arrayContaining([
+    { type: "gamepadButton", button: 6, pressed: true },
+    { type: "gamepadAxis", axis: 4, value: 1 },
+    { type: "gamepadAxis", axis: 0, value: 0.8 },
+  ]))
+})
+
+it("removes lifecycle and reset listeners on unmount", () => {
+  for (const dispose of cleanup.reverse()) dispose()
+  cleanup = []
+  harness.send.mockClear()
+  for (const type of ["blur", "focus", "pagehide", "pageshow", "lwfa:reset-physical-gamepad"]) {
+    events.dispatchEvent(new Event(type))
+  }
+  doc.dispatchEvent(new Event("visibilitychange"))
+  vi.advanceTimersByTime(100)
+  expect(harness.send).not.toHaveBeenCalled()
+  expect(vi.getTimerCount()).toBe(0)
 })
