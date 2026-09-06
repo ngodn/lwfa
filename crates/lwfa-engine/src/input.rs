@@ -599,20 +599,10 @@ impl Lwfa {
                         .map(|(w, _)| w.clone())
                         .and_then(|w| self.layout.id_of(&w));
 
-                    match clicked {
-                        // Click to focus. The shell is told, because it did not
-                        // initiate this and its own focus state would go stale.
-                        Some(id) => self.set_focus(Some(id), true),
-                        None => {
-                            if let Some(keyboard) = self.seat.get_keyboard() {
-                                keyboard.set_focus(
-                                    self,
-                                    Option::<crate::focus::KeyboardFocus>::None,
-                                    serial,
-                                );
-                            }
-                        }
-                    }
+                    // Keep activation and stored focus aligned with the seat,
+                    // including a click on empty space. Otherwise the guardian
+                    // restores the old window after we deliberately cleared it.
+                    self.set_focus(clicked, true);
                 }
 
                 pointer.button(

@@ -269,6 +269,8 @@ export function App(): React.ReactElement {
   );
   const [authError, setAuthError] = useState<string>();
   const [permissions, setPermissions] = useState<Permissions>(VIEW_ONLY);
+  const permissionsRef = useRef(permissions);
+  permissionsRef.current = permissions;
   const [account, setAccount] = useState("");
   const [status, setStatus] = useState<Status>("connecting");
   const [statusDetail, setStatusDetail] = useState<string>();
@@ -458,7 +460,9 @@ export function App(): React.ReactElement {
     // engine hearing about it now and the DOM finding out after React commits.
     if (primaryRef.current) motion.set(windows, animate && animateRef.current);
     const focused = focusedWindow(next);
-    if (focused !== null) {
+    // A follower also rebuilds this state on hello, window events and resize.
+    // Those background updates must not take focus from the active player.
+    if (focused !== null && primaryRef.current && permissionsRef.current.mode === "interact") {
       connection.current?.send({ type: "focusWindow", id: focused });
     }
 
@@ -500,6 +504,16 @@ export function App(): React.ReactElement {
     [push],
   );
 
+  // Interactive followers can still select windows deliberately. Keep that
+  // input separate from server-driven layout/stream synchronization above.
+  const updateFromUser = useCallback((fn: Transition, animate = true) => {
+    update(fn, animate);
+    if (!primaryRef.current && permissionsRef.current.mode === "interact") {
+      const id = focusedWindow(stripRef.current);
+      if (id !== null) connection.current?.send({ type: "focusWindow", id });
+    }
+  }, [update]);
+
   // Flipping the pause-inactive preference takes effect when it is flipped,
   // not at the next reflow. The list is otherwise sent from `push`, which
   // runs on strip transitions, and a settings toggle is not one.
@@ -538,6 +552,7 @@ export function App(): React.ReactElement {
           // before it can attribute anything to it. See `takeCrashToReport`.
           reportAnyCrash(connection.current);
           setPermissions(message.permissions);
+          permissionsRef.current = message.permissions;
           // A `hello` also arrives when the owner changes what this session
           // may do. Losing the right to interact takes the clipboard with
           // it: the engine has already destroyed the ticket, so holding the
@@ -1080,8 +1095,8 @@ export function App(): React.ReactElement {
   // these inline would hand each surface a fresh function on every frame and
   // undo the whole point of the per-window frame store.
   const focusById = useCallback(
-    (id: WindowId) => update((s, o) => focusWindow(s, id, o, configRef.current)),
-    [update],
+    (id: WindowId) => updateFromUser((s, o) => focusWindow(s, id, o, configRef.current)),
+    [updateFromUser],
   );
 
   // Stable, so the observer in Desktop is not torn down every render.
@@ -1200,28 +1215,28 @@ export function App(): React.ReactElement {
         send(message)
       },
       focusWindow: (id) =>
-        update((st, o) => focusWindow(st, id, o, configRef.current)),
+        updateFromUser((st, o) => focusWindow(st, id, o, configRef.current)),
       closeWindow: (id) => send({ type: "closeWindow", id }),
       quitApp: (id) => send({ type: "quitApp", id }),
       spawn: (command, terminal = false) => send({ type: "spawn", command, terminal }),
       closeAndSpawn: (command, terminal, pid, force) =>
         send({ type: "closeAndSpawn", command, terminal, pid, force }),
-      focusColumn: (delta) => update(delta < 0 ? focusLeftAt : focusRightAt),
-      focusInStack: (delta) => update(delta < 0 ? focusUpAt : focusDownAt),
-      consume: () => update(consumeAt),
-      expel: () => update(expelAt),
+      focusColumn: (delta) => updateFromUser(delta < 0 ? focusLeftAt : focusRightAt),
+      focusInStack: (delta) => updateFromUser(delta < 0 ? focusUpAt : focusDownAt),
+      consume: () => updateFromUser(consumeAt),
+      expel: () => updateFromUser(expelAt),
       moveWindow: (id, target) =>
-        update((st, o) => moveWindow(st, id, target, o, configRef.current)),
+        updateFromUser((st, o) => moveWindow(st, id, target, o, configRef.current)),
       sendToWorkspace: (id, index) =>
-        update((st, o) => sendToWorkspace(st, id, index, o, configRef.current)),
-      cycleWidth: () => update(cycleWidthAt),
+        updateFromUser((st, o) => sendToWorkspace(st, id, index, o, configRef.current)),
+      cycleWidth: () => updateFromUser(cycleWidthAt),
       setColumnWidth: (id, preset) =>
-        update((st, o) => setColumnWidth(st, id, preset, o, configRef.current)),
+        updateFromUser((st, o) => setColumnWidth(st, id, preset, o, configRef.current)),
       // Through `update` like every other transition, because the point of the
       // flag is the stream list and `push` is what re-sends it. Nothing moves,
       // so the layout that goes with it is the one already on screen.
       setColumnLive: (id, live) => update((st) => setColumnLive(st, id, live), false),
-      setFit: (fit) => update((st, o) => setFit(st, fit, o, configRef.current)),
+      setFit: (fit) => updateFromUser((st, o) => setFit(st, fit, o, configRef.current)),
       takeControl: () => send({ type: "takeControl" }),
       listDir: (request, path) => send({ type: "listDir", request, path }),
       statPath: (request, path) => send({ type: "statPath", request, path }),
@@ -1234,15 +1249,15 @@ export function App(): React.ReactElement {
       endSession: (target) => send({ type: "endSession", session: target }),
       setSessionMode: (target, mode) =>
         send({ type: "setSessionMode", session: target, mode }),
-      toggleFullscreen: () => update(toggleFullscreenAt),
+      toggleFullscreen: () => updateFromUser(toggleFullscreenAt),
       focusWorkspace: (index) =>
-        update((st, o) =>
+        updateFromUser((st, o) =>
           focusWorkspace(st, index - st.focus, o, configRef.current),
         ),
       moveToWorkspace: (delta) =>
-        update(delta < 0 ? moveWorkspaceUpAt : moveWorkspaceDownAt),
+        updateFromUser(delta < 0 ? moveWorkspaceUpAt : moveWorkspaceDownAt),
     };
-  }, [update]);
+  }, [update, updateFromUser]);
 
   const sessionState = useMemo<SessionState>(
     () => ({

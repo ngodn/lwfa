@@ -153,3 +153,14 @@ CHROMIUM_EXECUTABLE for an existing Chromium binary.
 This validates the app's recovery behavior, not native iPadOS focus handling.
 The original physical LB/RB missing-tap issue still requires validation on the
 updated iPad client. Production and BG3 were not restarted by this patch.
+
+
+## Focus follow-up
+
+The user requested the complete focus inventory before further fixes, then
+approved correcting the confirmed gaps. See [Controller focus map](controller-focus-map.md)
+for the 1.4.3 audit, isolated browser observations, and the subsequent 1.4.4
+panel restoration, follower synchronization, and X11 focus repair changes.
+The deliberately injected blur in the 1.4.3 recovery test was not a reproduction
+of native iPad focus loss. The original physical-only missing-tap cause remains
+unconfirmed; production has not been restarted during these changes.

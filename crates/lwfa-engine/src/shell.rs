@@ -1787,7 +1787,7 @@ fn pump(client: &mut Live, events: &LoopSender<ShellEvent>) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Round trips measured over a relayed mobile link, in milliseconds.
@@ -2062,6 +2062,32 @@ mod tests {
         // outright instead of degrading it to one frame at a time.
         let slot = test_slot();
         assert!(slot.has_room(4, 1));
+    }
+
+    /// Real outgoing queues for dispatch tests, without a listener thread.
+    pub(crate) fn link_with_sessions(
+        sessions: &[SessionId],
+    ) -> (ShellLink, impl Fn() -> Vec<(SessionId, ToShell)>) {
+        let wake = rustix::event::eventfd(0, rustix::event::EventfdFlags::NONBLOCK).unwrap();
+        let clients = Arc::new(Clients::new(4, wake));
+        let mut receivers = Vec::new();
+        for &id in sessions {
+            let (outgoing, incoming) = channel();
+            clients.add(Arc::new(Slot { id, outgoing, ..test_slot() }));
+            receivers.push((id, incoming));
+        }
+        let drain = move || {
+            let mut messages = Vec::new();
+            for (id, incoming) in &receivers {
+                for message in incoming.try_iter() {
+                    if let Outgoing::Control(json) = message {
+                        messages.push((*id, serde_json::from_str(&json).unwrap()));
+                    }
+                }
+            }
+            messages
+        };
+        (ShellLink { clients }, drain)
     }
 
     fn test_slot() -> Slot {

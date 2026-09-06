@@ -62,17 +62,25 @@ import { FileDetails } from "@/components/FileDetails"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
+import { useFocusReturn } from "@/lib/useFocusReturn"
 
 export const FileDialog = memo(function FileDialog() {
   const dialog = useActiveFileDialog()
   const queued = useQueuedFileDialogs()
+  const focusReturn = useFocusReturn()
   if (!dialog) return null
   // Keyed by request so a second dialog starts with clean local state
   // rather than inheriting the previous one's selection.
-  return <OpenDialog key={dialog.request} dialog={dialog} queued={queued} />
+  return (
+    <OpenDialog key={dialog.request} dialog={dialog} queued={queued} focusReturn={focusReturn} />
+  )
 })
 
-function OpenDialog({ dialog, queued }: { dialog: DialogState; queued: number }) {
+function OpenDialog({ dialog, queued, focusReturn }: {
+  dialog: DialogState
+  queued: number
+  focusReturn: ReturnType<typeof useFocusReturn>
+}) {
   const actions = useSessionActions()
   const saveShaped = dialog.mode !== "open"
   const [tab, setTab] = useState<"device" | "desktop">(saveShaped ? "desktop" : "device")
@@ -161,6 +169,8 @@ function OpenDialog({ dialog, queued }: { dialog: DialogState; queued: number })
   return (
     <Dialog open onOpenChange={(open) => !open && cancel()}>
       <DialogContent
+        onOpenAutoFocus={focusReturn.onOpenAutoFocus}
+        onCloseAutoFocus={focusReturn.onCloseAutoFocus}
         className={cn(
           "flex flex-col gap-4 overflow-hidden",
           // Fits its content, capped at the viewport: four files should not

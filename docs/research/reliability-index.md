@@ -24,7 +24,8 @@ Read this file before resuming the reliability goal.
 | File | Purpose |
 |---|---|
 | [Status](reliability-status.md) | Current scope, proof and remaining work |
-| [Live BG3 check](reliability-controller-live.md) | Actual 1.4.2 physical-only complaint, kernel/XInput comparison and pending browser trace |
+| [Live BG3 check](reliability-controller-live.md) | Actual 1.4.2 physical-only complaint, kernel/XInput comparison, supplied browser trace and 1.4.3 recovery |
+| [Controller focus map](controller-focus-map.md) | Browser/native/remote focus inventory, confirmed design gaps and DOM probe |
 | [Controller engine/Proton investigation](reliability-controller-engine.md) | Actual GE-Proton11-5 configuration, input pipeline and sampling limits |
 | [Helper wrappers](reliability-helpers.md) | lwfa root resolution, CLI verification and wrapper smoke tests |
 | [Controller brief](../controller-input.md) | Previous input changes and limits of browser-to-kernel evidence |

@@ -991,7 +991,6 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
         // decision, and that is what accounts are for.
         ToEngine::SetAudio { .. }
         | ToEngine::SetStreams { .. }
-        | ToEngine::FocusWindow { .. }
         | ToEngine::ListApps
         | ToEngine::RequestIcons { .. } => true,
 
@@ -1005,6 +1004,10 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
 
         // Taking the wheel needs the right to use it.
         ToEngine::TakeControl => who.permissions.may_interact(),
+
+        // Focus changes which application receives input on the shared desktop.
+        // An interactive follower may select a window; a viewer may not.
+        ToEngine::FocusWindow { .. } => who.permissions.may_interact(),
 
         // Deciding who else is on your desktop is the owner's alone. Not
         // gated on interact: a named account with full interact rights still
@@ -1094,9 +1097,17 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             state.last_layout = windows;
         }
         ToEngine::FocusWindow { id } => {
-            // notify_shell false: the shell asked for this, so echoing it
-            // back would be noise and could start a loop.
+            let changed = state.focused() != Some(id);
             state.set_focus(Some(id), false);
+            // Keep the other shells aligned with deliberate shared focus
+            // changes. In particular, the primary must not restore its old
+            // selection on the next layout after a follower selects a window.
+            // No echo to the requester, and no new round for duplicate IDs.
+            if changed {
+                for &other in state.sessions.keys().filter(|&&other| other != session) {
+                    state.send_to_session(other, lwfa_proto::ToShell::FocusChanged { id: Some(id) });
+                }
+            }
         }
         ToEngine::CloseWindow { id } => state.request_close(id),
         ToEngine::QuitApp { id } => state.quit_app(id, session),
@@ -1636,6 +1647,54 @@ mod tests {
             false,
             &ToEngine::CloseWindow { id: WindowId(1) }
         ));
+    }
+
+    #[test]
+    fn focus_dispatch_updates_other_sessions_without_echo_or_duplicates() {
+        let mut event_loop = smithay::reexports::calloop::EventLoop::try_new().unwrap();
+        let display = smithay::reexports::wayland_server::Display::new().unwrap();
+        let mut state = Lwfa::without_listener(&mut event_loop, display);
+        let (link, drain) = shell::tests::link_with_sessions(&[1, 2, 3, 4]);
+        state.shell = Some(link);
+        state.primary = Some(1);
+        state.sessions.insert(1, session(SessionMode::Interact));
+        state.sessions.insert(2, session(SessionMode::Interact));
+        state.sessions.insert(3, session(SessionMode::View));
+        // Queue 4 represents a socket that has not entered the authenticated
+        // session registry. It must not receive this state update.
+        let request = ToEngine::FocusWindow { id: WindowId(1) };
+        assert!(permitted(&state, 2, &request));
+        handle_shell_message(&mut state, 2, request.clone());
+        assert_eq!(state.focused(), Some(WindowId(1)));
+        assert_eq!(
+            drain(),
+            vec![
+                (1, lwfa_proto::ToShell::FocusChanged { id: Some(WindowId(1)) }),
+                (3, lwfa_proto::ToShell::FocusChanged { id: Some(WindowId(1)) }),
+            ],
+        );
+        // A duplicate request, including one from the primary after applying
+        // the update, cannot create another round of focus notifications.
+        handle_shell_message(&mut state, 2, request.clone());
+        handle_shell_message(&mut state, 1, request);
+        assert!(drain().is_empty());
+        handle_shell_message(&mut state, 1, ToEngine::FocusWindow { id: WindowId(2) });
+        assert_eq!(
+            drain(),
+            vec![
+                (2, lwfa_proto::ToShell::FocusChanged { id: Some(WindowId(2)) }),
+                (3, lwfa_proto::ToShell::FocusChanged { id: Some(WindowId(2)) }),
+            ],
+        );
+    }
+
+    #[test]
+    fn focus_requires_interact_even_for_the_primary() {
+        let focus = ToEngine::FocusWindow { id: WindowId(1) };
+        for primary in [false, true] {
+            assert!(!allowed(&session(SessionMode::View), primary, &focus));
+            assert!(allowed(&session(SessionMode::Interact), primary, &focus));
+        }
     }
 
     #[test]

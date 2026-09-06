@@ -1,0 +1,61 @@
+{
+  "browser": "Chromium",
+  "opened": {
+    "focused": true,
+    "active": "<button type=\"button\" class=\"absolute top-2 right-2 grid size-11 place-items-center rounded-lg opacity-70 ring-offset-background transition-opacity ho",
+    "events": [
+      {
+        "name": "focusin",
+        "target": "BUTTON:Open gamepad settings",
+        "pageFocus": true
+      },
+      {
+        "name": "focusout",
+        "target": "BUTTON:Open gamepad settings",
+        "pageFocus": true
+      },
+      {
+        "name": "focusin",
+        "target": "BUTTON:Close",
+        "pageFocus": true
+      }
+    ]
+  },
+  "physical": {
+    "events": [],
+    "focused": true
+  },
+  "closed": {
+    "focused": true,
+    "active": "BODY",
+    "events": [
+      {
+        "name": "focusout",
+        "target": "BUTTON:Close",
+        "pageFocus": true
+      }
+    ]
+  },
+  "haptics": {
+    "focused": true,
+    "active": "BUTTON",
+    "events": [
+      {
+        "name": "focusin",
+        "target": "INPUT:Focus probe",
+        "pageFocus": true
+      },
+      {
+        "name": "focusout",
+        "target": "INPUT:Focus probe",
+        "pageFocus": true
+      },
+      {
+        "name": "focusin",
+        "target": "BUTTON:Haptic probe",
+        "pageFocus": true
+      }
+    ],
+    "togglePresent": true
+  }
+}

@@ -17,6 +17,7 @@ import { Loader2, MonitorSmartphone, TriangleAlert } from "lucide-react"
 import { clearBlocked, closing, useBlocked } from "@/lib/alreadyRunning"
 import { useSessionActions } from "@/session"
 import { Button } from "@/components/ui/button"
+import { useFocusReturn } from "@/lib/useFocusReturn"
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,7 @@ import {
 export const AlreadyRunning = memo(function AlreadyRunning() {
   const blocked = useBlocked()
   const actions = useSessionActions()
+  const focusReturn = useFocusReturn()
   if (!blocked) return null
 
   const { program, phase } = blocked
@@ -48,7 +50,11 @@ export const AlreadyRunning = memo(function AlreadyRunning() {
         if (!open && phase !== "closing") clearBlocked()
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent
+        className="sm:max-w-md"
+        onOpenAutoFocus={focusReturn.onOpenAutoFocus}
+        onCloseAutoFocus={focusReturn.onCloseAutoFocus}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {phase === "closing" ? (

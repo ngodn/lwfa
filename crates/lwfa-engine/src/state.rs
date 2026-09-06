@@ -343,6 +343,22 @@ pub struct Lwfa {
 
 impl Lwfa {
     pub fn new(event_loop: &mut EventLoop<'static, CalloopData>, display: Display<Self>) -> Self {
+        Self::initialize(event_loop, display, true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn without_listener(
+        event_loop: &mut EventLoop<'static, CalloopData>,
+        display: Display<Self>,
+    ) -> Self {
+        Self::initialize(event_loop, display, false)
+    }
+
+    fn initialize(
+        event_loop: &mut EventLoop<'static, CalloopData>,
+        display: Display<Self>,
+        listen: bool,
+    ) -> Self {
         let dh = display.handle();
         let config = crate::config::Config::load();
 
@@ -368,7 +384,7 @@ impl Lwfa {
         // before the first client connects, not added when an iPad appears.
         seat.add_touch();
 
-        let socket_name = Self::init_wayland_listener(display, event_loop);
+        let socket_name = Self::init_wayland_listener(display, event_loop, listen);
         let loop_signal = event_loop.get_signal();
         let loop_handle = event_loop.handle();
 
@@ -452,22 +468,29 @@ impl Lwfa {
     fn init_wayland_listener(
         display: Display<Lwfa>,
         event_loop: &mut EventLoop<'static, CalloopData>,
+        listen: bool,
     ) -> OsString {
-        let listening_socket =
-            ListeningSocketSource::new_auto().expect("failed to bind a wayland socket");
-        let socket_name = listening_socket.socket_name().to_os_string();
         let loop_handle = event_loop.handle();
-
-        loop_handle
-            .insert_source(listening_socket, move |client_stream, _, state| {
-                if let Err(err) = state
-                    .display_handle
-                    .insert_client(client_stream, Arc::new(ClientState::default()))
-                {
-                    tracing::warn!("failed to accept a client: {err}");
-                }
-            })
-            .expect("failed to init the wayland event source");
+        let socket_name = if listen {
+            let listening_socket =
+                ListeningSocketSource::new_auto().expect("failed to bind a wayland socket");
+            let socket_name = listening_socket.socket_name().to_os_string();
+            loop_handle
+                .insert_source(listening_socket, move |client_stream, _, state| {
+                    if let Err(err) = state
+                        .display_handle
+                        .insert_client(client_stream, Arc::new(ClientState::default()))
+                    {
+                        tracing::warn!("failed to accept a client: {err}");
+                    }
+                })
+                .expect("failed to init the wayland event source");
+            socket_name
+        } else {
+            // In-process dispatch tests need protocol state but no public
+            // socket or desktop runtime directory.
+            OsString::new()
+        };
 
         loop_handle
             .insert_source(
@@ -1439,14 +1462,9 @@ impl Lwfa {
     /// after launch and being dead by the time the menu appeared.
     const MENU_MIN: i32 = 16;
 
-    /// How long a mapped popup may hold the re-assert off.
-    ///
-    /// A menu is a thing somebody is looking at right now, so protecting it
-    /// for a few seconds covers the case this exists for. Past that, a window
-    /// still claiming to be a popup is machinery that is not going away, and
-    /// letting it veto focus indefinitely costs a game its controller. The
-    /// re-assert is cheap and idempotent, so erring towards running it is the
-    /// safe direction.
+    /// Give a newly mapped menu time to finish its input handshake before
+    /// attempting repair. After the grace period, actual X input focus still
+    /// protects any popup or other real window that owns it.
     const MENU_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
     /// Whether an X11 menu or tooltip is up *right now*.
@@ -1480,51 +1498,40 @@ impl Lwfa {
     }
 
     pub fn reassert_focus(&mut self) {
-        // Never while a menu is open.
-        //
-        // The bounce below is a focus *change* as far as the X server is
-        // concerned, and an X11 menu is a window that closes itself the
-        // moment focus leaves it. Steam's menus and dropdowns are exactly
-        // that, so every one of them opened, rendered, and dismissed itself
-        // about a third of a second later: long enough to see, far too short
-        // to use. Traced live, with the menu on screen in the stream between
-        // the two lines:
-        //
-        //   OR MAP   win=0x1a00047 (238x235)   the menu maps
-        //   REASSERT focus -> WindowId(3)      this function, 198ms later
-        //   UNMAP    win=0x1a00047 or=true     the menu, 35ms after that
-        //
-        // A tap focuses the window, focusing re-centres the strip, the strip
-        // is a layout, and every layout schedules one of these; that is why
-        // it looked like a touch bug and why the first tap on a window was
-        // the one that always failed.
-        //
-        // Skipped, not dropped: closing the menu schedules another one, so
-        // the game this exists for still gets its focus back. See
-        // `unmapped_window` in `handlers/xwayland.rs`.
         if self.x11_popup_open() {
             return;
         }
 
         let id = self.focused;
-        // X11 needs more than idempotence. Its focus lives inside the X
-        // server, and Smithay only issues SetInputFocus from the keyboard
-        // *enter* handler, which a same-target set_focus never produces. A
-        // game's own fullscreen dance moves X server focus around behind our
-        // back, so the focus is bounced for X11 windows: the leave and
-        // re-enter forces SetInputFocus and WM_TAKE_FOCUS to actually go
-        // out. Proton runs every Steam game through XWayland, which makes
-        // this the path that decides whether the controller works.
-        let is_x11 = id
+        let target = id
             .and_then(|id| self.layout.window(id))
-            .is_some_and(|w| w.x11_surface().is_some());
-        if is_x11 {
-            if let Some(keyboard) = self.seat.get_keyboard() {
-                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                keyboard.set_focus(self, None, serial);
+            .and_then(crate::focus::KeyboardFocus::of);
+        if let Some(crate::focus::KeyboardFocus::X11(surface)) = target.as_ref() {
+            // A delayed layout repair must not take focus from a real X11
+            // window, including a popup older than the menu grace period.
+            // Explicit user focus changes still go through set_focus.
+            if !self
+                .xfocus
+                .as_mut()
+                .is_some_and(|guardian| guardian.may_reassert(surface.window_id()))
+            {
+                return;
             }
         }
-        self.set_focus(id, false);
+
+        // Restore a seat target lost during surface churn. Never clear it
+        // first: X11 leave sends SetInputFocus(None), which dismisses menus
+        // and briefly backgrounds games even when nothing actually changed.
+        if self
+            .seat
+            .get_keyboard()
+            .is_some_and(|keyboard| keyboard.current_focus() != target)
+        {
+            self.set_focus(id, false);
+        }
+        // Same-target seat focus does not emit another keyboard enter. Ask
+        // X11 directly and repair only None/PointerRoot, without a bounce.
+        self.guard_x_focus();
     }
 
     // ---------------------------------------------------------------------

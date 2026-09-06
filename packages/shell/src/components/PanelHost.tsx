@@ -19,6 +19,7 @@ import { usePortrait } from "@/components/NavRail"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { useFocusReturn } from "@/lib/useFocusReturn"
 
 const AppearancePanel = lazy(() => import("@/panels/AppearancePanel"))
 const SettingsPanel = lazy(() => import("@/panels/SettingsPanel"))
@@ -59,6 +60,7 @@ export interface PanelHostProps {
 
 export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostProps) {
   const nav = usePrefSection("nav")
+  const focusReturn = useFocusReturn()
 
   // What the sheet is showing: one panel, or a tabbed set from a merged group.
   const view = useMemo(() => {
@@ -127,6 +129,8 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
         side={side}
         className={cnPanel(vertical)}
         style={geometry}
+        onOpenAutoFocus={focusReturn.onOpenAutoFocus}
+        onCloseAutoFocus={focusReturn.onCloseAutoFocus}
         // A press on the rail is a *switch*, not a dismissal. Without this the
         // sheet closes on the pointer-down and the button's click then reopens
         // it, and the two race: the panel you asked for ends up selected in the
@@ -141,6 +145,7 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
           if ((event.target as Element | null)?.closest?.("[data-shell-nav]")) {
             event.preventDefault()
           }
+          focusReturn.onInteractOutside(event)
         }}
       >
         {view === null ? null : view.kind === "item" ? (

@@ -24,7 +24,6 @@
 //! (`None` and `PointerRoot`); a menu, a popup, or any actual window holding
 //! focus is left alone.
 
-use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt as _, InputFocus};
 use x11rb::rust_connection::RustConnection;
 
@@ -58,32 +57,230 @@ impl Guardian {
         self.conn.as_ref()
     }
 
-    /// Point the input focus at `expected` if it currently points at nothing.
-    pub fn ensure(&mut self, expected: u32) {
-        let Some(conn) = self.conn() else { return };
-
+    fn focus(&mut self) -> Option<u32> {
+        let conn = self.conn()?;
         let focus = conn
             .get_input_focus()
             .ok()
             .and_then(|cookie| cookie.reply().ok())
             .map(|reply| reply.focus);
-        let Some(focus) = focus else {
+        if focus.is_none() {
             // A dead connection (Xwayland restarted); rebuilt next tick.
             self.conn = None;
-            return;
-        };
-        if focus != FOCUS_NONE && focus != FOCUS_POINTER_ROOT {
-            return;
         }
+        focus
+    }
 
+    /// A layout repair may restore this target only if no other X window
+    /// owns focus. Fail closed when the server cannot be queried.
+    pub fn may_reassert(&mut self, expected: u32) -> bool {
+        self.focus()
+            .is_some_and(|focus| focus == expected || is_void(focus))
+    }
+
+    /// Point the input focus at `expected` if it currently points at nothing.
+    /// Returns true only after the X server accepts the repair.
+    pub fn ensure(&mut self, expected: u32) -> bool {
+        if !self.focus().is_some_and(is_void) {
+            return false;
+        }
+        let Some(conn) = self.conn() else {
+            return false;
+        };
         let repaired = conn
             .set_input_focus(InputFocus::PARENT, expected, x11rb::CURRENT_TIME)
-            .is_ok()
-            && conn.flush().is_ok();
+            .ok()
+            .and_then(|cookie| cookie.check().ok())
+            .is_some();
         if repaired {
             tracing::info!("X input focus was on nothing; repaired to 0x{expected:x}");
         } else {
+            // Queueing a request is not success: an unmapped or destroyed
+            // target can be rejected by the server with BadMatch/BadWindow.
+            tracing::debug!("X input focus repair to 0x{expected:x} was rejected");
             self.conn = None;
         }
+        repaired
+    }
+}
+
+fn is_void(focus: u32) -> bool {
+    matches!(focus, FOCUS_NONE | FOCUS_POINTER_ROOT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Child, Command, Stdio};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::Event;
+    use x11rb::protocol::xproto::{CreateWindowAux, EventMask, WindowClass};
+
+    struct Server(Child);
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Xvfb; creates its own isolated display"]
+    fn repairs_void_focus_without_disturbing_real_windows() {
+        // Never connect to DISPLAY: this test changes focus only on its own
+        // headless X server, including when run from an active game session.
+        let binary = std::env::var_os("LWFA_TEST_XVFB").unwrap_or_else(|| "Xvfb".into());
+        let mut server = Server(
+            Command::new(binary)
+                .args([
+                    "-displayfd",
+                    "1",
+                    "-screen",
+                    "0",
+                    "320x240x24",
+                    "-nolisten",
+                    "tcp",
+                ])
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("start isolated Xvfb"),
+        );
+        let mut display = String::new();
+        BufReader::new(server.0.stdout.take().unwrap())
+            .read_line(&mut display)
+            .unwrap();
+        let display: u32 = display.trim().parse().expect("Xvfb display number");
+        let (conn, screen) = RustConnection::connect(Some(&format!(":{display}"))).unwrap();
+        let conn = std::sync::Arc::new(conn);
+        let screen = &conn.setup().roots[screen];
+        let create_window = || {
+            let id = conn.generate_id().unwrap();
+            conn.create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                id,
+                screen.root,
+                0,
+                0,
+                100,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new().event_mask(EventMask::FOCUS_CHANGE),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+            id
+        };
+        let game = create_window();
+        let popup = create_window();
+        let unmapped = create_window();
+        for id in [game, popup] {
+            conn.map_window(id).unwrap().check().unwrap();
+        }
+        // Exercise the real delayed-reassert call site with Smithay's X11
+        // keyboard target, without starting a renderer or a production engine.
+        let mut event_loop = smithay::reexports::calloop::EventLoop::try_new().unwrap();
+        let wl_display = smithay::reexports::wayland_server::Display::new().unwrap();
+        let mut state = crate::state::Lwfa::without_listener(&mut event_loop, wl_display);
+        let atoms = smithay::xwayland::xwm::Atoms::new(&conn)
+            .unwrap()
+            .reply()
+            .unwrap();
+        let surface = smithay::xwayland::X11Surface::new(
+            None,
+            game,
+            false,
+            std::sync::Arc::downgrade(&conn),
+            atoms,
+            smithay::utils::Rectangle::from_size((100, 100).into()),
+        );
+        let id = lwfa_proto::WindowId(1);
+        state
+            .layout
+            .track(id, smithay::desktop::Window::new_x11_window(surface));
+        state.xfocus = Some(Guardian::new(display));
+        state.set_focus(Some(id), false);
+        let mut guardian = Guardian::new(display);
+        for missing in [FOCUS_NONE, FOCUS_POINTER_ROOT] {
+            conn.set_input_focus(InputFocus::NONE, missing, x11rb::CURRENT_TIME)
+                .unwrap()
+                .check()
+                .unwrap();
+            assert!(guardian.may_reassert(game));
+            state.reassert_focus();
+            assert_eq!(conn.get_input_focus().unwrap().reply().unwrap().focus, game);
+        }
+        // A healthy game and a real popup keep focus, with no FocusOut or
+        // FocusIn generated by repeated layout checks and guardian ticks.
+        for owner in [game, popup] {
+            conn.set_input_focus(InputFocus::NONE, owner, x11rb::CURRENT_TIME)
+                .unwrap()
+                .check()
+                .unwrap();
+            while conn.poll_for_event().unwrap().is_some() {}
+            for _ in 0..20 {
+                assert_eq!(guardian.may_reassert(game), owner == game);
+                state.reassert_focus();
+                assert!(!guardian.ensure(game));
+            }
+            assert_eq!(
+                conn.get_input_focus().unwrap().reply().unwrap().focus,
+                owner
+            );
+            while let Some(event) = conn.poll_for_event().unwrap() {
+                assert!(!matches!(event, Event::FocusIn(_) | Event::FocusOut(_)));
+            }
+        }
+        // A missing seat target is restored only after the real popup has
+        // relinquished focus. Layout repair must not override its ownership.
+        let keyboard = state.seat.get_keyboard().unwrap();
+        keyboard.set_focus(
+            &mut state,
+            None,
+            smithay::utils::SERIAL_COUNTER.next_serial(),
+        );
+        conn.set_input_focus(InputFocus::NONE, popup, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .unwrap();
+        state.reassert_focus();
+        assert!(keyboard.current_focus().is_none());
+        assert_eq!(
+            conn.get_input_focus().unwrap().reply().unwrap().focus,
+            popup
+        );
+        conn.set_input_focus(InputFocus::NONE, FOCUS_NONE, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .unwrap();
+        state.reassert_focus();
+        assert!(keyboard.current_focus().is_some());
+        assert_eq!(conn.get_input_focus().unwrap().reply().unwrap().focus, game);
+
+        // The server rejects focus on an unmapped window. A queued request
+        // must not be reported as a successful repair, and retry must work.
+        conn.set_input_focus(InputFocus::NONE, FOCUS_NONE, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(!guardian.ensure(unmapped));
+        assert!(guardian.ensure(game));
+        assert_eq!(conn.get_input_focus().unwrap().reply().unwrap().focus, game);
+
+        // Clicking empty space intentionally clears compositor ownership as
+        // well as seat focus. Neither repair path may resurrect the old game.
+        state.set_focus(None, true);
+        state.reassert_focus();
+        state.guard_x_focus();
+        assert!(state.focused().is_none());
+        assert!(keyboard.current_focus().is_none());
+        assert_eq!(
+            conn.get_input_focus().unwrap().reply().unwrap().focus,
+            FOCUS_NONE
+        );
     }
 }
