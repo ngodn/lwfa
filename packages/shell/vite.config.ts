@@ -89,6 +89,8 @@ export default defineConfig({
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
   plugins: [react(), tailwindcss()],
+  // Keep the browser floor stable across Vite's changing default targets.
+  build: { target: ["chrome107", "edge107", "firefox104", "safari16"] },
   server: {
     // Reachable from a phone or tablet on the LAN, which is the entire point
     // of the project. The engine's socket is gated by AUTH_PASS.

@@ -109,11 +109,11 @@ export interface WindowSurfaceProps {
    * the memo below, which is the whole reason this component is cheap.
    */
   onFocus: (id: WindowId) => void
-  /** Input headed for the window itself, in window-relative logical pixels. */
+  /** Position events use fractions of the window's visible width and height. */
   onInput: (id: WindowId, event: SurfaceInput) => void
 }
 
-/** Input aimed at a specific window, already in its coordinate space. */
+/** Input aimed at a window; motion and touch positions are normalized. */
 export type SurfaceInput =
   | { kind: "motion"; x: number; y: number }
   | { kind: "button"; button: number; pressed: boolean }
@@ -146,17 +146,15 @@ export const WindowSurface = memo(function WindowSurface({
   /** Turns a held finger into a right click. See `lib/longPress`. */
   const longPress = useRef(new LongPress())
   /**
-   * The size of the pixels on screen, which is what a click must map through.
-   *
-   * The canvas backing store is exactly what the engine last sent, so it is
-   * the application's real size. `rect` is only what the shell *asked* for,
-   * and a client that has not resized yet makes those differ. See
-   * `windowPoint`.
+   * Gesture distances stay in layout pixels regardless of render density.
+   * The engine maps normalized positions into the current app geometry.
+   * A higher-resolution frame must not double click coordinates or shrink
+   * the physical distance needed to begin a drag.
    */
   const contentSize = useCallback(
     () => ({
-      width: canvas.current?.width || rect.width,
-      height: canvas.current?.height || rect.height,
+      width: Math.max(1, rect.width),
+      height: Math.max(1, rect.height),
     }),
     [rect.width, rect.height],
   )
@@ -164,7 +162,14 @@ export const WindowSurface = memo(function WindowSurface({
   // Subscribed per window, so a frame for another window does not re-render
   // this one. See lib/frames.ts.
   const frame = useFrame(id)
-  const send = useCallback((event: SurfaceInput) => onInput(id, event), [onInput, id])
+  const send = useCallback((event: SurfaceInput) => {
+    if (event.kind === "motion" || event.kind === "touchDown" || event.kind === "touchMotion") {
+      const size = contentSize()
+      onInput(id, { ...event, x: event.x / size.width, y: event.y / size.height })
+    } else {
+      onInput(id, event)
+    }
+  }, [onInput, id, contentSize])
   // Which input surface is on screen. The virtual-mouse behaviour below is
   // gated strictly on this: when it is not `"mouse"`, none of that code runs
   // and a tap is a touch exactly as it always was. See `lib/mouse.ts`.

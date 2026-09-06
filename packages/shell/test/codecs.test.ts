@@ -163,3 +163,38 @@ describe("asking about Opus", () => {
     expect(await decodesOpus()).toBe(true)
   })
 })
+
+describe("stream parameter sets", () => {
+  // Main profile PTL includes emulation prevention between zero bytes.
+  const main = new Uint8Array([0,0,0,1,0x42,1,1,1,0x60,0,0,3,0,0xb0,0,0,3,0,0,3,0,180])
+
+  it("reads HEVC level 6 rather than assuming every window fits level 5.1", async () => {
+    const { codecFromAnnexB } = await import("../src/lib/codecs")
+    expect(codecFromAnnexB(main, "hevc")).toBe("hvc1.1.6.L180.B0")
+    const small = main.slice()
+    small[small.length - 1] = 93
+    expect(codecFromAnnexB(small, "hevc")).toBe("hvc1.1.6.L93.B0")
+  })
+
+  it("handles three-byte starts, profile space, high tier and all constraint bytes", async () => {
+    const { codecFromAnnexB } = await import("../src/lib/codecs")
+    const custom = new Uint8Array([0,0,1,0x42,1,1,0xa2,0x80,1,0x80,1,0xb0,0,0x12,0,0,1,186])
+    // Escape the internal 00 00 01 while preserving the external start code.
+    const escaped = new Uint8Array([...custom.slice(0,16),3,...custom.slice(16)])
+    expect(codecFromAnnexB(escaped, "hevc")).toBe("hvc1.B2.80018001.H186.B0.0.12.0.0.1")
+  })
+
+  it("skips other NAL types and does not read across a truncated SPS boundary", async () => {
+    const { codecFromAnnexB } = await import("../src/lib/codecs")
+    const vpsAndSps = new Uint8Array([0,0,1,0x40,1,0xff, ...main])
+    expect(codecFromAnnexB(vpsAndSps, "hevc")).toBe("hvc1.1.6.L180.B0")
+    expect(codecFromAnnexB(new Uint8Array([0,0,1,0x42,1,1,1,0,0,1,0x44,1,...Array(20).fill(9)]), "hevc")).toBeNull()
+    expect(codecFromAnnexB(main.slice(0,-1), "hevc")).toBeNull()
+    expect(codecFromAnnexB(new Uint8Array([0,0,1,0x67,0x42,0,0,1,0x68,1,2,3]), "h264")).toBeNull()
+  })
+
+  it("reads H264 profile and level instead of using the initial family probe", async () => {
+    const { codecFromAnnexB } = await import("../src/lib/codecs")
+    expect(codecFromAnnexB(new Uint8Array([0,0,1,0x67,0x4d,0x40,0x33]), "h264")).toBe("avc1.4D4033")
+  })
+})

@@ -12,10 +12,16 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::Renderer;
+use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::surface::{
+    WaylandSurfaceRenderElement, render_elements_from_surface_tree,
+};
+use smithay::backend::renderer::element::utils::{
+    CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
+};
+use smithay::backend::renderer::element::{Element, Kind};
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::winit::{self, WinitEvent};
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::EventLoop;
@@ -23,10 +29,175 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::winit::dpi::LogicalSize;
 use smithay::reexports::winit::platform::wayland::WindowAttributesExtWayland;
 use smithay::reexports::winit::window::Window as WinitWindow;
-use smithay::utils::{Rectangle, Transform};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
+use smithay::wayland::seat::WaylandFocus;
 
 use crate::config;
 use crate::state::{CalloopData, Lwfa};
+
+type PreviewElement = CropRenderElement<
+    RelocateRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
+>;
+
+/// Fit the session into the host without changing its opacity or aspect ratio.
+pub(crate) fn preview_fit(
+    host: Size<i32, Physical>,
+    output: Size<i32, smithay::utils::Logical>,
+) -> f64 {
+    if host.w <= 0 || host.h <= 0 || output.w <= 0 || output.h <= 0 {
+        return 1.0;
+    }
+    (host.w as f64 / output.w as f64).min(host.h as f64 / output.h as f64)
+}
+
+/// Match the browser's fill of its CSS rectangle using committed app geometry.
+/// A configure is a request; minimum-size and fixed-size clients can ignore it.
+pub(crate) fn preview_scale(
+    preview: Size<i32, Logical>,
+    actual: Size<i32, Logical>,
+    fit: f64,
+) -> Scale<f64> {
+    Scale {
+        x: fit * f64::from(preview.w.max(1)) / f64::from(actual.w.max(1)),
+        y: fit * f64::from(preview.h.max(1)) / f64::from(actual.h.max(1)),
+    }
+}
+
+fn project_element<E: Element>(
+    element: E,
+    scale: impl Into<Scale<f64>>,
+    offset: Point<i32, Physical>,
+    crop: Rectangle<i32, Physical>,
+) -> Option<CropRenderElement<RelocateRenderElement<RescaleRenderElement<E>>>> {
+    let element = RescaleRenderElement::from_element(element, (0, 0).into(), scale);
+    let element = RelocateRenderElement::from_element(element, offset, Relocate::Relative);
+    CropRenderElement::from_element(element, 1.0, crop)
+}
+
+fn preview_elements(state: &Lwfa, renderer: &mut GlesRenderer, fit: f64) -> Vec<PreviewElement> {
+    let mut elements = Vec::new();
+    for (id, window, location) in state.layout.placements_with_ids().into_iter().rev() {
+        let Some(surface) = window.wl_surface() else {
+            continue;
+        };
+        let Some(rect) = state.layout.preview_rect(id) else {
+            continue;
+        };
+        let scale = preview_scale(rect.size, window.geometry().size, fit);
+        let offset = location.to_f64().to_physical(fit).to_i32_round();
+        let crop = rect.to_f64().to_physical(fit).to_i32_round();
+        let origin = if window.is_x11() {
+            Point::default()
+        } else {
+            Point::from((-window.geometry().loc.x, -window.geometry().loc.y))
+        };
+        let mut trees = state.overlays_for(&window, location);
+        trees.reverse();
+        trees.push((surface.into_owned(), origin));
+        for (surface, origin) in trees {
+            let tree: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                render_elements_from_surface_tree(
+                    renderer,
+                    &surface,
+                    origin.to_physical(1),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                );
+            elements.extend(
+                tree.into_iter()
+                    .filter_map(|element| project_element(element, scale, offset, crop)),
+            );
+        }
+    }
+    elements
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    use smithay::backend::renderer::element::solid::{SolidColorBuffer, SolidColorRenderElement};
+
+    #[test]
+    fn fitting_a_large_output_changes_geometry_without_fading_it() {
+        let fit = preview_fit((1000, 700).into(), (2000, 1000).into());
+        assert_eq!(fit, 0.5);
+        let buffer = SolidColorBuffer::new((2000, 1000), [1.0, 0.0, 0.0, 1.0]);
+        let element =
+            SolidColorRenderElement::from_buffer(&buffer, (0, 0), 1.0, 1.0, Kind::Unspecified);
+        let element = project_element(
+            element,
+            fit,
+            (0, 0).into(),
+            Rectangle::from_size((1000, 500).into()),
+        )
+        .unwrap();
+        assert_eq!(
+            element.geometry(1.0.into()),
+            Rectangle::from_size((1000, 500).into())
+        );
+        assert_eq!(element.alpha(), 1.0);
+    }
+
+    #[test]
+    fn workspace_and_host_scaling_preserve_window_placement_and_crop_old_buffers() {
+        let buffer = SolidColorBuffer::new((2400, 1200), [1.0, 1.0, 1.0, 1.0]);
+        let element =
+            SolidColorRenderElement::from_buffer(&buffer, (-20, -20), 1.0, 1.0, Kind::Unspecified);
+        // 2x workspace, then a host displaying the session at half size.
+        let crop = Rectangle::new((100, 50).into(), (500, 250).into());
+        let element = project_element(element, 0.25, (100, 50).into(), crop).unwrap();
+        assert_eq!(element.geometry(1.0.into()), crop);
+        assert_eq!(element.alpha(), 1.0);
+    }
+
+    #[test]
+    fn reduced_workspace_enlarges_content_and_empty_sizes_are_safe() {
+        let buffer = SolidColorBuffer::new((500, 250), [1.0, 1.0, 1.0, 1.0]);
+        let element =
+            SolidColorRenderElement::from_buffer(&buffer, (0, 0), 1.0, 1.0, Kind::Unspecified);
+        let crop = Rectangle::from_size((1000, 500).into());
+        assert_eq!(
+            project_element(element, 2.0, (0, 0).into(), crop)
+                .unwrap()
+                .geometry(1.0.into()),
+            crop
+        );
+        assert_eq!(preview_fit((0, 0).into(), (1000, 500).into()), 1.0);
+    }
+
+    #[test]
+    fn a_client_that_refuses_a_larger_workspace_still_fills_the_preview() {
+        let scale = preview_scale((1000, 500).into(), (1000, 500).into(), 0.5);
+        let buffer = SolidColorBuffer::new((1000, 500), [1.0, 1.0, 1.0, 1.0]);
+        let element =
+            SolidColorRenderElement::from_buffer(&buffer, (0, 0), 1.0, 1.0, Kind::Unspecified);
+        let crop = Rectangle::from_size((500, 250).into());
+        assert_eq!(
+            project_element(element, scale, (0, 0).into(), crop)
+                .unwrap()
+                .geometry(1.0.into()),
+            crop
+        );
+    }
+
+    #[test]
+    fn a_larger_minimum_size_is_fitted_on_each_axis() {
+        let scale = preview_scale((1000, 500).into(), (1200, 800).into(), 1.0);
+        let buffer = SolidColorBuffer::new((1240, 840), [1.0, 1.0, 1.0, 1.0]);
+        let element =
+            SolidColorRenderElement::from_buffer(&buffer, (-20, -20), 1.0, 1.0, Kind::Unspecified);
+        let crop = Rectangle::new((100, 50).into(), (1000, 500).into());
+        assert_eq!(
+            project_element(element, scale, (100, 50).into(), crop)
+                .unwrap()
+                .geometry(1.0.into()),
+            crop
+        );
+        assert_eq!(scale.x, 1000.0 / 1200.0);
+        assert_eq!(scale.y, 500.0 / 800.0);
+    }
+}
 
 /// Where to write per-window capture PNGs, if the debug dump is enabled.
 fn capture_dump_dir() -> Option<std::path::PathBuf> {
@@ -121,7 +292,9 @@ pub fn init_winit(
     data.space.map_output(&output, (0, 0));
     data.layout.set_output_size(mode.size.to_logical(1));
 
-    let mut damage_tracker = OutputDamageTracker::from_output(&output);
+    let mut preview_size = backend.borrow().window_size();
+    data.set_preview_size(preview_size);
+    let mut damage_tracker = OutputDamageTracker::new(preview_size, 1.0, Transform::Flipped180);
 
     // Applying a new output size is the same work whether the host resized the
     // window or a remote shell declared its viewport, so both go through here.
@@ -145,6 +318,7 @@ pub fn init_winit(
             });
             let logical = size.to_logical(1);
             state.layout.set_output_size(logical);
+            state.refresh_x11_outputs(true);
             state.send_to_shell(lwfa_proto::ToShell::OutputChanged {
                 output: lwfa_proto::Output {
                     width: logical.w,
@@ -184,8 +358,7 @@ pub fn init_winit(
     // `[window] preview` in configs/defaults.toml: a window parked on a
     // hidden workspace must not be presented to, or the driver eventually
     // blocks the whole engine waiting for a buffer the host never returns.
-    let preview =
-        data.config.window.preview && std::env::var_os("LWFA_NO_PREVIEW").is_none();
+    let preview = data.config.window.preview && std::env::var_os("LWFA_NO_PREVIEW").is_none();
     if !preview {
         tracing::info!("host window preview is off; the session is remote-only");
     }
@@ -204,6 +377,7 @@ pub fn init_winit(
 
             match event {
                 WinitEvent::Resized { size, .. } => {
+                    state.set_preview_size(size);
                     // A remote shell's viewport wins over the host window's
                     // size: the person looking at the session is looking at
                     // *their* screen, and letting the host window's shape
@@ -269,11 +443,13 @@ pub fn init_winit(
                         // view a faithful preview of what the tablet sees,
                         // letterboxed rather than cropped.
                         let out = state.layout.output_size();
-                        let fit = if out.w > 0 && out.h > 0 {
-                            f32::min(size.w as f32 / out.w as f32, size.h as f32 / out.h as f32)
-                        } else {
-                            1.0
-                        };
+                        let fit = preview_fit(size, out);
+                        if preview_size != size {
+                            preview_size = size;
+                            state.set_preview_size(size);
+                            damage_tracker =
+                                OutputDamageTracker::new(size, 1.0, Transform::Flipped180);
+                        }
                         tracing::trace!("redraw: binding");
                         {
                             let (renderer, mut framebuffer) = match backend.bind() {
@@ -283,20 +459,12 @@ pub fn init_winit(
                                     return;
                                 }
                             };
-                            if let Err(err) = smithay::desktop::space::render_output::<
-                                _,
-                                WaylandSurfaceRenderElement<GlesRenderer>,
-                                _,
-                                _,
-                            >(
-                                &output,
+                            let elements = preview_elements(state, renderer, fit);
+                            if let Err(err) = damage_tracker.render_output(
                                 renderer,
                                 &mut framebuffer,
-                                fit,
                                 0,
-                                [&state.space],
-                                &[],
-                                &mut damage_tracker,
+                                &elements,
                                 backdrop,
                             ) {
                                 tracing::error!("render failed: {err}");
@@ -325,12 +493,9 @@ pub fn init_winit(
                     // else gets a 1 Hz heartbeat. See `frame_throttle`.
                     state.space.elements().for_each(|window| {
                         let throttle = state.frame_throttle(window);
-                        window.send_frame(
-                            &output,
-                            state.start_time.elapsed(),
-                            throttle,
-                            |_, _| Some(output.clone()),
-                        )
+                        window.send_frame(&output, state.start_time.elapsed(), throttle, |_, _| {
+                            Some(output.clone())
+                        })
                     });
 
                     // Per-surface capture for any remote shell. Does
@@ -482,12 +647,9 @@ pub fn init_winit(
                 // stall fallback would quietly undo the suspension.
                 state.space.elements().for_each(|window| {
                     let throttle = state.frame_throttle(window);
-                    window.send_frame(
-                        &output,
-                        state.start_time.elapsed(),
-                        throttle,
-                        |_, _| Some(output.clone()),
-                    )
+                    window.send_frame(&output, state.start_time.elapsed(), throttle, |_, _| {
+                        Some(output.clone())
+                    })
                 });
 
                 state.space.refresh();
@@ -546,8 +708,6 @@ fn never_wait_for_the_host(renderer: &GlesRenderer) {
     if ok == smithay::backend::egl::ffi::egl::TRUE {
         tracing::info!("presents unthrottled: eglSwapInterval(0) accepted");
     } else {
-        tracing::warn!(
-            "eglSwapInterval(0) refused; presents to a hidden preview window may stall"
-        );
+        tracing::warn!("eglSwapInterval(0) refused; presents to a hidden preview window may stall");
     }
 }

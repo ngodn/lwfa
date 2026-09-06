@@ -1,0 +1,8 @@
+{
+  "type": "setWindowScaling",
+  "id": 1,
+  "scaling": {
+    "mode": "sharp",
+    "scale": 1.75
+  }
+}

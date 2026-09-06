@@ -78,17 +78,22 @@ pub struct CapturedFrame {
 /// wherever that happens, so the encoder thread needs no explicit hand-back.
 pub struct FramePool {
     frames: Mutex<Vec<ff::frame::Video>>,
+    max_idle_bytes: usize,
 }
 
 /// How many idle frames to keep. Bounded so a burst of resizes cannot pin a
 /// pile of stale-sized buffers; evicted oldest-first, so frames of a size no
 /// longer in use age out on their own.
 const POOL_KEEP: usize = 8;
+// Eight maximum-size HiDPI frames would otherwise retain roughly 512 MiB
+// after resizing. Keep a useful cache without retaining that peak workload.
+const POOL_IDLE_BYTES: usize = 64 * 1024 * 1024;
 
 impl FramePool {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             frames: Mutex::new(Vec::new()),
+            max_idle_bytes: POOL_IDLE_BYTES,
         })
     }
 
@@ -109,11 +114,17 @@ impl FramePool {
     }
 
     fn put(&self, frame: ff::frame::Video) {
+        // CPU frames in this pool are packed RGBZ, with one padded plane.
+        let bytes = frame.data(0).len();
+        if bytes > self.max_idle_bytes {
+            return;
+        }
         let Ok(mut frames) = self.frames.lock() else {
             return;
         };
-        if frames.len() >= POOL_KEEP {
-            frames.remove(0);
+        let mut idle_bytes: usize = frames.iter().map(|f| f.data(0).len()).sum();
+        while frames.len() >= POOL_KEEP || idle_bytes + bytes > self.max_idle_bytes {
+            idle_bytes -= frames.remove(0).data(0).len();
         }
         frames.push(frame);
     }
@@ -195,6 +206,7 @@ fn take_pending<M>(
 
 struct Target {
     texture: GlesTexture,
+    density: f64,
     size: Size<i32, Physical>,
     /// Commit counters of every element captured last time.
     ///
@@ -280,15 +292,19 @@ impl SurfaceCapture {
         id: WindowId,
         window: &Window,
         size: Size<i32, Physical>,
+        density: f64,
         overlays: &[(WlSurface, Point<i32, Logical>)],
         gpu_direct: bool,
         prefetch: bool,
     ) -> Option<CapturedFrame> {
+        if self.targets.get(&id).is_some_and(|target| target.size != size || target.density != density) {
+            self.forget(id);
+        }
         let harvested = self.harvest(renderer, id, prefetch);
         if !prefetch && harvested.is_some() {
             return harvested;
         }
-        if let Some(direct) = self.issue(renderer, id, window, size, overlays, gpu_direct) {
+        if let Some(direct) = self.issue(renderer, id, window, size, density, overlays, gpu_direct) {
             // The zero-copy path produced this pass's frame. Anything still
             // parked from before the path switched is older than it.
             return Some(direct);
@@ -344,10 +360,11 @@ impl SurfaceCapture {
         id: WindowId,
         window: &Window,
         size: Size<i32, Physical>,
+        density: f64,
         overlays: &[(WlSurface, Point<i32, Logical>)],
         gpu_direct: bool,
     ) -> Option<CapturedFrame> {
-        if size.w <= 0 || size.h <= 0 {
+        if !crate::scaling::valid_capture_size(size) {
             return None;
         }
 
@@ -432,8 +449,8 @@ impl SurfaceCapture {
             render_elements_from_surface_tree(
                 renderer,
                 &surface,
-                origin.to_physical(1),
-                Scale::from(1.0),
+                origin.to_f64().to_physical(density).to_i32_round(),
+                Scale::from(density),
                 1.0,
                 Kind::Unspecified,
             );
@@ -445,8 +462,8 @@ impl SurfaceCapture {
                 render_elements_from_surface_tree(
                     renderer,
                     overlay,
-                    offset.to_physical(1),
-                    Scale::from(1.0),
+                    offset.to_f64().to_physical(density).to_i32_round(),
+                    Scale::from(density),
                     1.0,
                     Kind::Unspecified,
                 );
@@ -467,6 +484,7 @@ impl SurfaceCapture {
                 id,
                 Target {
                     texture,
+                    density,
                     size,
                     last_commits: Vec::new(),
                     pending: None,
@@ -503,7 +521,7 @@ impl SurfaceCapture {
             // elements.
             for element in elements.iter().rev() {
                 let src = element.src();
-                let dst = element.geometry(Scale::from(1.0));
+                let dst = element.geometry(Scale::from(density));
                 // Damage is relative to the element, not the capture buffer.
                 // CSD surfaces start at a negative offset after removing their
                 // shadow. Using `whole` here would move the damaged area with
@@ -877,6 +895,38 @@ mod pipeline_tests {
         drop(held);
         let idle = pool.frames.lock().expect("not poisoned").len();
         assert!(idle <= POOL_KEEP, "kept {idle} frames");
+    }
+
+    #[test]
+    fn the_pool_evicts_old_sizes_to_stay_within_its_byte_budget() {
+        let frame_bytes = ff::frame::Video::new(ff::format::Pixel::RGBZ, 64, 64)
+            .data(0).len();
+        let pool = Arc::new(FramePool {
+            frames: Mutex::new(Vec::new()),
+            max_idle_bytes: frame_bytes * 2,
+        });
+        let held: Vec<_> = (0..4).map(|_| pool.get(64, 64)).collect();
+        let newest = held.last().unwrap().data(0).as_ptr();
+        drop(held);
+        let frames = pool.frames.lock().unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames.last().unwrap().data(0).as_ptr(), newest);
+        assert!(frames.iter().map(|f| f.data(0).len()).sum::<usize>() <= pool.max_idle_bytes);
+    }
+
+    #[test]
+    fn oversized_frame_does_not_flush_smaller_reusable_frames() {
+        let small_bytes = ff::frame::Video::new(ff::format::Pixel::RGBZ, 16, 16)
+            .data(0).len();
+        let pool = Arc::new(FramePool {
+            frames: Mutex::new(Vec::new()),
+            max_idle_bytes: small_bytes,
+        });
+        let small = pool.get(16, 16);
+        let ptr = small.data(0).as_ptr();
+        drop(small);
+        drop(pool.get(64, 64));
+        assert_eq!(pool.get(16, 16).data(0).as_ptr(), ptr);
     }
 }
 

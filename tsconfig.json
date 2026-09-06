@@ -31,8 +31,7 @@
     "allowImportingTsExtensions": true,
 
     // Matches components.json, so registry components paste in unedited.
-    "baseUrl": ".",
-    "paths": { "@/*": ["packages/shell/src/*"] }
+    "paths": { "@/*": ["./packages/shell/src/*"] }
   },
   "include": [
     "packages/*/src/**/*.ts",

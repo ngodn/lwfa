@@ -1,6 +1,6 @@
 [package]
 name = "lwfa-engine"
-version = "1.4.5"
+version = "1.5.0"
 description = "The lwfa compositor: Wayland protocol, layout, and rendering"
 edition.workspace = true
 rust-version.workspace = true
@@ -65,24 +65,24 @@ serde_json = "1.0.151"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
+toml = { version = "1.1.5", default-features = false, features = ["parse", "serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
-rusqlite = { version = "0.40.1", features = ["bundled"] }
-argon2 = { version = "0.5.3", features = ["std", "password-hash"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+argon2 = { version = "0.6.0", features = ["password-hash"] }
 input-linux = "0.7.1"
 libc = "0.2.189"
 rustix = { version = "1.1", features = ["process", "event", "net"] }
-opus = "0.3.1"
+opus = "0.4.0"
 x11rb = "0.13"
 # The file-chooser portal backend: a D-Bus service on a private session bus.
 # zbus spawns a task per method call, which is what lets a dialog stay open
 # for minutes without starving the Settings interface next to it.
-zbus = "5"
+zbus = "5.19.0"
 # Streaming SHA-256 of uploads, so "ok" means verified rather than hoped.
 sha2 = "0.11.0"
 # One oneshot per open dialog, carrying the answer from the compositor
 # thread back into the portal's executor.
-futures-channel = "0.3.33"
+futures-channel = "0.3.34"
 
 [lints]
 workspace = true

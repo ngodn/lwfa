@@ -1,0 +1,202 @@
+{
+  "date": "2026-09-07",
+  "engineVersion": "1.5.0",
+  "ffmpegVersion": "9.0.1",
+  "method": "Real engine NVENC Encoders; one owner per codec; resize then an inter frame then forced IDR. Each tested packet is independently decoded by software FFmpeg with no preceding packets.",
+  "results": [
+    {
+      "bytes": 337,
+      "codec": "h264",
+      "maxChannelError": 1,
+      "recovery": false,
+      "stage": 0,
+      "stream": {
+        "codec_name": "h264",
+        "height": 640,
+        "level": 41,
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "width": 1000
+      },
+      "browserCodecString": "avc1.640029"
+    },
+    {
+      "bytes": 337,
+      "codec": "h264",
+      "maxChannelError": 1,
+      "recovery": true,
+      "stage": 0,
+      "stream": {
+        "codec_name": "h264",
+        "height": 640,
+        "level": 41,
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "width": 1000
+      },
+      "browserCodecString": "avc1.640029"
+    },
+    {
+      "bytes": 14398,
+      "codec": "h264",
+      "maxChannelError": 1,
+      "recovery": false,
+      "stage": 1,
+      "stream": {
+        "codec_name": "h264",
+        "height": 3000,
+        "level": 60,
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "width": 4000
+      },
+      "browserCodecString": "avc1.64003C"
+    },
+    {
+      "bytes": 14610,
+      "codec": "h264",
+      "maxChannelError": 1,
+      "recovery": true,
+      "stage": 1,
+      "stream": {
+        "codec_name": "h264",
+        "height": 3000,
+        "level": 60,
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "width": 4000
+      },
+      "browserCodecString": "avc1.64003C"
+    },
+    {
+      "bytes": 337,
+      "codec": "h264",
+      "maxChannelError": 1,
+      "recovery": false,
+      "stage": 2,
+      "stream": {
+        "codec_name": "h264",
+        "height": 640,
+        "level": 41,
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "width": 1000
+      },
+      "browserCodecString": "avc1.640029"
+    },
+    {
+      "bytes": 337,
+      "codec": "h264",
+      "maxChannelError": 1,
+      "recovery": true,
+      "stage": 2,
+      "stream": {
+        "codec_name": "h264",
+        "height": 640,
+        "level": 41,
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "width": 1000
+      },
+      "browserCodecString": "avc1.640029"
+    },
+    {
+      "bytes": 325,
+      "codec": "hevc",
+      "maxChannelError": 1,
+      "recovery": false,
+      "stage": 0,
+      "stream": {
+        "codec_name": "hevc",
+        "height": 640,
+        "level": 123,
+        "pix_fmt": "yuv420p",
+        "profile": "Main",
+        "width": 1000
+      },
+      "browserCodecString": "hvc1.1.6.H123.90"
+    },
+    {
+      "bytes": 336,
+      "codec": "hevc",
+      "maxChannelError": 1,
+      "recovery": true,
+      "stage": 0,
+      "stream": {
+        "codec_name": "hevc",
+        "height": 640,
+        "level": 123,
+        "pix_fmt": "yuv420p",
+        "profile": "Main",
+        "width": 1000
+      },
+      "browserCodecString": "hvc1.1.6.H123.90"
+    },
+    {
+      "bytes": 2792,
+      "codec": "hevc",
+      "maxChannelError": 1,
+      "recovery": false,
+      "stage": 1,
+      "stream": {
+        "codec_name": "hevc",
+        "height": 3000,
+        "level": 180,
+        "pix_fmt": "yuv420p",
+        "profile": "Main",
+        "width": 4000
+      },
+      "browserCodecString": "hvc1.1.6.L180.90"
+    },
+    {
+      "bytes": 2788,
+      "codec": "hevc",
+      "maxChannelError": 1,
+      "recovery": true,
+      "stage": 1,
+      "stream": {
+        "codec_name": "hevc",
+        "height": 3000,
+        "level": 180,
+        "pix_fmt": "yuv420p",
+        "profile": "Main",
+        "width": 4000
+      },
+      "browserCodecString": "hvc1.1.6.L180.90"
+    },
+    {
+      "bytes": 325,
+      "codec": "hevc",
+      "maxChannelError": 1,
+      "recovery": false,
+      "stage": 2,
+      "stream": {
+        "codec_name": "hevc",
+        "height": 640,
+        "level": 123,
+        "pix_fmt": "yuv420p",
+        "profile": "Main",
+        "width": 1000
+      },
+      "browserCodecString": "hvc1.1.6.H123.90"
+    },
+    {
+      "bytes": 336,
+      "codec": "hevc",
+      "maxChannelError": 1,
+      "recovery": true,
+      "stage": 2,
+      "stream": {
+        "codec_name": "hevc",
+        "height": 640,
+        "level": 123,
+        "pix_fmt": "yuv420p",
+        "profile": "Main",
+        "width": 1000
+      },
+      "browserCodecString": "hvc1.1.6.H123.90"
+    }
+  ],
+  "browserHevcVerified": false,
+  "browserCodecParserVerified": true
+}

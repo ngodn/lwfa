@@ -40,12 +40,14 @@ mod http;
 mod icons;
 mod input;
 mod layout;
+mod scaling;
 mod remote_input;
 mod shell;
 mod sink;
 mod state;
 mod winit;
 mod xfocus;
+mod x11_output;
 
 use lwfa_proto::{ToEngine, ToShell};
 use smithay::reexports::calloop::EventLoop;
@@ -1001,6 +1003,7 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
         ToEngine::Ping | ToEngine::Crashed { .. } => true,
 
         ToEngine::SetLayout { .. } | ToEngine::SetViewport { .. } => is_primary,
+        ToEngine::SetWindowScaling { .. } => is_primary && who.permissions.may_interact(),
 
         // Taking the wheel needs the right to use it.
         ToEngine::TakeControl => who.permissions.may_interact(),
@@ -1076,6 +1079,11 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
         ToEngine::ClipUse { id } => state.clip_use(id),
         ToEngine::ClipDrop { id } => state.clip_forget(id),
         ToEngine::ClipClear => state.clip_clear(),
+        ToEngine::SetWindowScaling { id, scaling } => {
+            if let Err(message) = state.set_window_scaling(id, scaling) {
+                state.send_to_session(session, ToShell::Error { request: "setWindowScaling".into(), message: message.into() });
+            }
+        }
         ToEngine::SetLayout { windows, animate } => {
             let configures = state.layout.apply(
                 &windows,
@@ -1141,6 +1149,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                 return;
             }
             state.viewport_override = Some((width, height, scale));
+            state.refresh_auto_scaling();
             match state.resize_output.clone() {
                 Some(resize) => {
                     tracing::debug!("session {session} set the viewport to {width}x{height}@{scale}");
@@ -1431,7 +1440,11 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                 state.streaming.len()
             );
         }
-        ToEngine::PointerMotion { window, x, y } => state.remote_pointer_motion(window, x, y),
+        ToEngine::PointerMotion { window, x, y, normalized } => {
+            if let Some((x, y)) = state.input_coordinates(window, x, y, normalized) {
+                state.remote_pointer_motion(window, x, y);
+            }
+        },
         ToEngine::PointerButton { button, pressed } => state.remote_pointer_button(button, pressed),
         ToEngine::PointerAxis {
             horizontal,
@@ -1439,8 +1452,16 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
         } => state.remote_pointer_axis(horizontal, vertical),
         ToEngine::PointerLeave => state.remote_pointer_leave(),
         ToEngine::Key { key, pressed } => state.remote_key(session, key, pressed),
-        ToEngine::TouchDown { window, id, x, y } => state.remote_touch_down(window, id, x, y),
-        ToEngine::TouchMotion { window, id, x, y } => state.remote_touch_motion(window, id, x, y),
+        ToEngine::TouchDown { window, id, x, y, normalized } => {
+            if let Some((x, y)) = state.input_coordinates(window, x, y, normalized) {
+                state.remote_touch_down(window, id, x, y);
+            }
+        },
+        ToEngine::TouchMotion { window, id, x, y, normalized } => {
+            if let Some((x, y)) = state.input_coordinates(window, x, y, normalized) {
+                state.remote_touch_motion(window, id, x, y);
+            }
+        },
         ToEngine::TouchUp { id } => state.remote_touch_up(id),
         ToEngine::Spawn { command, terminal } => {
             // Reaching here means `permitted` already checked both interact and
@@ -1628,6 +1649,15 @@ mod tests {
             windows: Vec::new(),
             animate: None,
         }
+    }
+
+    #[test]
+    fn scaling_belongs_only_to_the_primary_session() {
+        let message = ToEngine::SetWindowScaling { id: WindowId(1), scaling: Default::default() };
+        assert!(allowed(&session(SessionMode::Interact), true, &message));
+        assert!(!allowed(&session(SessionMode::Interact), false, &message));
+        assert!(!allowed(&session(SessionMode::View), false, &message));
+        assert!(!allowed(&session(SessionMode::View), true, &message));
     }
 
     #[test]

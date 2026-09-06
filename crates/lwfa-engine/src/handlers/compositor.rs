@@ -31,6 +31,10 @@ impl CompositorHandler for Lwfa {
             .compositor_state
     }
 
+    fn new_subsurface(&mut self, surface: &WlSurface, parent: &WlSurface) {
+        self.inherit_surface_density(surface, parent);
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
 
@@ -57,6 +61,8 @@ impl CompositorHandler for Lwfa {
         // Titles change over a window's life, so this is checked per commit
         // and diffed rather than assumed fixed at map time.
         if let Some(id) = self.layout.id_of_surface(surface) {
+            self.refresh_x11_outputs(false);
+            self.apply_window_density(id);
             self.report_window_changes(id);
         }
     }

@@ -4,6 +4,12 @@
     "id": 7,
     "appId": "firefox",
     "title": null,
-    "fullscreen": false
+    "fullscreen": false,
+    "scaling": {
+      "mode": "sharp",
+      "scale": 1.0
+    },
+    "xwayland": false,
+    "effectiveScale": 1.0
   }
 }

@@ -46,7 +46,7 @@ const server = await createServer({
   configFile: false,
   root: fileURLToPath(new URL("../packages/shell", import.meta.url)),
   resolve: { alias: { "@": fileURLToPath(new URL("../packages/shell/src", import.meta.url)) } },
-  esbuild: { jsx: "automatic" },
+  oxc: { jsx: { runtime: "automatic" } },
   server: { host: "127.0.0.1", port: 0, hmr: false },
 })
 let browser

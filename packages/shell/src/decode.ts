@@ -31,48 +31,7 @@
 import { FrameFormat, type DecodedFrame, type WindowId } from "@lwfa/proto"
 import { noteFormat } from "@/lib/streamFormat"
 import { noteFrame } from "@/lib/streamStats"
-
-/**
- * Derive the WebCodecs codec string from the stream's own SPS.
- *
- * This must not be hardcoded. NVENC picks a profile and a level based on the
- * frame size and settings, and the level in particular changes with
- * resolution. A guessed string like `avc1.42E01E` (Baseline, level 3.0) is
- * rejected or mis-decoded the moment the encoder emits Main profile or a
- * larger frame, which is exactly what it does here.
- *
- * The three bytes after an SPS NAL header are `profile_idc`,
- * `constraint_flags` and `level_idc`, which is precisely the `avc1.PPCCLL`
- * form WebCodecs wants.
- *
- * Returns null if no SPS is present, in which case the caller waits for a
- * keyframe that has one rather than configuring from a guess.
- */
-/**
- * HEVC Main profile, level 5.1.
- *
- * Deliberately generous: the level has to be at least the stream's, and one
- * that covers 4K covers every window this will ever carry.
- */
-const HEVC_CODEC = "hvc1.1.6.L153.B0"
-
-function codecFromSps(data: Uint8Array): string | null {
-  // Scan for a start code followed by a NAL header whose type is 7 (SPS).
-  for (let i = 0; i + 4 < data.length; i++) {
-    const isStart3 = data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1
-    const isStart4 =
-      data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0 && data[i + 3] === 1
-    if (!isStart3 && !isStart4) continue
-
-    const nal = i + (isStart4 ? 4 : 3)
-    if (nal + 3 >= data.length) break
-    if ((data[nal]! & 0x1f) !== 7) continue
-
-    const hex = (b: number) => b.toString(16).padStart(2, "0").toUpperCase()
-    return `avc1.${hex(data[nal + 1]!)}${hex(data[nal + 2]!)}${hex(data[nal + 3]!)}`
-  }
-  return null
-}
+import { codecFromAnnexB, type Codec } from "@/lib/codecs"
 
 export function supportsH264(): boolean {
   return typeof globalThis.VideoDecoder !== "undefined"
@@ -89,6 +48,10 @@ export type FrameSink = (window: WindowId, bitmap: ImageBitmap) => void
  */
 export class FrameDecoder {
   #sink: FrameSink
+  #onUnsupported: (codec: Codec) => void
+  #failed = new Set<Codec>()
+  #supportChecks = new Map<WindowId, object>()
+  #families = new Map<WindowId, Codec>()
   #decoders = new Map<WindowId, VideoDecoder>()
   /** Windows still waiting for their first keyframe. */
   #awaitingKeyframe = new Set<WindowId>()
@@ -102,8 +65,9 @@ export class FrameDecoder {
   // pixels when createImageBitmap promises finish out of order.
   #delivery = new Map<WindowId, { issued: number; published: number }>()
 
-  constructor(sink: FrameSink) {
+  constructor(sink: FrameSink, onUnsupported: (codec: Codec) => void = () => {}) {
     this.#sink = sink
+    this.#onUnsupported = onUnsupported
   }
 
   async handle(frame: DecodedFrame): Promise<void> {
@@ -142,7 +106,8 @@ export class FrameDecoder {
 
   #handleVideo(frame: DecodedFrame): void {
     const { window: id, width, height, keyframe } = frame.header
-    const hevc = frame.header.format === FrameFormat.Hevc
+    const family: Codec = frame.header.format === FrameFormat.Hevc ? "hevc" : "h264"
+    if (this.#failed.has(family)) return
 
     if (!supportsH264()) {
       // Loud and once-ish: silently dropping every frame would look like a
@@ -154,20 +119,30 @@ export class FrameDecoder {
       return
     }
 
-    // For H.264 the codec string comes from the SPS, so a decoder can only be
-    // built from a keyframe. Deltas before that are dropped below.
-    //
-    // HEVC is not parsed. Its parameter sets are considerably more involved
-    // than H.264's three bytes, and the string only has to *cover* the stream
-    // rather than describe it exactly: Main profile at level 5.1 spans
-    // everything a desktop window will be, and a browser that accepted it at
-    // probe time will accept it here. See `lib/codecs`.
-    const codec = keyframe ? (hevc ? HEVC_CODEC : codecFromSps(frame.payload)) : null
+    // Parameter sets on each keyframe describe the real profile and level,
+    // including HEVC level 6 when density scaling goes beyond 4K.
+    const codec = keyframe ? codecFromAnnexB(frame.payload, family) : null
+    if (keyframe && !codec) {
+      // Do not feed a truncated parameter set into a previously valid decoder.
+      // The next complete keyframe can establish its reference pictures again.
+      this.#reset(id)
+      return
+    }
+    const config = codec ? { codec, codedWidth: width, codedHeight: height, optimizeForLatency: true } : null
     const wanted = codec ? `${width}x${height}:${codec}` : null
 
     let decoder = this.#decoders.get(id)
+    let changed = false
 
-    if (codec !== null && wanted !== null && this.#configured.get(id) !== wanted) {
+    if (!keyframe && decoder && (
+      this.#families.get(id) !== family ||
+      !this.#configured.get(id)?.startsWith(`${width}x${height}:`)
+    )) {
+      this.#reset(id)
+      return
+    }
+
+    if (config !== null && wanted !== null && this.#configured.get(id) !== wanted) {
       // Resolution or profile changed, so the old configuration is useless and
       // its reference frames with it.
       //
@@ -181,7 +156,9 @@ export class FrameDecoder {
       // resizes produced three closes and three constructions.
       if (decoder && decoder.state !== "closed") {
         try {
-          decoder.configure({ codec, optimizeForLatency: true })
+          decoder.configure(config)
+          this.#families.set(id, family)
+          changed = true
           this.#configured.set(id, wanted)
           this.#delivery.delete(id)
           this.#discardThrough.set(id, this.#timestamps.get(id) ?? 0)
@@ -206,47 +183,55 @@ export class FrameDecoder {
     }
 
     if (!decoder) {
-      if (!codec || wanted === null) {
+      if (!config || wanted === null) {
         // No decoder and no SPS to build one from. Wait for a keyframe that
         // carries one; the engine repeats SPS on every keyframe for exactly
         // this case.
         return
       }
-      decoder = new VideoDecoder({
-        output: (videoFrame) => {
-          // A retired decoder must not publish into a replacement stream.
-          if (
-            this.#decoders.get(id) !== decoder ||
-            videoFrame.timestamp <= (this.#discardThrough.get(id) ?? -1)
-          ) {
-            videoFrame.close()
-            return
-          }
-          const deliver = this.#deliveryFor(id)
-          // Conversion copies the pixels asynchronously. Keep the VideoFrame
-          // alive until it completes, then release its decoder buffer.
-          createImageBitmap(videoFrame)
-            .then(deliver)
-            .catch((err) => console.warn(`could not convert a frame for w${id}:`, err))
-            .finally(() => videoFrame.close())
-        },
-        error: (err) => {
-          console.warn(`decoder error for w${id}:`, err)
-          // Drop it; the next keyframe rebuilds from scratch.
-          this.#reset(id)
-        },
-      })
-      decoder.configure({
-        codec,
-        // Tells the decoder not to buffer for reordering. This stream has no
-        // B-frames, so buffering would add latency for nothing.
-        optimizeForLatency: true,
-      })
+      try {
+        decoder = new VideoDecoder({
+          output: (videoFrame) => {
+            // A retired decoder must not publish into a replacement stream.
+            if (
+              this.#decoders.get(id) !== decoder ||
+              videoFrame.timestamp <= (this.#discardThrough.get(id) ?? -1)
+            ) {
+              videoFrame.close()
+              return
+            }
+            const deliver = this.#deliveryFor(id)
+            // Conversion copies the pixels asynchronously. Keep the VideoFrame
+            // alive until it completes, then release its decoder buffer.
+            createImageBitmap(videoFrame)
+              .then(deliver)
+              .catch((err) => console.warn(`could not convert a frame for w${id}:`, err))
+              .finally(() => videoFrame.close())
+          },
+          error: (err) => {
+            if (this.#decoders.get(id) !== decoder) return
+            this.#rejectCodec(id, this.#families.get(id) ?? family, err)
+          },
+        })
+      } catch (err) {
+        this.#rejectCodec(id, family, err)
+        return
+      }
       this.#decoders.set(id, decoder)
+      this.#families.set(id, family)
+      try {
+        decoder.configure(config)
+      } catch (err) {
+        this.#rejectCodec(id, family, err)
+        return
+      }
+      changed = true
       this.#configured.set(id, wanted)
       this.#awaitingKeyframe.add(id)
       this.#timestamps.set(id, 0)
     }
+
+    if (changed && config) this.#checkSupport(id, family, config)
 
     if (this.#awaitingKeyframe.has(id)) {
       if (!keyframe) return // no reference yet; discarding is the correct move
@@ -268,9 +253,33 @@ export class FrameDecoder {
         }),
       )
     } catch (err) {
-      console.warn(`could not decode an H.264 frame for w${id}:`, err)
-      this.#reset(id)
+      this.#rejectCodec(id, family, err)
     }
+  }
+
+  #checkSupport(id: WindowId, family: Codec, config: VideoDecoderConfig): void {
+    const lifetime = {}
+    this.#supportChecks.set(id, lifetime)
+    // Probe in parallel with the decoder's ordered configure/decode queue.
+    // Waiting here would require buffering interdependent video packets.
+    // configure itself also reports operational failures through error().
+    void (async () => {
+      try {
+        const support = await VideoDecoder.isConfigSupported(config)
+        if (this.#supportChecks.get(id) !== lifetime) return
+        if (!support.supported) this.#rejectCodec(id, family, "stream configuration is unsupported")
+      } catch (err) {
+        if (this.#supportChecks.get(id) === lifetime) this.#rejectCodec(id, family, err)
+      }
+    })()
+  }
+
+  #rejectCodec(id: WindowId, family: Codec, reason: unknown): void {
+    this.#reset(id)
+    if (this.#failed.has(family)) return
+    this.#failed.add(family)
+    console.warn(`w${id}: ${family} failed; requesting another stream format:`, reason)
+    this.#onUnsupported(family)
   }
 
   #deliveryFor(id: WindowId): (bitmap: ImageBitmap) => void {
@@ -299,6 +308,8 @@ export class FrameDecoder {
   }
 
   #reset(id: WindowId): void {
+    this.#supportChecks.delete(id)
+    this.#families.delete(id)
     this.#delivery.delete(id)
     this.#discardThrough.delete(id)
     const decoder = this.#decoders.get(id)

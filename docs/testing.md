@@ -29,6 +29,39 @@ pnpm run e2e:audio                                       # audio capture + opus
 frame, which is how per-surface capture gets checked against what is actually on
 screen.
 
+## Isolated display and browser checks
+
+The browser-only fixtures load the real components without attaching to a
+running compositor:
+
+```sh
+node scripts/e2e-window-scaling-panel.mjs
+node scripts/e2e-scaling-input.mjs
+node scripts/e2e-opus-decoder.mjs
+node scripts/e2e-codec-fallback.mjs
+```
+
+Set `PLAYWRIGHT_MODULE` to the installed Playwright module path and
+`CHROMIUM_EXECUTABLE` to its Chromium binary when they are not discoverable.
+The scaling input fixture checks all seven factors at display densities 1 and
+2. The Opus fixture tests the real WASM decoder through a production build.
+The codec fallback fixture uses the real App and intercepted sockets to verify
+immediate renegotiation and a displayed JPEG after decoder rejection.
+
+`scripts/e2e-scaling-rendering.mjs` needs a separate development engine and
+launches native Wayland and X11 Chromium test apps inside it. Supply that
+engine's `AUTH_PASS`, `LWFA_TEST_URL`, `LWFA_TEST_WAYLAND`, and
+`LWFA_TEST_DISPLAY`. Do not point it at an engine containing your actual apps.
+Run once with the default JPEG codec and again with `LWFA_TEST_CODEC=h264`.
+Repeat with the dev engine's `[stream] gpu_direct = false` to exercise CPU
+readback. The fixture measures committed app size, frame size, actual mouse
+and touch delivery, popups, edge pixels, and fine-line contrast.
+
+The opt-in [hardware codec recovery test](research/codec-resize-recovery.md)
+checks real NVENC H.264/HEVC packets and independent FFmpeg decoding through
+4000x3000 resize and forced-keyframe recovery. It requires hardware and explicit
+output-directory selection, and is ignored by the normal suite.
+
 ## Protocol fixtures
 
 The protocol fixtures round-trip in both directions, and each half regenerates

@@ -24,13 +24,90 @@ use smithay::backend::input::{
 use smithay::input::keyboard::{FilterResult, keysyms};
 // For `WlSurface::client`, used to find the process behind a window in
 // `quit_app`.
-use smithay::reexports::wayland_server::Resource;
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
-use smithay::utils::SERIAL_COUNTER;
+use smithay::reexports::wayland_server::Resource;
+use smithay::utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Size};
+use std::cell::RefCell;
 
 use crate::layout::Mode;
 use crate::state::Lwfa;
 use lwfa_proto::Modifiers;
+
+#[derive(Default)]
+struct PreviewInput {
+    size: Option<Size<i32, Physical>>,
+    window: Option<lwfa_proto::WindowId>,
+    position: Option<Point<f64, Logical>>,
+}
+
+fn workspace_position(
+    pos: Point<f64, Logical>,
+    preview: Rectangle<i32, Logical>,
+    actual: Size<i32, Logical>,
+) -> Point<f64, Logical> {
+    let origin = preview.loc.to_f64();
+    origin + (pos - origin).downscale(crate::winit::preview_scale(preview.size, actual, 1.0))
+}
+
+#[cfg(test)]
+mod preview_input_tests {
+    use super::*;
+
+    #[test]
+    fn pointer_maps_to_app_pixels_without_scaling_the_windows_position() {
+        assert_eq!(
+            workspace_position(
+                (700.0, 350.0).into(),
+                Rectangle::new((200, 100).into(), (1000, 500).into()),
+                (2000, 1000).into()
+            ),
+            (1200.0, 600.0).into()
+        );
+        assert_eq!(
+            workspace_position(
+                (700.0, 350.0).into(),
+                Rectangle::new((200, 100).into(), (1000, 500).into()),
+                (500, 250).into()
+            ),
+            (450.0, 225.0).into()
+        );
+    }
+
+    #[test]
+    fn drag_coordinates_continue_beyond_the_window_in_the_same_space() {
+        assert_eq!(
+            workspace_position(
+                (120.0, 80.0).into(),
+                Rectangle::new((200, 100).into(), (1000, 500).into()),
+                (2000, 1000).into()
+            ),
+            (40.0, 60.0).into()
+        );
+    }
+
+    #[test]
+    fn pointer_uses_committed_dimensions_for_refused_and_anisotropic_resizes() {
+        let rect = Rectangle::new((200, 100).into(), (1000, 500).into());
+        assert_eq!(
+            workspace_position((700.0, 350.0).into(), rect, (1000, 500).into()),
+            (700.0, 350.0).into()
+        );
+        assert_eq!(
+            workspace_position((700.0, 350.0).into(), rect, (1200, 800).into()),
+            (800.0, 500.0).into()
+        );
+        // A terminal can round only its height to whole character cells.
+        assert_eq!(
+            workspace_position((700.0, 350.0).into(), rect, (1000, 504).into()),
+            (700.0, 352.0).into()
+        );
+        // The same inverse projection applies outside a grabbed window.
+        assert_eq!(
+            workspace_position((100.0, 50.0).into(), rect, (1200, 800).into()),
+            (80.0, 20.0).into()
+        );
+    }
+}
 
 /// A keybind resolved into something to do. Returned out of the keyboard filter
 /// so the action runs outside the borrow the filter holds.
@@ -140,6 +217,86 @@ fn split_command_line(line: &str) -> Vec<String> {
 }
 
 impl Lwfa {
+    fn preview_motion(&mut self, pos: Point<f64, Logical>, time: u32) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        let serial = SERIAL_COUNTER.next_serial();
+        let previous = self
+            .seat
+            .user_data()
+            .get::<RefCell<PreviewInput>>()
+            .and_then(|state| state.borrow().window);
+        // An implicit button grab keeps the original coordinate space
+        // while dragging over neighbouring windows or empty space.
+        let hit = if pointer.is_grabbed() {
+            previous.and_then(|id| {
+                self.layout
+                    .window(id)
+                    .cloned()
+                    .zip(self.layout.preview_rect(id))
+                    .map(|(window, rect)| (id, window, rect))
+            })
+        } else {
+            self.layout
+                .placements_with_ids()
+                .into_iter()
+                .rev()
+                .find_map(|(id, window, _)| {
+                    self.layout
+                        .preview_rect(id)
+                        .filter(|rect| rect.to_f64().contains(pos))
+                        .map(|rect| (id, window, rect))
+                })
+        };
+        let preview_position = pos;
+        let (id, pos, under) = match hit {
+            Some((id, window, rect)) => {
+                let pos = workspace_position(pos, rect, window.geometry().size);
+                (Some(id), pos, self.surface_in(&window, rect.loc, pos))
+            }
+            None => (None, pos, None),
+        };
+        self.seat
+            .user_data()
+            .insert_if_missing(|| RefCell::new(PreviewInput::default()));
+        self.seat
+            .user_data()
+            .get::<RefCell<PreviewInput>>()
+            .unwrap()
+            .borrow_mut()
+            .window = id;
+        self.seat
+            .user_data()
+            .get::<RefCell<PreviewInput>>()
+            .unwrap()
+            .borrow_mut()
+            .position = Some(preview_position);
+
+        pointer.motion(
+            self,
+            under,
+            &MotionEvent {
+                location: pos,
+                serial,
+                time,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub(crate) fn set_preview_size(&self, size: Size<i32, Physical>) {
+        self.seat
+            .user_data()
+            .insert_if_missing(|| RefCell::new(PreviewInput::default()));
+        self.seat
+            .user_data()
+            .get::<RefCell<PreviewInput>>()
+            .unwrap()
+            .borrow_mut()
+            .size = Some(size);
+    }
+
     fn run_action(&mut self, action: Action) {
         match action {
             Action::Quit => self.loop_signal.stop(),
@@ -462,7 +619,9 @@ impl Lwfa {
             smithay::reexports::calloop::timer::Timer::from_duration(POLL),
             move |_, _, data| {
                 let state = &mut *data;
-                let still_there = state.running_outside(&command).is_some_and(|now| now.pid == other.pid);
+                let still_there = state
+                    .running_outside(&command)
+                    .is_some_and(|now| now.pid == other.pid);
 
                 if !still_there {
                     tracing::info!("{} has gone; opening it here", other.program);
@@ -484,10 +643,7 @@ impl Lwfa {
                         // Still running. Almost always because it is asking
                         // about unsaved work on a screen nobody can see, so the
                         // shell is told rather than left showing a spinner.
-                        tracing::info!(
-                            "{} did not quit within the grace period",
-                            other.program
-                        );
+                        tracing::info!("{} did not quit within the grace period", other.program);
                         state.send_to_session(
                             session,
                             lwfa_proto::ToShell::AlreadyRunning {
@@ -560,44 +716,41 @@ impl Lwfa {
             }
 
             InputEvent::PointerMotionAbsolute { event, .. } => {
-                let Some(output) = self.space.outputs().next() else {
-                    return;
-                };
-                let Some(output_geo) = self.space.output_geometry(output) else {
-                    return;
-                };
-                let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
-                let serial = SERIAL_COUNTER.next_serial();
-                let Some(pointer) = self.seat.get_pointer() else {
-                    return;
-                };
-                let under = self.surface_under(pos);
-
-                pointer.motion(
-                    self,
-                    under,
-                    &MotionEvent {
-                        location: pos,
-                        serial,
-                        time: event.time_msec(),
-                    },
-                );
-                pointer.frame(self);
+                let output = self.layout.output_size();
+                let host = self
+                    .seat
+                    .user_data()
+                    .get::<RefCell<PreviewInput>>()
+                    .and_then(|state| state.borrow().size)
+                    .unwrap_or(output.to_physical(1));
+                let fit = crate::winit::preview_fit(host, output);
+                let pos = event
+                    .position_transformed(host.to_logical(1))
+                    .downscale(fit);
+                self.preview_motion(pos, event.time_msec());
             }
 
             InputEvent::PointerButton { event, .. } => {
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;
                 };
-                let serial = SERIAL_COUNTER.next_serial();
                 let button_state = event.state();
 
                 if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
+                    // Layout can change under a stationary host cursor.
+                    let position = self
+                        .seat
+                        .user_data()
+                        .get::<RefCell<PreviewInput>>()
+                        .and_then(|state| state.borrow().position);
+                    if let Some(pos) = position {
+                        self.preview_motion(pos, event.time_msec());
+                    }
                     let clicked = self
-                        .space
-                        .element_under(pointer.current_location())
-                        .map(|(w, _)| w.clone())
-                        .and_then(|w| self.layout.id_of(&w));
+                        .seat
+                        .user_data()
+                        .get::<RefCell<PreviewInput>>()
+                        .and_then(|state| state.borrow().window);
 
                     // Keep activation and stored focus aligned with the seat,
                     // including a click on empty space. Otherwise the guardian
@@ -605,6 +758,7 @@ impl Lwfa {
                     self.set_focus(clicked, true);
                 }
 
+                let serial = SERIAL_COUNTER.next_serial();
                 pointer.button(
                     self,
                     &ButtonEvent {
@@ -615,6 +769,16 @@ impl Lwfa {
                     },
                 );
                 pointer.frame(self);
+                if button_state == ButtonState::Released && !pointer.is_grabbed() {
+                    let position = self
+                        .seat
+                        .user_data()
+                        .get::<RefCell<PreviewInput>>()
+                        .and_then(|state| state.borrow().position);
+                    if let Some(pos) = position {
+                        self.preview_motion(pos, event.time_msec());
+                    }
+                }
             }
 
             InputEvent::PointerAxis { event, .. } => {

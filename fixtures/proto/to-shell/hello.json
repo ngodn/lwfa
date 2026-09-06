@@ -1,6 +1,6 @@
 {
   "type": "hello",
-  "protocolVersion": 0,
+  "protocolVersion": 1,
   "output": {
     "width": 1920,
     "height": 1080,
@@ -11,13 +11,25 @@
       "id": 1,
       "appId": "Alacritty",
       "title": "~/development/lwfa",
-      "fullscreen": true
+      "fullscreen": true,
+      "scaling": {
+        "mode": "sharp",
+        "scale": 1.0
+      },
+      "xwayland": false,
+      "effectiveScale": 1.0
     },
     {
       "id": 2,
       "appId": null,
       "title": null,
-      "fullscreen": false
+      "fullscreen": false,
+      "scaling": {
+        "mode": "sharp",
+        "scale": 1.0
+      },
+      "xwayland": false,
+      "effectiveScale": 1.0
     }
   ],
   "focused": 1,

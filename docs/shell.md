@@ -30,6 +30,35 @@ phone wants the bar where a thumb is, the same person on a 27" display wants
 it down the side, and syncing them would make one device's ergonomics fight
 the other's.
 
+## Window scaling
+
+Open **Windows**, expand a window, and choose its display mode and scale.
+The browser tile keeps its size in both modes:
+
+| Mode at 2x | App inside a 1000x500 browser tile |
+| --- | --- |
+| **Sharper** | Keeps a 1000x500 logical workspace and requests 2000x1000 pixels, so text stays the same size with more detail |
+| **More space** | Requests a 2000x1000 workspace, so more content fits and text appears smaller |
+
+Both offer 0.5x, 0.75x, 1x, 1.25x, 1.5x, 1.75x, and 2x. Below 1x,
+Sharper trades detail for fewer pixels; More space makes the app's interface
+larger. The initial setting is **Sharper, 1x**. **Auto** in Sharper follows the
+controlling device's display density, up to 2x.
+
+Sharper works with native Wayland apps that honor buffer scale. Xwayland apps,
+including many Proton games, can use More space; per-window Sharper above or
+below 1x is unavailable for them. Apps can enforce a minimum size or decline a
+resize, and games may have their own resolution setting.
+
+Settings belong to the open window, survive browser reconnects, and are shared
+with viewers. Closing the app resets them. Only the controlling device with
+interaction permission can change them.
+
+At 2x there are four times as many pixels to render and stream. Start with 1x
+on a slow connection, or choose Auto on a dense display when text clarity
+matters. Very large windows are bounded to keep capture memory under control.
+See [streaming](streaming.md#display-detail) for the remaining quality limits.
+
 ## Input
 
 The keyboard and gamepad are **input devices, not settings screens**, so they

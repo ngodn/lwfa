@@ -20,7 +20,7 @@ use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, LoopSignal, M
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::seat::WaylandFocus;
@@ -325,6 +325,13 @@ pub struct Lwfa {
     /// environment. See `Lwfa::spawn`.
     pub xdisplay: Option<u32>,
 
+    pub(crate) x11_outputs: crate::x11_output::X11Outputs,
+    pub(crate) scaling: std::collections::HashMap<WindowId, lwfa_proto::WindowScaling>,
+    // These globals are held for their lifetime, not queried by callbacks.
+    #[allow(dead_code)]
+    pub fractional_scale_state: smithay::wayland::fractional_scale::FractionalScaleManagerState,
+    #[allow(dead_code)]
+    pub viewporter_state: smithay::wayland::viewporter::ViewporterState,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub xwayland_shell_state: XWaylandShellState,
@@ -394,7 +401,7 @@ impl Lwfa {
             windowless_last: Vec::new(),
             windowless_stale: true,
             start_time: std::time::Instant::now(),
-            display_handle: dh,
+            display_handle: dh.clone(),
             // Real size arrives from the backend once the output exists.
             layout: Layout::new((0, 0).into()),
             shell: None,
@@ -453,6 +460,10 @@ impl Lwfa {
             resize_output: None,
             xwm: None,
             xdisplay: None,
+            x11_outputs: Default::default(),
+            scaling: Default::default(),
+            fractional_scale_state: smithay::wayland::fractional_scale::FractionalScaleManagerState::new::<Self>(&dh),
+            viewporter_state: smithay::wayland::viewporter::ViewporterState::new::<Self>(&dh),
             compositor_state,
             xdg_shell_state,
             xwayland_shell_state,
@@ -554,7 +565,8 @@ impl Lwfa {
                 (blank(x11.class()), blank(x11.title()))
             }
         };
-        Some(WindowInfo { id, app_id, title, fullscreen: self.window_fills_output(id) })
+        Some(WindowInfo { id, app_id, title, fullscreen: self.window_fills_output(id),
+            scaling: self.window_scaling(id), xwayland: window.is_x11(), effective_scale: self.effective_scale(id) })
     }
 
     /// Whether a window currently fills the whole output, which is what the
@@ -569,7 +581,7 @@ impl Lwfa {
             return false;
         };
         let output = self.layout.output_size();
-        let size = window.geometry().size;
+        let size = self.layout.preview_rect(id).map(|rect| rect.size).unwrap_or(window.geometry().size);
         size.w >= output.w && size.h >= output.h
     }
 
@@ -603,6 +615,10 @@ impl Lwfa {
             self.space.unmap_elem(&window);
         }
         self.layout.forget(id);
+        if self.pointer_window == Some(id) {
+            self.pointer_window = None;
+        }
+        self.scaling.remove(&id);
         self.forget_reported(id);
         self.capture.forget(id);
         self.streaming.remove(&id);
@@ -1540,6 +1556,7 @@ impl Lwfa {
 
     /// Recompute placements and push them into the scene.
     pub fn apply_layout(&mut self) {
+        self.refresh_x11_outputs(false);
         for (window, location) in self.layout.placements() {
             self.space.map_element(window, location, false);
         }
@@ -1587,7 +1604,10 @@ impl Lwfa {
                     // fullscreen control tells clients too, which it never used
                     // to. Same rule the shell uses to decide whether to round
                     // the corners; see `fillsOutput` there.
-                    let fills = configure.rect.size.w >= output.w && configure.rect.size.h >= output.h;
+                    let size = self.layout.id_of_surface(toplevel.wl_surface())
+                        .and_then(|id| self.layout.preview_rect(id)).map(|rect| rect.size)
+                        .unwrap_or(configure.rect.size);
+                    let fills = size.w >= output.w && size.h >= output.h;
                     toplevel.with_pending_state(|state| {
                         state.size = Some(configure.rect.size);
                         if fills {
@@ -1635,12 +1655,13 @@ impl Lwfa {
             return;
         }
         for (id, window, _) in self.layout.placements_with_ids() {
-            let size = window.geometry().size.to_physical(1);
+            let density = self.capture_density(id);
+            let size = window.geometry().size.to_f64().to_physical(density).to_i32_round();
             let overlays = self.overlays_for(&window, (0, 0).into());
             let gpu_direct = self.config.stream.gpu_direct;
             let Some(frame) =
                 self.capture
-                    .capture(renderer, id, &window, size, &overlays, gpu_direct, true)
+                    .capture(renderer, id, &window, size, density, &overlays, gpu_direct, true)
             else {
                 continue; // unchanged since last capture
             };
@@ -1682,7 +1703,7 @@ impl Lwfa {
     ///
     /// `loc` is the window's position in the space, needed to work out where an
     /// override-redirect X11 window sits relative to it.
-    fn overlays_for(
+    pub(crate) fn overlays_for(
         &self,
         window: &Window,
         loc: Point<i32, Logical>,
@@ -1700,31 +1721,34 @@ impl Lwfa {
             }
         }
 
-        // X11: override-redirect windows, which opt out of window management
-        // and place themselves in absolute coordinates. They have no parent
-        // link worth trusting (plenty of toolkits never set WM_TRANSIENT_FOR),
-        // so ownership is decided geometrically, by which window the popup's
-        // top-left corner lands in. That gives exactly one owner, which
-        // matters: shared ownership would draw the same menu into two streams.
-        let bounds = Rectangle::new(loc, window.geometry().size);
+        // Prefer the explicit X11 parent. When a toolkit omits it, choose
+        // exactly one owner, including when scaled app workspaces overlap.
+        let owner = self.layout.id_of(window);
+        let root = window.x11_surface().map(|x11| x11.geometry().loc).unwrap_or(loc);
         for other in self.space.elements() {
-            let Some(x11) = other.x11_surface() else {
-                continue;
-            };
-            if !x11.is_override_redirect() {
-                continue;
-            }
-            let Some(surface) = other.wl_surface() else {
-                continue;
-            };
-            let at = x11.geometry().loc;
-            if !bounds.contains(at) {
-                continue;
-            }
-            overlays.push((surface.into_owned(), at - loc));
+            let Some(x11) = other.x11_surface() else { continue; };
+            if !x11.is_override_redirect() || owner.is_none() || self.x11_popup_owner(x11) != owner { continue; }
+            let Some(surface) = other.wl_surface() else { continue; };
+            overlays.push((surface.into_owned(), x11.geometry().loc - root));
         }
 
         overlays
+    }
+
+    fn x11_popup_owner(&self, popup: &X11Surface) -> Option<WindowId> {
+        let placements = self.layout.placements_with_ids();
+        let mut parent = popup.is_transient_for();
+        let mut visited = std::collections::HashSet::new();
+        while let Some(xid) = parent {
+            if !visited.insert(xid) { break; }
+            if let Some((id, _, _)) = placements.iter().find(|(_, window, _)| window.x11_surface().is_some_and(|x| x.window_id() == xid)) {
+                return Some(*id);
+            }
+            parent = self.space.elements().find_map(|window| window.x11_surface().filter(|x| x.window_id() == xid).and_then(|x| x.is_transient_for()));
+        }
+        let at = popup.geometry().loc;
+        let candidates: Vec<_> = placements.iter().filter(|(_, window, _)| window.x11_surface().is_some_and(|x| x.geometry().contains(at))).collect();
+        candidates.iter().find(|(id, _, _)| Some(*id) == self.focused).or_else(|| candidates.last()).map(|(id, _, _)| *id)
     }
 
     /// The accounts database, but only for a session that may administer it.
@@ -2022,14 +2046,15 @@ impl Lwfa {
                 }
             }
 
-            let size = window.geometry().size.to_physical(1);
+            let density = self.capture_density(id);
+            let size = window.geometry().size.to_f64().to_physical(density).to_i32_round();
             let t0 = PROFILE.then(std::time::Instant::now);
 
             let overlays = self.overlays_for(&window, loc);
             let gpu_direct = self.config.stream.gpu_direct;
             let Some(frame) =
                 self.capture
-                    .capture(renderer, id, &window, size, &overlays, gpu_direct, worker.prefetch_capture(id))
+                    .capture(renderer, id, &window, size, density, &overlays, gpu_direct, worker.prefetch_capture(id))
             else {
                 continue;
             };
@@ -2064,24 +2089,11 @@ impl Lwfa {
         }
     }
 
-    pub fn surface_under(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space
-            .element_under(pos)
-            .and_then(|(window, location)| {
-                window
-                    .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
-                    .map(|(s, p)| (s, (p + location).to_f64()))
-            })
-    }
-
     /// What is under this point *inside one named window*, popups included.
     ///
-    /// # Why input cannot use the whole-space version above
+    /// # Why input cannot use a whole-space search
     ///
-    /// [`Self::surface_under`] asks the space "what is here", and the space
+    /// A whole-space search asks "what is here", and the space
     /// holds toplevels at the size their clients have actually committed. That
     /// answer disagrees with the shell's in two ways, and both are bugs the
     /// user sees as touch being broken.
@@ -2145,20 +2157,13 @@ impl Lwfa {
         origin: Point<i32, Logical>,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let owner = self.layout.id_of(window);
+        let root = window.x11_surface().map(|x11| x11.geometry().loc).unwrap_or(origin);
         for other in self.space.elements().rev() {
-            let is_override = other
-                .x11_surface()
-                .is_some_and(|x11| x11.is_override_redirect());
-            if !is_override {
-                continue;
-            }
-            let Some(location) = self.space.element_location(other) else {
-                continue;
-            };
-            let render = location - other.geometry().loc;
-            if let Some((surface, point)) =
-                other.surface_under(pos - render.to_f64(), WindowSurfaceType::ALL)
-            {
+            let Some(x11) = other.x11_surface() else { continue; };
+            if !x11.is_override_redirect() || owner.is_none() || self.x11_popup_owner(x11) != owner { continue; }
+            let render = origin + (x11.geometry().loc - root) - other.geometry().loc;
+            if let Some((surface, point)) = other.surface_under(pos - render.to_f64(), WindowSurfaceType::ALL) {
                 return Some((surface, (point + render).to_f64()));
             }
         }
@@ -2383,5 +2388,27 @@ impl Lwfa {
         // stays on the list, which is the honest thing to show: the button did
         // what it could and the thing is still there. The liveness check in
         // `windowless` drops it once it really goes.
+    }
+}
+
+#[cfg(test)]
+mod window_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn closing_a_window_clears_its_scaling_and_pending_pointer_target() {
+        let mut event_loop = EventLoop::try_new().unwrap();
+        let display = Display::new().unwrap();
+        let mut state = Lwfa::without_listener(&mut event_loop, display);
+        let closed = state.next_window_id();
+        state.pointer_window = Some(closed);
+        state.scaling.insert(closed, lwfa_proto::WindowScaling { mode: lwfa_proto::ScalingMode::Workspace, scale: Some(2.0) });
+        state.retire_window(closed);
+        assert_eq!(state.pointer_window, None);
+        assert!(!state.scaling.contains_key(&closed));
+        assert!(state.set_window_scaling(closed, Default::default()).is_err());
+        let reopened = state.next_window_id();
+        assert_ne!(reopened, closed);
+        assert_eq!(state.window_scaling(reopened), Default::default());
     }
 }

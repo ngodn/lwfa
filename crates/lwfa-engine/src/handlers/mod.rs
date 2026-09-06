@@ -13,14 +13,13 @@ use std::os::unix::io::OwnedFd;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::wayland::output::OutputHandler;
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
     request_data_device_client_selection, set_data_device_focus,
 };
-use smithay::{delegate_data_device, delegate_output, delegate_seat};
+use smithay::{delegate_data_device, delegate_seat};
 
 use crate::focus::KeyboardFocus;
 use crate::state::Lwfa;
@@ -151,6 +150,3 @@ impl ClientDndGrabHandler for Lwfa {}
 impl ServerDndGrabHandler for Lwfa {}
 
 delegate_data_device!(Lwfa);
-
-impl OutputHandler for Lwfa {}
-delegate_output!(Lwfa);

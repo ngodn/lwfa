@@ -23,9 +23,8 @@
  *
  * They are RFC 6381 codec parameters, the same form a `<video>` element takes.
  * The probe uses a conservative profile and level for each: the aim is "can
- * this device decode this family at all", and a device that can do Main profile
- * can do everything the engine will send. The real level comes from the stream
- * itself once frames arrive.
+ * this device decode this family at a desktop size". Larger streams need a
+ * separate check using their actual profile, level and dimensions.
  */
 
 /** A codec the engine can encode and a browser might be able to decode. */
@@ -48,12 +47,12 @@ export const PREFERENCE: readonly Codec[] = ["hevc", "h264"]
 /**
  * What to hand `isConfigSupported` for each family.
  *
- * `hvc1.1.6.L93.B0` is HEVC Main, level 3.1. `avc1.42E01E` is H.264
- * Constrained Baseline, level 3.0.
+ * Main profile, level 4 for both families. Unlike the old level 3/3.1
+ * strings, these levels accommodate the 1080p probe dimensions.
  */
 const PROBE: Record<Codec, string> = {
-  hevc: "hvc1.1.6.L93.B0",
-  h264: "avc1.42E01E",
+  hevc: "hvc1.1.6.L120.B0",
+  h264: "avc1.4D0028",
 }
 
 /**
@@ -64,6 +63,67 @@ const PROBE: Record<Codec, string> = {
  * 16 by 16 and discovering the truth later.
  */
 const PROBE_SIZE = { codedWidth: 1920, codedHeight: 1080 }
+
+/** Annex B NAL units, excluding start codes. Views do not copy the payload. */
+function* nalUnits(data: Uint8Array): Generator<Uint8Array> {
+  let start = -1
+  for (let i = 0; i + 2 < data.length; i++) {
+    if (data[i] !== 0 || data[i + 1] !== 0) continue
+    const length = data[i + 2] === 1 ? 3
+      : data[i + 2] === 0 && data[i + 3] === 1 ? 4 : 0
+    if (!length) continue
+    if (start >= 0) yield data.subarray(start, i)
+    start = i + length
+    i = start - 1
+  }
+  if (start >= 0) yield data.subarray(start)
+}
+
+/** Only the fixed SPS prefix is needed. Remove Annex B emulation prevention. */
+function rbspPrefix(nal: Uint8Array, headerBytes: number, length: number): number[] {
+  const bytes: number[] = []
+  let zeros = 0
+  for (let i = headerBytes; i < nal.length && bytes.length < length; i++) {
+    const byte = nal[i]!
+    if (zeros >= 2 && byte === 3) {
+      zeros = 0
+      continue
+    }
+    bytes.push(byte)
+    zeros = byte === 0 ? zeros + 1 : 0
+  }
+  return bytes
+}
+
+/** Read the stream's RFC 6381 profile, compatibility, tier and level from SPS. */
+export function codecFromAnnexB(data: Uint8Array, family: Codec): string | null {
+  const hex = (value: number) => value.toString(16).toUpperCase()
+  for (const nal of nalUnits(data)) {
+    if (family === "h264") {
+      if ((nal[0]! & 0x1f) !== 7) continue
+      const prefix = rbspPrefix(nal, 1, 3)
+      if (prefix.length < 3) continue
+      return `avc1.${prefix.map((byte) => hex(byte).padStart(2, "0")).join("")}`
+    }
+    // HEVC SPS: two-byte NAL header, one byte of VPS/sublayer fields, then
+    // the 12-byte general profile_tier_level. Sublayer fields follow it.
+    if (((nal[0]! >> 1) & 0x3f) !== 33 || nal.length < 2 || (nal[1]! & 7) === 0) continue
+    const prefix = rbspPrefix(nal, 2, 13)
+    if (prefix.length < 13) continue
+    const profile = prefix[1]!
+    const space = ["", "A", "B", "C"][profile >> 6]!
+    // RFC 6381 writes compatibility flags with the bit order reversed.
+    let compatibility = 0
+    for (let bit = 0; bit < 32; bit++) {
+      if (prefix[2 + (bit >> 3)]! & (0x80 >> (bit & 7))) compatibility += 2 ** bit
+    }
+    const constraints = prefix.slice(6, 12)
+    while (constraints.at(-1) === 0) constraints.pop()
+    const suffix = constraints.map((byte) => `.${hex(byte)}`).join("")
+    return `hvc1.${space}${profile & 0x1f}.${hex(compatibility)}.${profile & 0x20 ? "H" : "L"}${prefix[12]}${suffix}`
+  }
+  return null
+}
 
 /**
  * Which codecs this browser can decode, best first.

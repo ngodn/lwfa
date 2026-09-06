@@ -66,7 +66,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # NVENC headers. No CUDA toolkit: FFmpeg dlopens libcuda from the driver at
 # run time, so the build machine needs no NVIDIA anything.
-ARG NV_CODEC_HEADERS=n13.0.19.0
+# The 13.0 patch keeps the driver 570 floor. SDK 13.1 requires driver 610.
+ARG NV_CODEC_HEADERS=n13.0.19.1
 RUN git clone --depth 1 --branch "$NV_CODEC_HEADERS" \
       https://github.com/FFmpeg/nv-codec-headers.git /tmp/nv \
     && make -C /tmp/nv install PREFIX=/usr/local \

@@ -30,7 +30,7 @@ const server = await createServer({
   configFile: false,
   root: fileURLToPath(new URL("../packages/shell", import.meta.url)),
   resolve: { alias: { "@": fileURLToPath(new URL("../packages/shell/src", import.meta.url)) } },
-  esbuild: { jsx: "automatic" },
+  oxc: { jsx: { runtime: "automatic" } },
   server: { host: "127.0.0.1", port: 0, hmr: false },
 })
 
@@ -54,7 +54,7 @@ try {
         wire.push(message)
         if (message.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }))
       })
-      ws.send(JSON.stringify({ type: 'hello', protocolVersion: 0,
+      ws.send(JSON.stringify({ type: 'hello', protocolVersion: 1,
         output: { width: 1000, height: 700, scale: 1 },
         windows: [windowInfo(1), windowInfo(2)], focused: 1,
         permissions: { mode, allowedApps: null }, account: 'test', session: 1, primary: false, peers: [] }))
@@ -83,7 +83,7 @@ try {
     if (mode === 'interact') {
       // Permission changes arrive as another hello on the existing socket.
       wire.length = 0
-      const hello = changedMode => ({ type: 'hello', protocolVersion: 0,
+      const hello = changedMode => ({ type: 'hello', protocolVersion: 1,
         output: { width: 1000, height: 700, scale: 1 },
         windows: [windowInfo(1), windowInfo(2)], focused: 1,
         permissions: { mode: changedMode, allowedApps: null }, account: 'test', session: 1, primary: false, peers: [] })

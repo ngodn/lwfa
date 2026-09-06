@@ -125,6 +125,8 @@ impl Animated {
 
 struct Tracked {
     window: Window,
+    workspace_scale: f64,
+    base_rect: Option<Rectangle<i32, Logical>>,
     x: Animated,
     y: Animated,
     /// Last rectangle sent as a `configure`, so an unchanged layout does not
@@ -217,6 +219,26 @@ impl Layout {
         }
     }
 
+    pub fn configured_rect(&self, id: WindowId) -> Option<Rectangle<i32, Logical>> {
+        self.tracked.get(&id)?.sent
+    }
+
+    pub fn preview_rect(&self, id: WindowId) -> Option<Rectangle<i32, Logical>> {
+        let t = self.tracked.get(&id)?;
+        let mut rect = t.base_rect?;
+        rect.loc = (t.x.current.round() as i32, t.y.current.round() as i32).into();
+        Some(rect)
+    }
+
+    pub fn set_workspace_scale(&mut self, id: WindowId, factor: f64, now: Instant) -> Option<PendingConfigure> {
+        let tracked = self.tracked.get_mut(&id)?;
+        tracked.workspace_scale = factor;
+        let rect = client_rect(workspace_rect(tracked.base_rect?, factor), tracked.window.is_x11());
+        if !tracked.needs_configure(rect) { return None; }
+        tracked.configured(rect, now);
+        Some(PendingConfigure { window: tracked.window.clone(), rect })
+    }
+
     pub fn mode(&self) -> Mode {
         self.mode
     }
@@ -238,6 +260,8 @@ impl Layout {
             id,
             Tracked {
                 window,
+                workspace_scale: 1.0,
+                base_rect: None,
                 x: Animated::new(0.0),
                 y: Animated::new(0.0),
                 sent: None,
@@ -349,6 +373,8 @@ impl Layout {
                 )
                     .into(),
             );
+            tracked.base_rect = Some(rect);
+            let rect = client_rect(workspace_rect(rect, tracked.workspace_scale), tracked.window.is_x11());
             if tracked.needs_configure(rect) {
                 tracked.configured(rect, now);
                 configures.push(PendingConfigure {
@@ -382,6 +408,8 @@ impl Layout {
             tracked.x.snap_to(0.0);
             tracked.y.snap_to(0.0);
             let rect = Rectangle::new((0, 0).into(), size);
+            tracked.base_rect = Some(rect);
+            let rect = client_rect(workspace_rect(rect, tracked.workspace_scale), tracked.window.is_x11());
             if tracked.needs_configure(rect) {
                 tracked.configured(rect, now);
                 configures.push(PendingConfigure {
@@ -657,5 +685,59 @@ mod tests {
         a.tick(frame);
         b.tick(frame);
         assert_eq!(a.current, b.current);
+    }
+}
+
+/// Keep placement in the shell's coordinates while changing only app layout.
+fn workspace_rect(mut rect: Rectangle<i32, Logical>, factor: f64) -> Rectangle<i32, Logical> {
+    let factor = crate::scaling::bounded_density(rect.size, factor);
+    rect.size = ((f64::from(rect.size.w) * factor).round().clamp(1.0, 8192.0) as i32,
+                 (f64::from(rect.size.h) * factor).round().clamp(1.0, 8192.0) as i32).into();
+    rect
+}
+
+/// X11 clips its pointer to the root rectangle, even when a Wayland pointer
+/// event names a specific window. A partly scrolled-out browser window can
+/// remain at a negative preview position, but its X11 workspace must stay in
+/// the root's positive coordinate space. Popup offsets use the X11 origin.
+fn client_rect(mut rect: Rectangle<i32, Logical>, x11: bool) -> Rectangle<i32, Logical> {
+    if x11 {
+        rect.loc.x = rect.loc.x.max(0);
+        rect.loc.y = rect.loc.y.max(0);
+    }
+    rect
+}
+
+#[cfg(test)]
+mod scaling_tests {
+    use super::*;
+    #[test]
+    fn scrolled_x11_workspaces_remain_addressable_at_reduced_scale() {
+        let browser = Rectangle::new((-1000, -200).into(), (2000, 1000).into());
+        for factor in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
+            let app = client_rect(workspace_rect(browser, factor), true);
+            assert_eq!(app.loc, Point::from((0, 0)));
+            // The visible browser origin falls halfway across the window.
+            let pointer_root_x = f64::from(app.loc.x) + 0.5 * f64::from(app.size.w);
+            assert!(pointer_root_x >= 0.0 && pointer_root_x < f64::from(app.size.w));
+            let native = client_rect(workspace_rect(browser, factor), false);
+            assert_eq!(native.loc, browser.loc, "Wayland geometry is unchanged");
+        }
+        assert_eq!(browser.loc, Point::from((-1000, -200)));
+        let visible = Rectangle::new((100, 200).into(), (1000, 500).into());
+        assert_eq!(client_rect(visible, true), visible);
+    }
+
+    #[test]
+    fn workspace_factors_change_app_size_without_moving_the_browser_rectangle() {
+        let base = Rectangle::new((17, 23).into(), (1000, 500).into());
+        for factor in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
+            let configured = workspace_rect(base, factor);
+            assert_eq!(configured.loc, base.loc);
+            assert_eq!(configured.size.w, (1000.0 * factor) as i32);
+            assert_eq!(configured.size.h, (500.0 * factor) as i32);
+        }
+        let oversized = workspace_rect(Rectangle::from_size((8000, 8000).into()), 2.0);
+        assert!(crate::scaling::valid_capture_size(oversized.size.to_physical(1)));
     }
 }

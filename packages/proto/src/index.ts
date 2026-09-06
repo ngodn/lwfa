@@ -19,7 +19,7 @@
  */
 
 /** Bumped on any breaking change. Must equal the Rust `PROTOCOL_VERSION`. */
-export const PROTOCOL_VERSION = 0
+export const PROTOCOL_VERSION = 1
 
 /** Engine-assigned window handle. A bare number on the wire. */
 export type WindowId = number
@@ -37,6 +37,12 @@ export interface Rect {
   height: number
 }
 
+export interface WindowScaling {
+  mode: "sharp" | "workspace"
+  /** Null selects display density automatically in sharp mode. */
+  scale: number | null
+}
+
 export interface WindowInfo {
   id: WindowId
   appId: string | null
@@ -49,6 +55,9 @@ export interface WindowInfo {
    * `fullscreenRequest` event catches up (which never fires on a reconnect).
    */
   fullscreen: boolean
+  scaling?: WindowScaling
+  xwayland?: boolean
+  effectiveScale?: number
 }
 
 export interface SpringSpec {
@@ -530,6 +539,7 @@ export type ToEngine =
    * makes every window the wrong physical size. Answered with `outputChanged`.
    */
   | { type: "setViewport"; width: number; height: number; scale: number }
+  | { type: "setWindowScaling"; id: WindowId; scaling: WindowScaling }
   /** Ask for the installed applications. Answered with `apps`, without icons. */
   | { type: "listApps" }
   /**
@@ -562,14 +572,14 @@ export type ToEngine =
    * differs from the shell's target and output-relative coordinates would land
    * clicks where the window is heading rather than where it is.
    */
-  | { type: "pointerMotion"; window: WindowId; x: number; y: number }
+  | { type: "pointerMotion"; window: WindowId; x: number; y: number; normalized?: boolean }
   | { type: "pointerButton"; button: ButtonCode; pressed: boolean }
   | { type: "pointerAxis"; horizontal: number; vertical: number }
   | { type: "pointerLeave" }
   | { type: "key"; key: KeyCode; pressed: boolean }
   /** Touch is first-class, not synthesised into pointer events. */
-  | { type: "touchDown"; window: WindowId; id: number; x: number; y: number }
-  | { type: "touchMotion"; window: WindowId; id: number; x: number; y: number }
+  | { type: "touchDown"; window: WindowId; id: number; x: number; y: number; normalized?: boolean }
+  | { type: "touchMotion"; window: WindowId; id: number; x: number; y: number; normalized?: boolean }
   | { type: "touchUp"; id: number }
   /**
    * Ask to become the connection that drives layout.
@@ -905,13 +915,24 @@ function decodeRect(value: unknown, at: string): Rect {
 
 function decodeWindowInfo(value: unknown, at: string): WindowInfo {
   const o = asObject(value, at)
-  noExtraKeys(o, ["id", "appId", "title", "fullscreen"], at)
+  noExtraKeys(o, ["id", "appId", "title", "fullscreen", "scaling", "xwayland", "effectiveScale"], at)
   return {
     id: int(o, "id", at),
     appId: nullableStr(o, "appId", at),
     title: nullableStr(o, "title", at),
     fullscreen: bool(o, "fullscreen", at),
+    ...("scaling" in o ? { scaling: decodeWindowScaling(o["scaling"], `${at}.scaling`) } : {}),
+    ...("xwayland" in o ? { xwayland: bool(o, "xwayland", at) } : {}),
+    ...("effectiveScale" in o ? { effectiveScale: num(o, "effectiveScale", at) } : {}),
   }
+}
+
+function decodeWindowScaling(value: unknown, at: string): WindowScaling {
+  const o = asObject(value, at)
+  noExtraKeys(o, ["mode", "scale"], at)
+  const mode = str(o, "mode", at)
+  if (mode !== "sharp" && mode !== "workspace") throw new ProtocolError(`${at}.mode: unknown scaling mode`)
+  return { mode, scale: o["scale"] === null ? null : num(o, "scale", at) }
 }
 
 function decodeSpring(value: unknown, at: string): SpringSpec {
@@ -1540,6 +1561,11 @@ export function decodeToEngine(text: string): ToEngine {
         scale: num(o, "scale", where),
       }
     }
+    case "setWindowScaling": {
+      const where = `${at}.setWindowScaling`
+      noExtraKeys(o, ["type", "id", "scaling"], where)
+      return { type: "setWindowScaling", id: int(o, "id", where), scaling: decodeWindowScaling(o["scaling"], `${where}.scaling`) }
+    }
     case "spawn": {
       const where = `${at}.spawn`
       noExtraKeys(o, ["type", "command", "terminal"], where)
@@ -1562,12 +1588,13 @@ export function decodeToEngine(text: string): ToEngine {
     }
     case "pointerMotion": {
       const where = `${at}.pointerMotion`
-      noExtraKeys(o, ["type", "window", "x", "y"], where)
+      noExtraKeys(o, ["type", "window", "x", "y", "normalized"], where)
       return {
         type: "pointerMotion",
         window: int(o, "window", where),
         x: num(o, "x", where),
         y: num(o, "y", where),
+        ...("normalized" in o ? { normalized: bool(o, "normalized", where) } : {}),
       }
     }
     case "pointerButton": {
@@ -1600,13 +1627,14 @@ export function decodeToEngine(text: string): ToEngine {
     case "touchDown":
     case "touchMotion": {
       const where = `${at}.${t}`
-      noExtraKeys(o, ["type", "window", "id", "x", "y"], where)
+      noExtraKeys(o, ["type", "window", "id", "x", "y", "normalized"], where)
       return {
         type: t,
         window: int(o, "window", where),
         id: int(o, "id", where),
         x: num(o, "x", where),
         y: num(o, "y", where),
+        ...("normalized" in o ? { normalized: bool(o, "normalized", where) } : {}),
       }
     }
     case "touchUp": {

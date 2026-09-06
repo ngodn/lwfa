@@ -1,0 +1,8 @@
+{
+  "type": "setWindowScaling",
+  "id": 2,
+  "scaling": {
+    "mode": "workspace",
+    "scale": 0.5
+  }
+}

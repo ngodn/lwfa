@@ -63,13 +63,13 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                         id: WindowId(1),
                         app_id: Some("Alacritty".into()),
                         title: Some("~/development/lwfa".into()),
-                        fullscreen: true,
+                        fullscreen: true, scaling: Default::default(), xwayland: false, effective_scale: 1.0,
                     },
                     WindowInfo {
                         id: WindowId(2),
                         app_id: None,
                         title: None,
-                        fullscreen: false,
+                        fullscreen: false, scaling: Default::default(), xwayland: false, effective_scale: 1.0,
                     },
                 ],
                 focused: Some(WindowId(1)),
@@ -113,7 +113,7 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                     id: WindowId(7),
                     app_id: Some("firefox".into()),
                     title: None,
-                    fullscreen: false,
+                    fullscreen: false, scaling: Default::default(), xwayland: false, effective_scale: 1.0,
                 },
             },
         ),
@@ -124,7 +124,7 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
                     id: WindowId(7),
                     app_id: Some("firefox".into()),
                     title: Some("lwfa \u{2014} not an em dash test, just unicode".into()),
-                    fullscreen: false,
+                    fullscreen: false, scaling: Default::default(), xwayland: false, effective_scale: 1.0,
                 },
             },
         ),
@@ -465,6 +465,13 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
 
 fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
     vec![
+        ("window-scaling-sharp", ToEngine::SetWindowScaling { id: WindowId(1), scaling: WindowScaling { mode: ScalingMode::Sharp, scale: Some(1.75) } }),
+        ("window-scaling-workspace", ToEngine::SetWindowScaling { id: WindowId(2), scaling: WindowScaling { mode: ScalingMode::Workspace, scale: Some(0.5) } }),
+        ("window-scaling-auto", ToEngine::SetWindowScaling { id: WindowId(1), scaling: WindowScaling { mode: ScalingMode::Sharp, scale: None } }),
+        ("pointer-normalized", ToEngine::PointerMotion { window: WindowId(1), x: 0.5, y: 0.25, normalized: true }),
+        ("touch-down-normalized", ToEngine::TouchDown { window: WindowId(1), id: 2, x: 0.25, y: 0.75, normalized: true }),
+        ("touch-motion-normalized", ToEngine::TouchMotion { window: WindowId(1), id: 2, x: 0.5, y: 0.25, normalized: true }),
+
         (
             "set-layout-animated",
             ToEngine::SetLayout {

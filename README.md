@@ -119,6 +119,8 @@ test evidence and remaining limits.
 
 - Per-window hardware video (NVENC), decoded with WebCodecs, zero-copy from the
   GL texture into the encoder when the NVIDIA driver allows it
+- Per-window display scaling from 0.5x to 2x: sharper native Wayland rendering
+  or more workspace inside the same browser window
 - Adaptive bitrate driven by real socket backpressure, up to 32 Mbit/s, with the
   focused window getting the budget and unwatched windows paused
 - Audio over Opus, per-device opt-in, quality that degrades last
@@ -137,7 +139,7 @@ test evidence and remaining limits.
   before it writes anything
 
 Deliberately not done yet: built-in TLS (terminate it at a reverse proxy),
-multi-monitor, DPI awareness, the layer-shell chrome path for the native output,
+multi-monitor, the layer-shell chrome path for the native output,
 and a TTY backend. The engine runs nested inside an existing compositor; it does
 not own a display outright.
 

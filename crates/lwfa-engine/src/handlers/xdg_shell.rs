@@ -77,6 +77,7 @@ impl XdgShellHandler for Lwfa {
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
         self.unconstrain_popup(&surface);
+        if let Some(parent) = surface.get_parent_surface() { self.inherit_surface_density(surface.wl_surface(), &parent); }
         if let Err(err) = self.popups.track_popup(PopupKind::Xdg(surface)) {
             tracing::warn!("failed to track popup: {err}");
         }

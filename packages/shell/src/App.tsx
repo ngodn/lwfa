@@ -299,10 +299,11 @@ export function App(): React.ReactElement {
    * missing, which is any plain-HTTP origin. The engine reads that as JPEG.
    */
   const [decodes, setDecodes] = useState<Codec[]>([]);
+  const failedCodecs = useRef(new Set<Codec>());
   useEffect(() => {
     let live = true;
     void decodable().then((codecs) => {
-      if (live) setDecodes(codecs);
+      if (live) setDecodes(codecs.filter((codec) => !failedCodecs.current.has(codec)));
     });
     return () => {
       live = false;
@@ -394,6 +395,7 @@ export function App(): React.ReactElement {
         conn.send({
           type: "pointerMotion",
           window: id,
+          normalized: true,
           x: event.x,
           y: event.y,
         });
@@ -421,6 +423,7 @@ export function App(): React.ReactElement {
         conn.send({
           type: "touchDown",
           window: id,
+          normalized: true,
           id: event.id,
           x: event.x,
           y: event.y,
@@ -430,6 +433,7 @@ export function App(): React.ReactElement {
         conn.send({
           type: "touchMotion",
           window: id,
+          normalized: true,
           id: event.id,
           x: event.x,
           y: event.y,
@@ -514,8 +518,9 @@ export function App(): React.ReactElement {
     }
   }, [update]);
 
-  // Flipping the pause-inactive preference takes effect when it is flipped,
-  // not at the next reflow. The list is otherwise sent from `push`, which
+  // Stream preferences and codec capability changes take effect immediately,
+  // including a decoder rejecting the actual size of a scaled frame.
+  // The list is otherwise sent from `push`, which
   // runs on strip transitions, and a settings toggle is not one.
   const pauseInactive = streamPrefs.pauseInactive;
   useEffect(() => {
@@ -538,11 +543,14 @@ export function App(): React.ReactElement {
         : [],
       codecs: codecsRef.current,
     });
-  }, [pauseInactive]);
+  }, [pauseInactive, wantCodecs]);
 
   useEffect(() => {
     if (!password) return;
 
+    // Socket reconnects can miss windowClosed. Keep this set in the connection
+    // lifetime so hello can retire missing resources before React renders.
+    const knownWindows = new Set<WindowId>();
     const handleMessage = (message: ToShell) => {
       switch (message.type) {
         case "hello": {
@@ -569,6 +577,18 @@ export function App(): React.ReactElement {
           };
           outputRef.current = out;
           setOutput(out);
+          const liveIds = new Set(message.windows.map((w) => w.id));
+          for (const id of knownWindows) {
+            if (liveIds.has(id)) continue;
+            decoderRef.current?.forget(id);
+            dropFrame(id);
+          }
+          knownWindows.clear();
+          for (const id of liveIds) knownWindows.add(id);
+          setBlankIds((prev) => {
+            const next = new Set([...prev].filter((id) => liveIds.has(id)));
+            return next.size === prev.size ? prev : next;
+          });
           setWindows(new Map(message.windows.map((w) => [w.id, w])));
 
           // Rebuild the strip from the engine's view of the world rather than
@@ -687,6 +707,7 @@ export function App(): React.ReactElement {
         }
 
         case "windowOpened":
+          knownWindows.add(message.window.id);
           log("info", `window ${message.window.id} opened (${message.window.appId ?? "?"})`);
           clearLaunchFor(message.window.appId);
           // A window appearing is the end of the "already open" story too: the
@@ -701,6 +722,7 @@ export function App(): React.ReactElement {
           break;
 
         case "windowChanged":
+          knownWindows.add(message.window.id);
           setWindows((prev) =>
             new Map(prev).set(message.window.id, message.window),
           );
@@ -735,6 +757,7 @@ export function App(): React.ReactElement {
           break;
 
         case "windowClosed":
+          knownWindows.delete(message.id);
           setWindows((prev) => {
             const next = new Map(prev);
             next.delete(message.id);
@@ -910,7 +933,12 @@ export function App(): React.ReactElement {
 
     // Straight into the frame store: no React state, so an arriving frame
     // re-renders exactly the one surface showing it. See lib/frames.ts.
-    const decoder = new FrameDecoder(publishFrame);
+    const decoder = new FrameDecoder(publishFrame, (codec) => {
+      if (decoderRef.current !== decoder || failedCodecs.current.has(codec)) return;
+      failedCodecs.current.add(codec);
+      log("warn", `${codec.toUpperCase()} decoding failed; switching to a supported stream format`);
+      setDecodes((current) => current.filter((candidate) => candidate !== codec));
+    });
     decoderRef.current = decoder;
 
     const handleFrame = (frame: DecodedFrame) => {

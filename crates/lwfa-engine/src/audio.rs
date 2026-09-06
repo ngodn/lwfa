@@ -376,6 +376,27 @@ mod tests {
     }
 
     #[test]
+    fn opus_packets_stay_decodable_while_the_rate_changes() {
+        eprintln!("linked {}", opus::version());
+        let mut encoder = Opus::new();
+        assert!(encoder.encoder.is_some(), "bundled Opus must be usable");
+        let mut decoder = opus::Decoder::new(SAMPLE_RATE, opus::Channels::Stereo).unwrap();
+        let mut packet = [0u8; 4000];
+        let mut decoded = [0i16; FRAMES_PER_CHUNK * CHANNELS as usize];
+        for (chunk, bitrate) in [64_000, 128_000, 192_000, 64_000, 128_000].into_iter().enumerate() {
+            encoder.set_bitrate(bitrate);
+            let samples: Vec<i16> = (0..FRAMES_PER_CHUNK).flat_map(|sample| {
+                let time = (chunk * FRAMES_PER_CHUNK + sample) as f64 / f64::from(SAMPLE_RATE);
+                [440.0, 880.0].map(|hz| (10_000.0 * (time * hz * std::f64::consts::TAU).sin()) as i16)
+            }).collect();
+            let len = encoder.encode(&samples, &mut packet).expect("valid audio encodes");
+            let frames = decoder.decode(&packet[..len], &mut decoded, false).expect("valid Opus packet");
+            assert_eq!(frames, FRAMES_PER_CHUNK);
+            assert!(decoded.iter().any(|sample| sample.unsigned_abs() > 1000), "decoder must produce the signal");
+        }
+    }
+
+    #[test]
     fn the_wire_size_is_what_the_bandwidth_note_claims() {
         // 1.5 Mbit/s, quoted in the format's documentation and in the UI.
         let bytes_per_second = SAMPLE_RATE as usize * BYTES_PER_FRAME;

@@ -643,6 +643,98 @@ mod tests {
 
     #[test]
     #[ignore = "requires NVENC; run alone with --ignored --test-threads=1"]
+    fn hardware_codec_resize_and_recovery() {
+        use std::process::Command;
+
+        let output_dir = std::path::PathBuf::from(
+            std::env::var_os("LWFA_CODEC_PROBE_DIR")
+                .expect("set LWFA_CODEC_PROBE_DIR to an isolated probe directory"),
+        );
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let mut results = Vec::new();
+        for (codec, format, extension) in [
+            (lwfa_proto::Codec::H264, FrameFormat::H264, "h264"),
+            (lwfa_proto::Codec::Hevc, FrameFormat::Hevc, "hevc"),
+        ] {
+            let mut encoders = Encoders::new(crate::config::Stream::default());
+            assert!(encoders.available, "this diagnostic requires NVENC");
+            encoders.set_codec(Some(codec));
+            encoders.set_rates(HashMap::new(), 20_000_000);
+            // Reuse the same window/session owner through both resizes.
+            for (stage, (width, height)) in [(1000_u32, 640_u32), (4000, 3000), (1000, 640)]
+                .into_iter().enumerate()
+            {
+                let rgba: Vec<u8> = (0..width as usize * height as usize)
+                    .flat_map(|i| {
+                        let x = i % width as usize;
+                        let y = i / width as usize;
+                        let gray = [40, 100, 160, 220][
+                            usize::from(x >= width as usize / 2)
+                                + 2 * usize::from(y >= height as usize / 2)
+                        ];
+                        [gray, gray, gray, 255]
+                    }).collect();
+                let mut captured = CapturedFrame::for_tests(WindowId(1), width, height, &rgba);
+                for tick in 0..3 {
+                    if tick == 2 { encoders.request_keyframes(); }
+                    let encoded = encoders.encode(&mut captured).expect("immediate encoded frame");
+                    assert_eq!(encoded.format, format, "hardware must not silently fall back");
+                    if tick == 1 {
+                        assert!(!encoded.keyframe, "verify recovery follows an inter frame");
+                        continue;
+                    }
+                    assert!(encoded.keyframe, "resize and requested recovery must emit IDR");
+                    // Decode only this packet, without preceding parameter sets or references.
+                    let path = output_dir.join(format!("{extension}-{stage}-{tick}.{extension}"));
+                    std::fs::write(&path, &encoded.bytes).unwrap();
+                    let probe = Command::new("ffprobe").args([
+                        "-v", "error", "-show_entries", "stream=codec_name,profile,level,width,height,pix_fmt",
+                        "-of", "json",
+                    ]).arg(&path).output().unwrap();
+                    assert!(probe.status.success(), "{}", String::from_utf8_lossy(&probe.stderr));
+                    let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+                    let stream = &metadata["streams"][0];
+                    assert_eq!(stream["width"], width);
+                    assert_eq!(stream["height"], height);
+                    assert_eq!(stream["codec_name"], extension);
+                    if codec == lwfa_proto::Codec::Hevc && width == 4000 {
+                        assert!(stream["level"].as_u64().unwrap() > 153,
+                            "large HEVC fixture must exercise an SPS above level 5.1");
+                    }
+                    let decoded = Command::new("ffmpeg").args([
+                        "-v", "error", "-threads", "1", "-i",
+                    ]).arg(&path).args([
+                        "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+                    ]).output().unwrap();
+                    assert!(decoded.status.success(), "{}", String::from_utf8_lossy(&decoded.stderr));
+                    assert_eq!(decoded.stdout.len(), width as usize * height as usize * 3);
+                    let mut max_error = 0_u8;
+                    // Include all four edges, so stale dimensions, pitch errors, and black strips fail.
+                    for y in [2, height / 4, height * 3 / 4, height - 3] {
+                        for x in [2, width / 4, width * 3 / 4, width - 3] {
+                            let expected = [40_u8, 100, 160, 220][
+                                usize::from(x >= width / 2) + 2 * usize::from(y >= height / 2)
+                            ];
+                            let offset = (y as usize * width as usize + x as usize) * 3;
+                            for &channel in &decoded.stdout[offset..offset + 3] {
+                                max_error = max_error.max(channel.abs_diff(expected));
+                            }
+                        }
+                    }
+                    assert!(max_error <= 10, "decoded quadrants/edges differ by {max_error}");
+                    results.push(serde_json::json!({
+                        "codec": extension, "stage": stage, "recovery": tick == 2,
+                        "stream": stream, "bytes": encoded.bytes.len(), "maxChannelError": max_error,
+                    }));
+                }
+            }
+        }
+        std::fs::write(output_dir.join("results.json"), serde_json::to_vec_pretty(&results).unwrap()).unwrap();
+        eprintln!("verified {} standalone hardware keyframes: {}", results.len(), output_dir.display());
+    }
+
+    #[test]
+    #[ignore = "requires NVENC; run alone with --ignored --test-threads=1"]
     fn measure_motion_fixture_bitrates() {
         let (width, height) = (1000, 700);
         let mut rgba = vec![0_u8; width * height * 4];
@@ -695,9 +787,8 @@ mod tests {
 // Running the encoder off the render loop
 // ---------------------------------------------------------------------------
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::thread;
 
 use crate::shell::FrameSink;
@@ -725,17 +816,7 @@ use crate::shell::FrameSink;
 /// like. Removing the read-back would save around a millisecond; this saves two
 /// orders of magnitude more.
 pub struct EncodeWorker {
-    frames: SyncSender<Job>,
-    /// Signals sent alongside frames, so ordering with them is preserved.
-    control: SyncSender<Control>,
-    /// Frames submitted but not yet encoded.
-    ///
-    /// `SyncSender` exposes no depth, and `try_send` is the only real test, but
-    /// knowing the queue is backed up lets the caller skip capturing at all
-    /// rather than doing GPU work and then throwing it away.
-    queued: Arc<AtomicUsize>,
-    /// Mirrored from the config so `has_capacity` stays a plain atomic read.
-    queue_depth: usize,
+    work: Arc<WorkQueue<Job>>,
     admission: Arc<Mutex<CaptureAdmission>>,
 }
 
@@ -798,6 +879,10 @@ impl CaptureAdmission {
         self.next_ticket = self.next_ticket.wrapping_add(1);
         slot.generation = self.generation;
         true
+    }
+
+    fn current(&self, id: WindowId, ticket: u64) -> bool {
+        self.windows.get(&id).is_some_and(|slot| slot.pending && slot.ticket == ticket)
     }
 
     fn finish(
@@ -1021,6 +1106,20 @@ mod admission_tests {
     }
 
     #[test]
+    fn changing_scale_rejects_queued_and_inflight_frames_even_after_readmission() {
+        let mut admission = CaptureAdmission::default();
+        let id = WindowId(1);
+        admission.start(id);
+        let stale = admission.windows[&id].ticket;
+        assert!(admission.current(id, stale));
+        admission.forget(id);
+        assert!(!admission.current(id, stale));
+        admission.start(id);
+        assert!(!admission.current(id, stale));
+        assert!(admission.current(id, admission.windows[&id].ticket));
+    }
+
+    #[test]
     fn retiring_and_readmitting_a_window_cannot_complete_the_new_job_with_old_bytes() {
         let mut admission = CaptureAdmission::default();
         let now = Instant::now();
@@ -1050,13 +1149,109 @@ enum Control {
     Rates(std::collections::HashMap<WindowId, u32>, u32),
 }
 
+/// Controls describe desired state rather than a history. Closing many windows
+/// must never overflow a message channel, and repeated rate updates need only
+/// their latest value. Forget dominates retirement until the worker handles it.
+#[derive(Default)]
+struct Controls {
+    windows: HashMap<WindowId, bool>,
+    keyframes: bool,
+    codec: Option<Option<lwfa_proto::Codec>>,
+    rates: Option<(HashMap<WindowId, u32>, u32)>,
+}
+
+impl Controls {
+    fn push(&mut self, control: Control) {
+        match control {
+            Control::Forget(id) => { self.windows.insert(id, true); }
+            Control::Retire(id) => { self.windows.entry(id).or_insert(false); }
+            Control::RequestKeyframes => self.keyframes = true,
+            Control::Codec(codec) => self.codec = Some(codec),
+            Control::Rates(rates, fallback) => self.rates = Some((rates, fallback)),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.windows.is_empty() && !self.keyframes && self.codec.is_none() && self.rates.is_none()
+    }
+
+    fn apply(self, encoders: &mut Encoders) {
+        for (id, forget) in self.windows {
+            if forget { encoders.forget(id); } else { encoders.retire(id, std::time::Instant::now()); }
+        }
+        if let Some(codec) = self.codec { encoders.set_codec(codec); }
+        if let Some((rates, fallback)) = self.rates { encoders.set_rates(rates, fallback); }
+        if self.keyframes { encoders.request_keyframes(); }
+    }
+}
+
+struct PendingWork<J> {
+    frames: std::collections::VecDeque<J>,
+    controls: Controls,
+    closed: bool,
+}
+
+/// Both kinds of work wake the same waiter. Frames stay bounded, while control
+/// updates are coalesced and cannot be dropped merely because encoding is busy.
+struct WorkQueue<J> {
+    pending: Mutex<PendingWork<J>>,
+    ready: Condvar,
+    queued: AtomicUsize,
+    capacity: usize,
+}
+
+impl<J> WorkQueue<J> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            pending: Mutex::new(PendingWork { frames: Default::default(), controls: Default::default(), closed: false }),
+            ready: Condvar::new(),
+            queued: AtomicUsize::new(0),
+            capacity,
+        }
+    }
+
+    fn submit(&self, job: J) -> bool {
+        let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.closed || pending.frames.len() >= self.capacity { return false; }
+        pending.frames.push_back(job);
+        self.queued.fetch_add(1, Ordering::Relaxed);
+        self.ready.notify_one();
+        true
+    }
+
+    fn control(&self, control: Control) {
+        let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.closed { return; }
+        pending.controls.push(control);
+        self.ready.notify_one();
+    }
+
+    fn next(&self) -> Option<(Controls, Option<J>)> {
+        let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !pending.closed && pending.frames.is_empty() && pending.controls.is_empty() {
+            pending = self.ready.wait(pending).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        if pending.closed { return None; }
+        let controls = std::mem::take(&mut pending.controls);
+        let job = pending.frames.pop_front();
+        if job.is_some() { self.queued.fetch_sub(1, Ordering::Relaxed); }
+        Some((controls, job))
+    }
+
+    fn close(&self) {
+        let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.closed = true;
+        pending.frames.clear();
+        self.queued.store(0, Ordering::Relaxed);
+        self.ready.notify_one();
+    }
+}
+
 impl EncodeWorker {
     pub fn spawn(sink: FrameSink, config: crate::config::Stream) -> std::io::Result<Self> {
         let queue_depth = config.encoder_queue_depth.max(1);
-        let (frames_tx, frames_rx) = sync_channel::<Job>(queue_depth);
-        let (control_tx, control_rx) = sync_channel::<Control>(16);
-        let queued = Arc::new(AtomicUsize::new(0));
-        let worker_queued = Arc::clone(&queued);
+        let work = Arc::new(WorkQueue::<Job>::new(queue_depth));
+        let worker_work = Arc::clone(&work);
         let admission = Arc::new(Mutex::new(CaptureAdmission::default()));
         let worker_admission = Arc::clone(&admission);
 
@@ -1065,36 +1260,19 @@ impl EncodeWorker {
             .spawn(move || {
                 let mut encoders = Encoders::new(config);
                 loop {
-                    let Ok(mut job) = frames_rx.recv() else {
-                        return; // compositor is gone
+                    let Some((controls, job)) = worker_work.next() else {
+                        return;
                     };
-                    worker_queued.fetch_sub(1, Ordering::Relaxed);
-
-                    // Drain control *after* receiving, not before.
-                    //
-                    // This thread spends nearly all its time blocked in
-                    // recv(), so anything sent while it was blocked has to be
-                    // applied to the frame that just woke it. Handling control
-                    // only at the top of the loop applies it one frame late,
-                    // and that one frame is precisely the one a newly attached
-                    // client needs to be an IDR. It would arrive as a delta
-                    // with no SPS, the client would wait for a keyframe, and
-                    // because damage tracking means an idle window sends
-                    // nothing further, it would wait forever.
-                    while let Ok(message) = control_rx.try_recv() {
-                        match message {
-                            Control::Forget(id) => encoders.forget(id),
-                            Control::Retire(id) => {
-                                encoders.retire(id, std::time::Instant::now());
-                            }
-                            Control::RequestKeyframes => encoders.request_keyframes(),
-                            Control::Codec(v) => encoders.set_codec(v),
-                            Control::Rates(rates, fallback) => encoders.set_rates(rates, fallback),
-                        }
-                    }
+                    // Apply controls even if no new pixels arrive. All changes
+                    // collected with a frame apply before encoding that frame.
+                    controls.apply(&mut encoders);
+                    let Some(mut job) = job else { continue; };
 
                     // A frame for a window that was just forgotten is stale;
                     // encoding it would rebuild the session it just dropped.
+                    if worker_admission.lock().is_ok_and(|admission| !admission.current(job.frame.id, job.ticket)) {
+                        continue;
+                    }
                     let Some(encoded) = encoders.encode(&mut job.frame) else {
                         if let Ok(mut admission) = worker_admission.lock() {
                             admission.finish(job.frame.id, job.ticket, None, std::time::Instant::now());
@@ -1113,18 +1291,19 @@ impl EncodeWorker {
                     // clients that asked for that window. See `FrameSink`.
                     let bytes = header.encode_with_payload(&encoded.bytes);
                     let size = bytes.len();
-                    sink.send_frame(job.frame.id, bytes);
                     if let Ok(mut admission) = worker_admission.lock() {
+                        // A scale change can invalidate a job while the GPU is
+                        // encoding. Keep the check and queue handoff atomic with
+                        // respect to forget(), so old pixels cannot reappear.
+                        if !admission.current(job.frame.id, job.ticket) { continue; }
+                        sink.send_frame(job.frame.id, bytes);
                         admission.finish(job.frame.id, job.ticket, Some((encoded.format, size)), std::time::Instant::now());
                     }
                 }
             })?;
 
         Ok(Self {
-            frames: frames_tx,
-            control: control_tx,
-            queued,
-            queue_depth,
+            work,
             admission,
         })
     }
@@ -1142,22 +1321,19 @@ impl EncodeWorker {
             }
             Err(_) => 0,
         };
-        self.queued.fetch_add(1, Ordering::Relaxed);
-        match self.frames.try_send(Job { frame, ticket }) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
-                self.queued.fetch_sub(1, Ordering::Relaxed);
-                if let Ok(mut admission) = self.admission.lock() {
-                    admission.finish(id, ticket, None, std::time::Instant::now());
-                }
-                false
+        if self.work.submit(Job { frame, ticket }) {
+            true
+        } else {
+            if let Ok(mut admission) = self.admission.lock() {
+                admission.finish(id, ticket, None, std::time::Instant::now());
             }
+            false
         }
     }
 
     /// Room for another frame without blocking.
     pub fn has_capacity(&self) -> bool {
-        self.queued.load(Ordering::Relaxed) < self.queue_depth
+        self.work.queued.load(Ordering::Relaxed) < self.work.capacity
     }
 
     /// Admit capture before it consumes damage or performs GPU readback.
@@ -1173,7 +1349,7 @@ impl EncodeWorker {
 
     pub fn forget(&self, id: WindowId) {
         if let Ok(mut admission) = self.admission.lock() { admission.forget(id); }
-        let _ = self.control.try_send(Control::Forget(id));
+        self.work.control(Control::Forget(id));
     }
 
     /// Tell the encoder this window is no longer being streamed.
@@ -1182,22 +1358,93 @@ impl EncodeWorker {
     /// closed. See [`Encoders::retire`].
     pub fn retire(&self, id: WindowId) {
         if let Ok(mut admission) = self.admission.lock() { admission.forget(id); }
-        let _ = self.control.try_send(Control::Retire(id));
+        self.work.control(Control::Retire(id));
     }
 
     pub fn request_keyframes(&self) {
-        let _ = self.control.try_send(Control::RequestKeyframes);
+        self.work.control(Control::RequestKeyframes);
     }
 
     /// Ask the encoder thread to re-divide the budget. See `bitrate`.
     pub fn set_rates(&self, rates: std::collections::HashMap<WindowId, u32>, fallback: u32) {
-        let _ = self.control.try_send(Control::Rates(rates, fallback));
+        self.work.control(Control::Rates(rates, fallback));
     }
 
     pub fn set_codec(&self, codec: Option<lwfa_proto::Codec>) {
         if let Ok(mut admission) = self.admission.lock() { admission.codec_changed(codec); }
-        let _ = self
-            .control
-            .try_send(Control::Codec(codec));
+        self.work.control(Control::Codec(codec));
+    }
+}
+
+impl Drop for EncodeWorker {
+    fn drop(&mut self) { self.work.close(); }
+}
+
+#[cfg(test)]
+mod work_queue_tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    #[test]
+    fn an_idle_worker_handles_forget_without_waiting_for_another_frame() {
+        let work = Arc::new(WorkQueue::<u8>::new(1));
+        let receiver = work.clone();
+        let (ready_tx, ready_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        let worker = thread::spawn(move || {
+            let mut encoders = Encoders::default();
+            let id = WindowId(42);
+            encoders.fallback.insert(id, ());
+            encoders.retire(id, std::time::Instant::now());
+            ready_tx.send(()).unwrap();
+            let (controls, frame) = receiver.next().expect("control wakes the worker");
+            assert!(frame.is_none(), "no frame was submitted");
+            controls.apply(&mut encoders);
+            done_tx.send((encoders.fallback.is_empty(), encoders.retired.is_empty())).unwrap();
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        work.control(Control::Forget(WindowId(42)));
+        let cleaned = done_rx.recv_timeout(Duration::from_secs(2));
+        work.close();
+        worker.join().unwrap();
+        assert_eq!(cleaned.unwrap(), (true, true));
+    }
+
+    #[test]
+    fn a_full_frame_queue_cannot_drop_cleanup_and_control_bursts_are_coalesced() {
+        let work = WorkQueue::new(1);
+        assert!(work.submit(7));
+        assert!(!work.submit(8), "frame queue stays bounded");
+        for id in 0..64 {
+            work.control(Control::Forget(WindowId(id)));
+            work.control(Control::Retire(WindowId(id)));
+        }
+        for rate in 0..1000 {
+            work.control(Control::Rates(HashMap::new(), rate));
+            work.control(Control::RequestKeyframes);
+            work.control(Control::Codec(None));
+        }
+        let (controls, frame) = work.next().unwrap();
+        assert_eq!(frame, Some(7));
+        assert_eq!(work.queued.load(Ordering::Relaxed), 0);
+        assert_eq!(controls.windows.len(), 64, "no old 16-slot control limit");
+        assert!(controls.windows.values().all(|forget| *forget));
+        assert_eq!(controls.rates.unwrap().1, 999);
+        assert_eq!(controls.codec, Some(None));
+        assert!(controls.keyframes);
+        assert!(work.submit(9));
+    }
+
+    #[test]
+    fn shutting_down_wakes_a_worker_with_no_frames_or_controls() {
+        let work = Arc::new(WorkQueue::<u8>::new(1));
+        let receiver = work.clone();
+        let (done_tx, done_rx) = channel();
+        let worker = thread::spawn(move || { done_tx.send(receiver.next().is_none()).unwrap(); });
+        work.close();
+        assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        worker.join().unwrap();
+        assert!(!work.submit(1));
     }
 }

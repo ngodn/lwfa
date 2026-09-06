@@ -4,13 +4,11 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { createServer } from "node:http"
-import ts from "typescript"
+import { stripTypeScriptTypes } from "node:module"
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright")
 const source = readFileSync(new URL("../packages/shell/src/lib/audio.ts", import.meta.url), "utf8")
-const module = ts.transpileModule(source, {
-  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
-}).outputText
+const module = stripTypeScriptTypes(source)
 const worklet = readFileSync(new URL("../packages/shell/public/audio-worklet.js", import.meta.url))
 const server = createServer((request, response) => {
   response.setHeader("Content-Type", request.url === "/" ? "text/html" : "text/javascript")
@@ -19,7 +17,7 @@ const server = createServer((request, response) => {
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
 let browser
 try {
-  browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"] })
+  browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"], ...(process.env.CHROMIUM_EXECUTABLE ? { executablePath: process.env.CHROMIUM_EXECUTABLE } : {}) })
   for (const path of ["scheduled", "worklet"]) {
     const page = await browser.newPage()
     await page.goto(`http://127.0.0.1:${server.address().port}/`)

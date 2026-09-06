@@ -106,8 +106,11 @@ export function evdevFromButton(button: number): ButtonCode | null {
  * could see arrived roughly three hundred pixels above it. Large targets still
  * worked, which is what made it look intermittent rather than broken.
  *
- * `content` is the size of the pixels actually being displayed, which is the
- * only coordinate space the person clicking can see.
+ * `content` chooses the local coordinate space. The streaming surface now
+ * uses layout pixels for gesture thresholds and normalizes the result before
+ * sending it. The engine then maps that fraction into actual app geometry,
+ * independently of frame resolution. Callers sending pixel coordinates must
+ * still use the application's actual size, as in the example above.
  */
 export function windowPoint(
   event: { clientX: number; clientY: number },

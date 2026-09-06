@@ -93,9 +93,15 @@ describe("engine to shell", () => {
       appId: "Alacritty",
       title: "~/development/lwfa",
       fullscreen: true,
+      scaling: { mode: "sharp", scale: 1 },
+      xwayland: false,
+      effectiveScale: 1,
     })
     // A window that has not set app_id or title yet is normal, not an error.
-    expect(hello.windows[1]).toEqual({ id: 2, appId: null, title: null, fullscreen: false })
+    expect(hello.windows[1]).toEqual({
+      id: 2, appId: null, title: null, fullscreen: false,
+      scaling: { mode: "sharp", scale: 1 }, xwayland: false, effectiveScale: 1,
+    })
     expect(hello.focused).toBe(1)
   })
 
