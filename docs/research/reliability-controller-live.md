@@ -199,3 +199,17 @@ No production restart or live game input was used for these checks.
 Removing button cleanup makes the browser test fail waiting for its release;
 removing stick cleanup separately makes it fail waiting for neutral. Restoring
 the cleanup makes both assertions pass.
+
+## User browser comparison and release decision, 2026-09-06
+
+After testing 1.4.5, the user reported that physical controller input works in
+Chrome and authorized publishing with a Safari/WebKit compatibility note.
+Earlier Safari tests on the iPad Pro M1 showed missed physical LB/RB presses and
+stuck input, while on-screen controls worked. Chrome or on-screen controls are
+the current workaround for affected users.
+
+This is a user-reported browser comparison, not a new synchronized browser,
+kernel, and XInput capture. The Chrome version and its engine were not recorded.
+It supports documenting the Safari symptom without claiming a specific upstream
+WebKit defect or that every WebKit-based browser is affected. No new input
+workaround or automatic release timeout is added for this release.

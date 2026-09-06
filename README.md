@@ -110,6 +110,13 @@ nginx, and bringing your own reverse proxy.
 Daily-driven: a gaming PC in one room, an iPad on the couch, Steam games under
 Proton played over wifi with the on-screen controller.
 
+**Physical controllers in Safari/WebKit:** the reported iPad setup has missed
+button presses and stuck input, especially LB/RB. The user reports that physical
+controls work in Chrome, and on-screen controls work in Safari. Try Chrome or
+the on-screen controller if affected. See the
+[controller investigation](docs/research/reliability-controller-live.md) for the
+test evidence and remaining limits.
+
 - Per-window hardware video (NVENC), decoded with WebCodecs, zero-copy from the
   GL texture into the encoder when the NVIDIA driver allows it
 - Adaptive bitrate driven by real socket backpressure, up to 32 Mbit/s, with the

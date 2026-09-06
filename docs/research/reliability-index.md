@@ -4,6 +4,8 @@ Read this file before resuming the reliability goal.
 
 ## Established findings
 
+- After testing 1.4.5, the user reports physical controls work in Chrome and authorized release with a Safari/WebKit compatibility note. Safari physical input remains affected in the reported iPad setup; on-screen controls work. This is a browser comparison, not identification of a specific upstream defect. See the latest section of the live BG3 check.
+
 - Production is the user's daily driver. Never restart it for testing or kill processes by a broad name match. Root owns isolated dev-engine lifetimes.
 - Always pin the dev shell directory and compare served asset hashes to the checkout build. A successful build does not prove the running engine serves it.
 - The 8 ms controller timer passed mocked-browser-to-evdev tests, but the user still reports failure on iPad after 1.4.1. The controller issue is unresolved. Normal timed presses now also passed disposable GE-Proton XInput, but batch-compressed pulses can disappear there despite evdev success.

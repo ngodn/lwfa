@@ -119,6 +119,10 @@ default one is what everybody uses.
 
 ## Tagging
 
+Release titles use `lwfa X.Y.Z`; tags use `vX.Y.Z`. Keep the notes for each new
+release in `docs/releases/X.Y.Z.md` and pass that file to `gh release create`
+with `--notes-file`.
+
 Annotated, so the tag carries a date, an author and a message, and
 `git describe` prefers it:
 

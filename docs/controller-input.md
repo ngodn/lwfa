@@ -1,5 +1,15 @@
 # lwfa controller input: architecture and the physical-gamepad bug
 
+## Current browser compatibility, 1.4.5
+
+The user reports that physical controller input works in Chrome after testing
+1.4.5. Safari/WebKit remains a known compatibility issue in the reported iPad
+setup: physical buttons can miss presses or remain held, especially LB/RB.
+On-screen controls work in Safari. Chrome or the on-screen controller is the
+current workaround. This comparison does not isolate a specific WebKit defect
+or establish that all WebKit-based browsers behave alike. See the
+[live investigation](research/reliability-controller-live.md) for the evidence.
+
 ## Initial 1.4.1 fix attempt, 2026-09-06
 
 The implementation now polls immediately on connection and then every 8 ms
