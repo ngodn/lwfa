@@ -133,9 +133,8 @@ export class OpusStream {
     }
     // Still loading or compiling. Copied because the packet is a view into a
     // socket buffer that will be reused before the queue drains.
-    if (this.#pending.length < WASM_QUEUE_LIMIT) {
-      this.#pending.push(packet.slice())
-    }
+    if (this.#pending.length === WASM_QUEUE_LIMIT) this.#pending.shift()
+    this.#pending.push(packet.slice())
   }
 
   close(): void {
@@ -166,27 +165,36 @@ export class OpusStream {
     this.#started = true
     const Native = (globalThis as { AudioDecoder?: typeof AudioDecoder }).AudioDecoder
     if (Native) {
+      let decoder: AudioDecoder | null = null
       try {
-        const decoder = new Native({
+        decoder = new Native({
           output: (data) => this.#emit(data),
           error: () => {
-            // The decoder is unusable from here. Give up rather than
-            // retrying per packet fifty times a second.
-            this.#failed = true
+            // Unsupported configurations can fail asynchronously, after
+            // configure() returns. Continue with WASM instead of permanently
+            // silencing a session that already advertised Opus support.
+            if (this.#closed || this.#native !== decoder) return
             this.#native = null
+            this.#startWasm()
           },
         })
         decoder.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: CHANNELS })
         this.#native = decoder
         return
       } catch {
+        try { decoder?.close() } catch { /* Already closed. */ }
         // Present but broken. The WASM path below covers it.
       }
     }
 
+    this.#startWasm()
+  }
+
+  #startWasm(): void {
     Promise.resolve()
-      .then(() => this.#makeWasm())
+      .then(() => this.#closed ? null : this.#makeWasm())
       .then((wasm) => {
+        if (!wasm) return
         if (this.#closed) {
           wasm.free()
           return
@@ -202,6 +210,7 @@ export class OpusStream {
       })
       .catch(() => {
         this.#failed = true
+        this.#wasm?.free()
         this.#wasm = null
         this.#pending = []
       })
@@ -226,6 +235,7 @@ export class OpusStream {
   /** One decoded native buffer, split into the planes the player takes. */
   #emit(data: AudioData): void {
     try {
+      if (this.#closed) return
       const frames = data.numberOfFrames
       if (frames === 0) return
       const left = new Float32Array(frames)

@@ -1633,7 +1633,7 @@ impl Lwfa {
             let gpu_direct = self.config.stream.gpu_direct;
             let Some(frame) =
                 self.capture
-                    .capture(renderer, id, &window, size, &overlays, gpu_direct)
+                    .capture(renderer, id, &window, size, &overlays, gpu_direct, true)
             else {
                 continue; // unchanged since last capture
             };
@@ -2002,6 +2002,9 @@ impl Lwfa {
             }
 
             let rate = self.rates_last.get(&id).copied().unwrap_or(budget);
+            if !worker.can_capture(id, rate, now) {
+                continue;
+            }
             let mut interval = crate::bitrate::capture_interval(rate);
             if Some(id) != self.focused {
                 interval = interval.max(UNFOCUSED_CAPTURE_INTERVAL);
@@ -2019,7 +2022,7 @@ impl Lwfa {
             let gpu_direct = self.config.stream.gpu_direct;
             let Some(frame) =
                 self.capture
-                    .capture(renderer, id, &window, size, &overlays, gpu_direct)
+                    .capture(renderer, id, &window, size, &overlays, gpu_direct, worker.prefetch_capture(id))
             else {
                 continue;
             };

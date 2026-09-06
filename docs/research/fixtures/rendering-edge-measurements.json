@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-06",
+  "provenance": "Manually transcribed numerical results from live scripts/e2e-rendering.mjs tool output. These are measurements of decoded stream pixels; original image payloads were not saved during the failing runs.",
+  "fixture": "Private Chromium profile running generated full-color page with a moving patch. Wait for three target-size frames, then two seconds of steady state.",
+  "before": [
+    {
+      "run": 1,
+      "platform": "wayland",
+      "codec": "jpeg",
+      "width": 802,
+      "height": 602,
+      "blackRightColumns": 10,
+      "blackBottomRows": 10
+    },
+    {
+      "run": 2,
+      "platform": "wayland",
+      "codec": "jpeg",
+      "width": 802,
+      "height": 602,
+      "blackRightColumns": 10,
+      "blackBottomRows": 10
+    }
+  ],
+  "after": [
+    {
+      "platform": "wayland",
+      "codec": "jpeg",
+      "width": 802,
+      "height": 602,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "wayland",
+      "codec": "jpeg",
+      "width": 1192,
+      "height": 860,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "wayland",
+      "codec": "jpeg",
+      "width": 640,
+      "height": 480,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "wayland",
+      "codec": "jpeg",
+      "width": 1324,
+      "height": 884,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "x11",
+      "codec": "jpeg",
+      "width": 802,
+      "height": 602,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "x11",
+      "codec": "jpeg",
+      "width": 1192,
+      "height": 860,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "x11",
+      "codec": "jpeg",
+      "width": 640,
+      "height": 480,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "x11",
+      "codec": "jpeg",
+      "width": 1324,
+      "height": 884,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "wayland",
+      "codec": "h264",
+      "width": 802,
+      "height": 602,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "wayland",
+      "codec": "h264",
+      "width": 1192,
+      "height": 860,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "wayland",
+      "codec": "h264",
+      "width": 640,
+      "height": 480,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "wayland",
+      "codec": "h264",
+      "width": 1324,
+      "height": 884,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "x11",
+      "codec": "h264",
+      "width": 802,
+      "height": 602,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "x11",
+      "codec": "h264",
+      "width": 1192,
+      "height": 860,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "x11",
+      "codec": "h264",
+      "width": 640,
+      "height": 480,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    },
+    {
+      "platform": "x11",
+      "codec": "h264",
+      "width": 1324,
+      "height": 884,
+      "blackRightColumns": 0,
+      "blackBottomRows": 0
+    }
+  ],
+  "change": "SurfaceCapture::issue passes Rectangle::from_size(dst.size) rather than framebuffer whole to RenderElement::draw damage.",
+  "limitations": [
+    "No before PNG was saved. This JSON is a compact witness of the recorded live assertions, not a replayable image artifact.",
+    "H264 session use was separately verified in dev-engine encoder logs.",
+    "Results do not establish correctness for all application content, codecs, client hardware, or Proton games."
+  ]
+}

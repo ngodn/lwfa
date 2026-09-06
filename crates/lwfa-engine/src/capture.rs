@@ -168,9 +168,29 @@ impl Drop for PooledFrame {
 /// window per frame, with input and on-screen rendering queued behind it. Held
 /// here instead, the GPU has a full tick to finish and the map returns at
 /// once. Costs one tick of stream latency, which the encoder and network dwarf.
-struct Pending {
-    mapping: GlesMapping,
+struct Pending<M = GlesMapping> {
+    mapping: M,
     size: Size<i32, Physical>,
+    /// Issued alongside a harvested frame, before its pacing delay was known.
+    prefetched: bool,
+}
+
+/// Take a completed readback without carrying speculative pixels across a
+/// byte-budget wait. Generic only over the mapping handle so scheduling and
+/// damage preservation can be tested without constructing a GL context.
+fn take_pending<M>(
+    pending: &mut Option<Pending<M>>,
+    last_commits: &mut Vec<CommitCounter>,
+    prefetch: bool,
+) -> Option<Pending<M>> {
+    let pending = pending.take()?;
+    if !prefetch && pending.prefetched {
+        // issue() already consumed the surface's commit counters. Force a
+        // replacement even if that snapshot was the client's final update.
+        last_commits.clear();
+        return None;
+    }
+    Some(pending)
 }
 
 struct Target {
@@ -244,6 +264,10 @@ impl SurfaceCapture {
     /// `gpu_direct` is `[stream] gpu_direct`; the path also needs a CUDA
     /// driver and falls back on its own the moment anything goes wrong.
     ///
+    /// Disable `prefetch` for JPEG byte pacing: a speculative readback would
+    /// otherwise sit through the next budget wait before reaching the client.
+    /// Its replacement still maps on a later pass, never waiting inline.
+    ///
     /// `size` is the window's current size in physical pixels.
     ///
     /// `overlays` are surfaces to draw on top of it, at offsets relative to the
@@ -258,20 +282,29 @@ impl SurfaceCapture {
         size: Size<i32, Physical>,
         overlays: &[(WlSurface, Point<i32, Logical>)],
         gpu_direct: bool,
+        prefetch: bool,
     ) -> Option<CapturedFrame> {
-        let harvested = self.harvest(renderer, id);
+        let harvested = self.harvest(renderer, id, prefetch);
+        if !prefetch && harvested.is_some() {
+            return harvested;
+        }
         if let Some(direct) = self.issue(renderer, id, window, size, overlays, gpu_direct) {
             // The zero-copy path produced this pass's frame. Anything still
             // parked from before the path switched is older than it.
             return Some(direct);
         }
+        if harvested.is_some() {
+            if let Some(pending) = self.targets.get_mut(&id).and_then(|target| target.pending.as_mut()) {
+                pending.prefetched = true;
+            }
+        }
         harvested
     }
 
     /// Map the readback issued last pass, if there is one, into a pooled frame.
-    fn harvest(&mut self, renderer: &mut GlesRenderer, id: WindowId) -> Option<CapturedFrame> {
+    fn harvest(&mut self, renderer: &mut GlesRenderer, id: WindowId, prefetch: bool) -> Option<CapturedFrame> {
         let target = self.targets.get_mut(&id)?;
-        let pending = target.pending.take()?;
+        let pending = take_pending(&mut target.pending, &mut target.last_commits, prefetch)?;
 
         let bytes = renderer
             .map_texture(&pending.mapping)
@@ -471,7 +504,12 @@ impl SurfaceCapture {
             for element in elements.iter().rev() {
                 let src = element.src();
                 let dst = element.geometry(Scale::from(1.0));
-                if let Err(err) = RenderElement::draw(element, &mut frame, src, dst, &[whole], &[])
+                // Damage is relative to the element, not the capture buffer.
+                // CSD surfaces start at a negative offset after removing their
+                // shadow. Using `whole` here would move the damaged area with
+                // that offset and leave the right/bottom edges undrawn.
+                let damage = Rectangle::from_size(dst.size);
+                if let Err(err) = RenderElement::draw(element, &mut frame, src, dst, &[damage], &[])
                 {
                     tracing::warn!("capture draw failed for {id}: {err}");
                 }
@@ -547,7 +585,7 @@ impl SurfaceCapture {
         // alongside the coded size, or scaling input by the crop on the way
         // back in. `unpainted_right` and its tests are kept for whichever of
         // those comes next.
-        target.pending = Some(Pending { mapping, size });
+        target.pending = Some(Pending { mapping, size, prefetched: false });
         None
     }
 }
@@ -932,5 +970,50 @@ mod crop_tests {
         let blank = vec![0u8; (100 * 40 * 4) as usize];
         let dead = unpainted_right(&blank, 100, 40);
         assert!(dead < 100, "cropped the whole window");
+    }
+}
+
+
+#[cfg(test)]
+mod readback_pacing_tests {
+    use super::*;
+
+    #[test]
+    fn entering_jpeg_pacing_replaces_a_prefetched_snapshot_even_if_the_window_is_idle() {
+        let commit = CommitCounter::default();
+        let mut commits = vec![commit];
+        let mut pending = Some(Pending {
+            mapping: "image from before the pacing wait",
+            size: (802, 602).into(),
+            prefetched: true,
+        });
+        assert!(take_pending(&mut pending, &mut commits, false).is_none());
+        assert!(pending.is_none());
+        assert!(commits.is_empty(), "discarded pixels must invalidate their consumed damage");
+
+        // The replacement has the same commit counter if the client stopped
+        // painting. It still needs one fresh readback, then must be harvested
+        // normally rather than being discarded on every subsequent call.
+        commits.push(commit);
+        pending = Some(Pending {
+            mapping: "fresh snapshot after admission",
+            size: (802, 602).into(),
+            prefetched: false,
+        });
+        let ready = take_pending(&mut pending, &mut commits, false).unwrap();
+        assert_eq!(ready.mapping, "fresh snapshot after admission");
+        assert_eq!(commits.len(), 1, "harvesting keeps damage consumed for idle suppression");
+    }
+
+    #[test]
+    fn video_keeps_its_pipelined_readback_and_damage() {
+        let mut commits = vec![CommitCounter::default()];
+        let mut pending = Some(Pending {
+            mapping: "pipelined video frame",
+            size: (802, 602).into(),
+            prefetched: true,
+        });
+        assert!(take_pending(&mut pending, &mut commits, true).is_some());
+        assert_eq!(commits.len(), 1);
     }
 }

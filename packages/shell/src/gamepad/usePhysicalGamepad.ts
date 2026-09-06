@@ -9,14 +9,14 @@
  * lifecycle to manage: sending a button is enough.
  *
  * One controller (player one) for now: the first pad reporting the W3C standard
- * mapping. When one is connected the on-screen pad auto-hides, since you would
- * not use both, and comes back when the controller goes.
+ * mapping. Connecting it leaves the selected input surface alone: closing the
+ * dock would disable its tap shield and reset the engine's held controller input.
  */
 
 import { useEffect, useRef } from "react"
 
-import { setDock, useDock } from "@/lib/dock"
 import { useSessionActions, useSessionState } from "@/session"
+import { controllerTrace } from "@/gamepad/diagnostics"
 import {
   IDLE,
   NEUTRAL,
@@ -28,20 +28,16 @@ import {
 export function usePhysicalGamepad(): void {
   const actions = useSessionActions()
   const { session, status } = useSessionState()
-  const dock = useDock()
 
   // The handlers and the polling loop read these through refs, so they are bound
   // once and never need the effect to re-run when a value changes.
   const send = useRef(actions.send)
   send.current = actions.send
-  const dockNow = useRef(dock)
-  dockNow.current = dock
   const live = useRef(status === "connected")
   live.current = status === "connected"
 
-  /** Which pad we drive and its last sent state; whether we hid the pad. */
+  /** Which pad we drive and its last sent state. */
   const pollState = useRef<PollState>(IDLE)
-  const hid = useRef(false)
   const connected = useRef(new Set<number>())
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -69,8 +65,14 @@ export function usePhysicalGamepad(): void {
         return
       }
       timer.current = setTimeout(step, 8)
-      if (!live.current) return
-      const { messages, state } = pollStep(navigator.getGamepads?.() ?? [], pollState.current)
+      if (!live.current && !controllerTrace.recording) return
+      const pads = navigator.getGamepads?.() ?? []
+      if (!live.current) {
+        if (controllerTrace.recording) controllerTrace.sample(performance.now(), pads, false, [])
+        return
+      }
+      const { messages, state } = pollStep(pads, pollState.current)
+      if (controllerTrace.recording) controllerTrace.sample(performance.now(), pads, true, messages)
       for (const message of messages) send.current(message)
       pollState.current = state
     }
@@ -79,16 +81,8 @@ export function usePhysicalGamepad(): void {
       if (timer.current === null) step()
     }
 
-    const autoHide = () => {
-      if (dockNow.current === "gamepad") {
-        hid.current = true
-        setDock("none")
-      }
-    }
-
     const onConnect = (event: GamepadEvent) => {
       connected.current.add(event.gamepad.index)
-      autoHide()
       ensureLoop()
     }
 
@@ -97,12 +91,6 @@ export function usePhysicalGamepad(): void {
       if (pollState.current.activeIndex === event.gamepad.index) release()
       if (connected.current.size > 0) return
       release()
-      // Put the on-screen pad back, but only if nothing else took the surface
-      // meanwhile, so a keyboard the user opened is left alone.
-      if (hid.current) {
-        hid.current = false
-        if (dockNow.current === "none") setDock("gamepad")
-      }
     }
 
     globalThis.addEventListener("gamepadconnected", onConnect)
@@ -114,7 +102,6 @@ export function usePhysicalGamepad(): void {
       if (pad) connected.current.add(pad.index)
     }
     if (connected.current.size > 0) {
-      autoHide()
       ensureLoop()
     }
 

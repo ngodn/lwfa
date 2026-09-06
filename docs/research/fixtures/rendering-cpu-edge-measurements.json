@@ -1,0 +1,311 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-06",
+  "provenance": "Parsed numerical output from the final scripts/e2e-rendering.mjs runs against the rebuilt dev engine with gpu_direct=false. No image payloads retained.",
+  "results": [
+    {
+      "codec": "jpeg",
+      "platform": "wayland",
+      "sample": {
+        "id": 4,
+        "w": 802,
+        "h": 602,
+        "right": 0,
+        "bottom": 0,
+        "format": 0
+      },
+      "client": {
+        "w": 802,
+        "h": 523,
+        "outerW": 834,
+        "outerH": 644,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "jpeg",
+      "platform": "wayland",
+      "sample": {
+        "id": 4,
+        "w": 1192,
+        "h": 860,
+        "right": 0,
+        "bottom": 0,
+        "format": 0
+      },
+      "client": {
+        "w": 1192,
+        "h": 781,
+        "outerW": 1224,
+        "outerH": 902,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "jpeg",
+      "platform": "wayland",
+      "sample": {
+        "id": 4,
+        "w": 640,
+        "h": 480,
+        "right": 0,
+        "bottom": 0,
+        "format": 0
+      },
+      "client": {
+        "w": 640,
+        "h": 401,
+        "outerW": 672,
+        "outerH": 522,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "jpeg",
+      "platform": "wayland",
+      "sample": {
+        "id": 4,
+        "w": 1324,
+        "h": 884,
+        "right": 0,
+        "bottom": 0,
+        "format": 0
+      },
+      "client": {
+        "w": 1324,
+        "h": 805,
+        "outerW": 1356,
+        "outerH": 926,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "jpeg",
+      "platform": "x11",
+      "sample": {
+        "id": 5,
+        "w": 802,
+        "h": 602,
+        "right": 0,
+        "bottom": 0,
+        "format": 0
+      },
+      "client": {
+        "w": 802,
+        "h": 546,
+        "outerW": 802,
+        "outerH": 602,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "jpeg",
+      "platform": "x11",
+      "sample": {
+        "id": 5,
+        "w": 1192,
+        "h": 860,
+        "right": 0,
+        "bottom": 0,
+        "format": 0
+      },
+      "client": {
+        "w": 1192,
+        "h": 804,
+        "outerW": 1192,
+        "outerH": 860,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "jpeg",
+      "platform": "x11",
+      "sample": {
+        "id": 5,
+        "w": 640,
+        "h": 480,
+        "right": 0,
+        "bottom": 0,
+        "format": 0
+      },
+      "client": {
+        "w": 640,
+        "h": 424,
+        "outerW": 640,
+        "outerH": 480,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "jpeg",
+      "platform": "x11",
+      "sample": {
+        "id": 5,
+        "w": 1324,
+        "h": 884,
+        "right": 0,
+        "bottom": 0,
+        "format": 0
+      },
+      "client": {
+        "w": 1324,
+        "h": 828,
+        "outerW": 1324,
+        "outerH": 884,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "h264",
+      "platform": "wayland",
+      "sample": {
+        "id": 6,
+        "w": 802,
+        "h": 602,
+        "right": 0,
+        "bottom": 0,
+        "format": 1
+      },
+      "client": {
+        "w": 802,
+        "h": 523,
+        "outerW": 834,
+        "outerH": 644,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "h264",
+      "platform": "wayland",
+      "sample": {
+        "id": 6,
+        "w": 1192,
+        "h": 860,
+        "right": 0,
+        "bottom": 0,
+        "format": 1
+      },
+      "client": {
+        "w": 1192,
+        "h": 781,
+        "outerW": 1224,
+        "outerH": 902,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "h264",
+      "platform": "wayland",
+      "sample": {
+        "id": 6,
+        "w": 640,
+        "h": 480,
+        "right": 0,
+        "bottom": 0,
+        "format": 1
+      },
+      "client": {
+        "w": 640,
+        "h": 401,
+        "outerW": 672,
+        "outerH": 522,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "h264",
+      "platform": "wayland",
+      "sample": {
+        "id": 6,
+        "w": 1324,
+        "h": 884,
+        "right": 0,
+        "bottom": 0,
+        "format": 1
+      },
+      "client": {
+        "w": 1324,
+        "h": 805,
+        "outerW": 1356,
+        "outerH": 926,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "h264",
+      "platform": "x11",
+      "sample": {
+        "id": 7,
+        "w": 802,
+        "h": 602,
+        "right": 0,
+        "bottom": 0,
+        "format": 1
+      },
+      "client": {
+        "w": 802,
+        "h": 546,
+        "outerW": 802,
+        "outerH": 602,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "h264",
+      "platform": "x11",
+      "sample": {
+        "id": 7,
+        "w": 1192,
+        "h": 860,
+        "right": 0,
+        "bottom": 0,
+        "format": 1
+      },
+      "client": {
+        "w": 1192,
+        "h": 804,
+        "outerW": 1192,
+        "outerH": 860,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "h264",
+      "platform": "x11",
+      "sample": {
+        "id": 7,
+        "w": 640,
+        "h": 480,
+        "right": 0,
+        "bottom": 0,
+        "format": 1
+      },
+      "client": {
+        "w": 640,
+        "h": 424,
+        "outerW": 640,
+        "outerH": 480,
+        "dpr": 1
+      }
+    },
+    {
+      "codec": "h264",
+      "platform": "x11",
+      "sample": {
+        "id": 7,
+        "w": 1324,
+        "h": 884,
+        "right": 0,
+        "bottom": 0,
+        "format": 1
+      },
+      "client": {
+        "w": 1324,
+        "h": 828,
+        "outerW": 1324,
+        "outerH": 884,
+        "dpr": 1
+      }
+    }
+  ]
+}

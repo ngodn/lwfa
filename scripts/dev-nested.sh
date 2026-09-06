@@ -3,7 +3,7 @@
 #
 # Why this exists rather than just `cargo run`: the nested compositor opens a
 # real window in the host session, and it must never land on the workspace
-# you are actually using. It goes to LWFA_DEV_WORKSPACE (default 2) with the
+# you are actually using. It goes to LWFA_DEV_WORKSPACE (from config) with the
 # `silent` flag, so focus never moves.
 #
 # Hyprland has a known bug where `exec [workspace N silent]` sometimes places
@@ -34,13 +34,13 @@ if ! command -v hyprctl >/dev/null; then
   exit 1
 fi
 
+cd "$ROOT" || exit 1
 cargo build -p lwfa-engine || exit 1
 
-# A stable token means a tablet's bookmarked URL keeps working across restarts.
-# Without this the engine generates a fresh one each run.
-if [ -z "${LWFA_SHELL_TOKEN:-}" ]; then
-  echo "note: LWFA_SHELL_TOKEN is unset, so the engine will generate a new token"
-  echo "      and any bookmarked shell URL will stop working. Export one to pin it."
+# AUTH_PASS is what the engine reads, including for the URL's token parameter.
+if [ -z "${AUTH_PASS:-}" ]; then
+  echo "note: AUTH_PASS is unset. Set an explicit throwaway dev password"
+  echo "      if you want a predictable login. LWFA_SHELL_TOKEN is not used."
 fi
 
 # Vite owns 6733 during development, which is the port the engine serves the

@@ -1,0 +1,502 @@
+[
+  {
+    "sample": "clear",
+    "elapsed": 5,
+    "frames": 130,
+    "mbit": 28.14176,
+    "videoMbit": 28.135416,
+    "keyframeMbit": 0.839416,
+    "keyframes": 2,
+    "maxFrameBytes": 75611,
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "clear",
+    "elapsed": 10,
+    "frames": 148,
+    "mbit": 31.594448,
+    "videoMbit": 31.589408,
+    "keyframeMbit": 0.236672,
+    "keyframes": 1,
+    "maxFrameBytes": 29584,
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 6,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "clear",
+    "elapsed": 15,
+    "frames": 148,
+    "mbit": 31.626832,
+    "videoMbit": 31.621808,
+    "keyframeMbit": 0.236176,
+    "keyframes": 1,
+    "maxFrameBytes": 29522,
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 26846,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 26846
+  },
+  {
+    "name": "clear",
+    "frames": 426,
+    "deliveredMbit": 91.36304,
+    "changes": []
+  },
+  {
+    "sample": "limited",
+    "elapsed": 5,
+    "frames": 23,
+    "mbit": 4.95,
+    "videoMbit": 4.92864,
+    "keyframeMbit": 0,
+    "keyframes": 0,
+    "maxFrameBytes": 27212,
+    "budget": {
+      "kbit": 2000,
+      "cause": "socket backpressure, queueing 9ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 88689,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 513806
+      }
+    ],
+    "jsQueued": 77912
+  },
+  {
+    "sample": "limited",
+    "elapsed": 10,
+    "frames": 14,
+    "mbit": 4.96,
+    "videoMbit": 4.819896,
+    "keyframeMbit": 1.413736,
+    "keyframes": 2,
+    "maxFrameBytes": 101236,
+    "budget": {
+      "kbit": 500,
+      "cause": "socket backpressure, queueing 4768ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 73587,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 432221
+      }
+    ],
+    "jsQueued": 113272
+  },
+  {
+    "sample": "limited",
+    "elapsed": 15,
+    "frames": 23,
+    "mbit": 4.97,
+    "videoMbit": 5.11204,
+    "keyframeMbit": 0.369704,
+    "keyframes": 1,
+    "maxFrameBytes": 46213,
+    "budget": {
+      "kbit": 500,
+      "cause": "socket backpressure, queueing 4768ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 81662,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 377944
+      }
+    ],
+    "jsQueued": 81846
+  },
+  {
+    "sample": "limited",
+    "elapsed": 20,
+    "frames": 22,
+    "mbit": 4.98,
+    "videoMbit": 4.782152,
+    "keyframeMbit": 0,
+    "keyframes": 0,
+    "maxFrameBytes": 27948,
+    "budget": {
+      "kbit": 500,
+      "cause": "socket backpressure, queueing 4768ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 84435,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 482048
+      }
+    ],
+    "jsQueued": 114706
+  },
+  {
+    "name": "limited",
+    "frames": 82,
+    "deliveredMbit": 19.86,
+    "changes": [
+      {
+        "kbit": 4000,
+        "cause": "link clear, queueing 9ms"
+      },
+      {
+        "kbit": 2000,
+        "cause": "socket backpressure, queueing 9ms"
+      },
+      {
+        "kbit": 500,
+        "cause": "socket backpressure, queueing 4768ms"
+      }
+    ]
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 5,
+    "frames": 87,
+    "mbit": 18.716432,
+    "videoMbit": 18.927848,
+    "keyframeMbit": 0.236056,
+    "keyframes": 1,
+    "maxFrameBytes": 29507,
+    "budget": {
+      "kbit": 500,
+      "cause": "socket backpressure, queueing 4768ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 10,
+    "frames": 62,
+    "mbit": 13.514592,
+    "videoMbit": 13.512368,
+    "keyframeMbit": 0.464808,
+    "keyframes": 1,
+    "maxFrameBytes": 58101,
+    "budget": {
+      "kbit": 1000,
+      "cause": "link clear, queueing 4ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 26995
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 15,
+    "frames": 90,
+    "mbit": 19.381472,
+    "videoMbit": 19.378304,
+    "keyframeMbit": 0,
+    "keyframes": 0,
+    "maxFrameBytes": 27902,
+    "budget": {
+      "kbit": 1000,
+      "cause": "link clear, queueing 4ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 20,
+    "frames": 92,
+    "mbit": 20.37688,
+    "videoMbit": 20.373616,
+    "keyframeMbit": 0.833088,
+    "keyframes": 2,
+    "maxFrameBytes": 74989,
+    "budget": {
+      "kbit": 2000,
+      "cause": "link clear, queueing 7ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 26884,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 26884
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 25,
+    "frames": 149,
+    "mbit": 31.86424,
+    "videoMbit": 31.859168,
+    "keyframeMbit": 0.235552,
+    "keyframes": 1,
+    "maxFrameBytes": 29444,
+    "budget": {
+      "kbit": 2000,
+      "cause": "link clear, queueing 7ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 27048,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 30,
+    "frames": 157,
+    "mbit": 34.996552,
+    "videoMbit": 34.991192,
+    "keyframeMbit": 1.053544,
+    "keyframes": 2,
+    "maxFrameBytes": 101973,
+    "budget": {
+      "kbit": 4000,
+      "cause": "link clear, queueing 4ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 26233
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 35,
+    "frames": 288,
+    "mbit": 59.367272,
+    "videoMbit": 59.357736,
+    "keyframeMbit": 0.481872,
+    "keyframes": 2,
+    "maxFrameBytes": 30279,
+    "budget": {
+      "kbit": 4000,
+      "cause": "link clear, queueing 4ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 25972,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 40,
+    "frames": 276,
+    "mbit": 62.499712,
+    "videoMbit": 62.490352,
+    "keyframeMbit": 1.568544,
+    "keyframes": 3,
+    "maxFrameBytes": 135996,
+    "budget": {
+      "kbit": 8000,
+      "cause": "link clear, queueing 6ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 27604
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 45,
+    "frames": 285,
+    "mbit": 59.060504,
+    "videoMbit": 59.051064,
+    "keyframeMbit": 0.485792,
+    "keyframes": 2,
+    "maxFrameBytes": 30422,
+    "budget": {
+      "kbit": 8000,
+      "cause": "link clear, queueing 6ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:A7E4",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:A7E4",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "name": "recovered",
+    "frames": 1486,
+    "deliveredMbit": 319.777656,
+    "changes": [
+      {
+        "kbit": 1000,
+        "cause": "link clear, queueing 4ms"
+      },
+      {
+        "kbit": 2000,
+        "cause": "link clear, queueing 7ms"
+      },
+      {
+        "kbit": 4000,
+        "cause": "link clear, queueing 4ms"
+      },
+      {
+        "kbit": 8000,
+        "cause": "link clear, queueing 6ms"
+      }
+    ]
+  }
+]

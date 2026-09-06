@@ -535,10 +535,14 @@ impl Controller {
         // grows with every failed probe and shrinks with every good one, so a
         // real capacity limit is tried rarely and a link that has improved is
         // rediscovered.
-        if !congested && self.step == self.soft_ceiling && self.soft_ceiling + 1 < STEPS.len() {
+        // An episode can lower the ceiling during a cut's hold or startup,
+        // then clear before a cut is allowed. The current rung then sits
+        // above the ceiling. It still earns a probe after the same clear
+        // stretch, or neither climb path can ever recover this connection.
+        if !congested && self.step >= self.soft_ceiling && self.step + 1 < STEPS.len() {
             let since = *self.at_ceiling_since.get_or_insert(now);
             if now.duration_since(since) >= self.ceiling_wait {
-                self.soft_ceiling += 1;
+                self.soft_ceiling = self.step + 1;
                 self.step += 1;
                 self.changed_at = now;
                 self.hold = SETTLE;
@@ -642,6 +646,33 @@ mod tests {
         let controller = Controller::new(now);
         assert!(controller.bitrate() < STEPS[STEPS.len() - 1]);
         assert!(controller.bitrate() > STEPS[0]);
+    }
+
+    #[test]
+    fn congestion_that_clears_during_startup_does_not_stop_recovery() {
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        // Startup's settle defers a cut. The connection then recovers before
+        // any bitrate change, and remains clear for ten minutes.
+        assert!(controller.observe(Signal::congested(), at(base, 1)).is_none());
+        for second in 2..=600 {
+            controller.observe(Signal::clear(), at(base, second));
+        }
+        assert_eq!(controller.bitrate(), STEPS[STEPS.len() - 1]);
+    }
+
+    #[test]
+    fn a_second_episode_during_a_cuts_hold_does_not_stop_recovery() {
+        let base = Instant::now();
+        let mut controller = Controller::new(base);
+        controller.observe(Signal::congested(), at(base, 3));
+        controller.observe(Signal::clear(), base + Duration::from_millis(3250));
+        // A second congestion edge occurs while the previous cut still holds.
+        controller.observe(Signal::congested(), base + Duration::from_millis(3500));
+        for second in 4..=600 {
+            controller.observe(Signal::clear(), at(base, second));
+        }
+        assert_eq!(controller.bitrate(), STEPS[STEPS.len() - 1]);
     }
 
     #[test]

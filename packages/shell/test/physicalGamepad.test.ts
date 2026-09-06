@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { IDLE, diffGamepad, pollStep, snapshotOf, type PadSnapshot } from "../src/gamepad/physical"
+import { IDLE, diffGamepad, hasPhysicalGamepad, pollStep, snapshotOf, type PadSnapshot } from "../src/gamepad/physical"
 
 /** Build a snapshot: `buttons` sets specific indices, the rest released. */
 function snap(
@@ -117,6 +117,12 @@ function gp(
 }
 
 describe("pollStep", () => {
+  it("keeps the shared device only for a usable physical controller", () => {
+    expect(hasPhysicalGamepad([null, gp(0)])).toBe(true)
+    expect(hasPhysicalGamepad([])).toBe(false)
+    expect(hasPhysicalGamepad([gp(0, [], [], "")])).toBe(false)
+    expect(hasPhysicalGamepad([{ ...gp(0), connected: false }])).toBe(false)
+  })
   it("accumulates slow stick and trigger movement across small polling steps", () => {
     let state = IDLE
     const messages = []

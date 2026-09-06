@@ -26,6 +26,7 @@ let snapshot: {
   apps,
   icons,
   loading,
+  windowless,
 }
 const listeners = new Set<() => void>()
 

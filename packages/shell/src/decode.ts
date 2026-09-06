@@ -95,6 +95,12 @@ export class FrameDecoder {
   /** Size each decoder was configured for, so a resize can reconfigure it. */
   #configured = new Map<WindowId, string>()
   #timestamps = new Map<WindowId, number>()
+  /** Last submitted timestamp before reconfiguration, whose output is stale. */
+  #discardThrough = new Map<WindowId, number>()
+  // Identity invalidates conversions already in flight when a window closes
+  // or changes codec. Sequence numbers stop older conversions replacing newer
+  // pixels when createImageBitmap promises finish out of order.
+  #delivery = new Map<WindowId, { issued: number; published: number }>()
 
   constructor(sink: FrameSink) {
     this.#sink = sink
@@ -123,9 +129,12 @@ export class FrameDecoder {
   }
 
   async #handleJpeg(frame: DecodedFrame): Promise<void> {
+    const id = frame.header.window
+    if (this.#decoders.has(id)) this.#reset(id)
+    const deliver = this.#deliveryFor(id)
     const blob = new Blob([frame.payload as BlobPart], { type: "image/jpeg" })
     try {
-      this.#sink(frame.header.window, await createImageBitmap(blob))
+      deliver(await createImageBitmap(blob))
     } catch (err) {
       console.warn(`could not decode a JPEG frame for w${frame.header.window}:`, err)
     }
@@ -174,6 +183,8 @@ export class FrameDecoder {
         try {
           decoder.configure({ codec, optimizeForLatency: true })
           this.#configured.set(id, wanted)
+          this.#delivery.delete(id)
+          this.#discardThrough.set(id, this.#timestamps.get(id) ?? 0)
           // Reconfiguring throws the reference frames away, so this decoder is
           // back to needing a keyframe. It has one: only a keyframe carries
           // the parameter sets, so this branch only runs on one.
@@ -203,10 +214,19 @@ export class FrameDecoder {
       }
       decoder = new VideoDecoder({
         output: (videoFrame) => {
-          // createImageBitmap takes ownership of the pixels; the VideoFrame
-          // must still be closed or the decoder starves on buffers.
+          // A retired decoder must not publish into a replacement stream.
+          if (
+            this.#decoders.get(id) !== decoder ||
+            videoFrame.timestamp <= (this.#discardThrough.get(id) ?? -1)
+          ) {
+            videoFrame.close()
+            return
+          }
+          const deliver = this.#deliveryFor(id)
+          // Conversion copies the pixels asynchronously. Keep the VideoFrame
+          // alive until it completes, then release its decoder buffer.
           createImageBitmap(videoFrame)
-            .then((bitmap) => this.#sink(id, bitmap))
+            .then(deliver)
             .catch((err) => console.warn(`could not convert a frame for w${id}:`, err))
             .finally(() => videoFrame.close())
         },
@@ -253,6 +273,24 @@ export class FrameDecoder {
     }
   }
 
+  #deliveryFor(id: WindowId): (bitmap: ImageBitmap) => void {
+    let lifetime = this.#delivery.get(id)
+    if (!lifetime) {
+      lifetime = { issued: 0, published: 0 }
+      this.#delivery.set(id, lifetime)
+    }
+    const current = lifetime
+    const sequence = ++current.issued
+    return (bitmap) => {
+      if (this.#delivery.get(id) !== current || sequence <= current.published) {
+        bitmap.close()
+        return
+      }
+      current.published = sequence
+      this.#sink(id, bitmap)
+    }
+  }
+
   #warned = new Set<WindowId>()
   #warnOnce(id: WindowId, message: string): void {
     if (this.#warned.has(id)) return
@@ -261,6 +299,8 @@ export class FrameDecoder {
   }
 
   #reset(id: WindowId): void {
+    this.#delivery.delete(id)
+    this.#discardThrough.delete(id)
     const decoder = this.#decoders.get(id)
     if (decoder && decoder.state !== "closed") {
       try {
@@ -284,5 +324,8 @@ export class FrameDecoder {
   /** Release everything. Call on disconnect. */
   close(): void {
     for (const id of [...this.#decoders.keys()]) this.#reset(id)
+    this.#delivery.clear()
+    this.#timestamps.clear()
+    this.#warned.clear()
   }
 }

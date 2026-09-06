@@ -64,7 +64,9 @@ const WORKLET_URL = "/audio-worklet.js"
 let context: AudioContext | null = null
 let node: AudioWorkletNode | null = null
 let gain: GainNode | null = null
-let loading: Promise<void> | null = null
+let loading: Promise<boolean> | null = null
+let generation = 0
+const scheduled = new Set<AudioBufferSourceNode>()
 let underruns = 0
 
 /**
@@ -173,79 +175,81 @@ const MAX_LEAD = 0.25
  * them should have to know whether another already did it.
  */
 export async function start(): Promise<boolean> {
-  if (node) {
-    await resume()
+  if (loading) return loading
+  if (context) {
+    void resume()
     return true
   }
-  if (loading) {
-    await loading
-    return node !== null
-  }
 
-  loading = (async () => {
+  const epoch = generation
+  const building = (async (): Promise<boolean> => {
+    let ctx: AudioContext | null = null
     try {
-      // The rate the engine captures at. Asking for it explicitly avoids a
-      // resample: a context defaulted to the output device's rate would have
-      // the browser convert 48kHz to 44.1kHz for no reason, and resampling is
-      // both work and a small loss.
-      // Before the context exists, so the session type applies to it.
       claimMediaChannel()
-      const ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" })
+      ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" })
       const volume = ctx.createGain()
       volume.connect(ctx.destination)
+      // Publish ownership before addModule yields so stop() can close this
+      // context while its worklet is still loading.
+      context = ctx
+      gain = volume
+      playhead = 0
+      // Autoplay may leave this promise pending until a gesture. Graph setup
+      // must still finish so the preference effect can enable capture.
+      void resume()
 
-      // Secure context only. Absent over plain HTTP, which is the usual way
-      // this page is reached, so the fallback is the common path rather than
-      // the exotic one.
       if (ctx.audioWorklet) {
         try {
           await ctx.audioWorklet.addModule(WORKLET_URL)
+          if (epoch !== generation) return false
           const player = new AudioWorkletNode(ctx, "lwfa-pcm", {
             numberOfInputs: 0,
             numberOfOutputs: 1,
             outputChannelCount: [2],
           })
           player.port.onmessage = (event) => {
+            if (epoch !== generation) return
             const message = event.data as { underruns?: number; buffered?: number }
             if (typeof message.underruns === "number") underruns = message.underruns
             if (typeof message.buffered === "number") buffered = message.buffered
           }
           player.connect(volume)
+          // Packets can arrive while addModule loads and use scheduled
+          // playback. Retire that queue before the worklet accepts fresh
+          // packets, or both players would sound at once. The epoch check
+          // above keeps an abandoned load from flushing a newer graph.
+          flush()
           node = player
         } catch (error) {
-          // Available but unusable: a stale service worker serving the wrong
-          // MIME type, say. Scheduling still works, so degrade rather than go
-          // silent.
+          if (epoch !== generation) return false
           console.warn("audio worklet unavailable, scheduling buffers instead:", error)
-          node = null
         }
       }
-
-      context = ctx
-      gain = volume
-      playhead = 0
+      return epoch === generation
     } catch (error) {
-      // No audio is a degraded session, not a broken one. Everything else
-      // keeps working and the UI reports it.
+      if (epoch !== generation) return false
       console.warn("audio unavailable:", error)
       context = null
       node = null
       gain = null
+      void ctx?.close().catch(() => {})
+      return false
     }
   })()
-
-  await loading
-  loading = null
-  if (context) await resume()
-  // The context is what matters, not the worklet: without a worklet the
-  // fallback plays perfectly well, and returning false here would mean the
-  // engine was never asked to send anything.
-  return context !== null
+  loading = building
+  try {
+    return await building
+  } finally {
+    if (loading === building) loading = null
+  }
 }
 
 /** Tear the graph down and release the device. */
 export async function stop(): Promise<void> {
-  node?.port.postMessage("reset")
+  generation++
+  loading = null
+  const closing = context
+  flush()
   node?.disconnect()
   gain?.disconnect()
   unmuter?.pause()
@@ -255,7 +259,6 @@ export async function stop(): Promise<void> {
     URL.revokeObjectURL(unmuterUrl)
     unmuterUrl = null
   }
-  await context?.close().catch(() => {})
   context = null
   node = null
   gain = null
@@ -267,6 +270,7 @@ export async function stop(): Promise<void> {
   windowStart = 0
   windowBytes = 0
   wireKbits = 0
+  await closing?.close().catch(() => {})
 }
 
 /**
@@ -386,6 +390,11 @@ function begin(buffer: AudioBuffer, start: number): void {
   const source = context!.createBufferSource()
   source.buffer = buffer
   source.connect(gain!)
+  scheduled.add(source)
+  source.onended = () => {
+    scheduled.delete(source)
+    source.disconnect()
+  }
   source.start(start)
 }
 
@@ -406,10 +415,14 @@ function begin(buffer: AudioBuffer, start: number): void {
 export function flush(): void {
   node?.port.postMessage("reset")
   buffered = 0
-  // Scheduled sources already started cannot be unscheduled without tracking
-  // every one of them, which for 20ms chunks means fifty objects a second of
-  // bookkeeping to save 60ms of audio. Re-anchoring the playhead is enough:
-  // what is already queued finishes, and nothing new is added behind it.
+  // Re-anchoring without cancelling these would play stale and fresh sound
+  // simultaneously after a reconnect. At most 250ms of sources are retained.
+  for (const source of scheduled) {
+    source.onended = null
+    source.stop()
+    source.disconnect()
+  }
+  scheduled.clear()
   playhead = 0
 }
 
@@ -501,7 +514,9 @@ export function diagnostics(): {
     sampleRate: rate,
     wire: wireFormat,
     wireKbits,
-    bufferedMs: node && rate > 0 ? Math.round((buffered / rate) * 1000) : -1,
+    bufferedMs: node && rate > 0
+      ? Math.round((buffered / rate) * 1000)
+      : context ? Math.round(Math.max(0, playhead - context.currentTime) * 1000) : -1,
   }
 }
 

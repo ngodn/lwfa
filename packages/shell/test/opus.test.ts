@@ -7,7 +7,7 @@
  * into one ear. Real libopus output is covered by listening to it.
  */
 
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { OpusStream, type WasmOpus } from "../src/lib/opus"
 
 /** A controllable stand-in for the WASM decoder. */
@@ -53,6 +53,7 @@ function fakeWasm(planes: () => Float32Array[]) {
 const packet = (...bytes: number[]) => new Uint8Array(bytes)
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   Object.defineProperty(globalThis, "AudioDecoder", { value: undefined, configurable: true })
 })
 
@@ -132,6 +133,34 @@ describe("the WASM fallback", () => {
 })
 
 describe("choosing a decoder", () => {
+  it("recovers through WASM after an asynchronous native decoder failure", async () => {
+    let fail = () => {}
+    vi.stubGlobal("AudioDecoder", class {
+      constructor(init: { error: () => void }) { fail = init.error }
+      configure() {}
+      decode() {}
+      close() {}
+    })
+    vi.stubGlobal("EncodedAudioChunk", class {})
+    const wasm = fakeWasm(() => [new Float32Array(4)])
+    const stream = new OpusStream(() => {}, () => wasm)
+    stream.push(packet(1), 960)
+    fail()
+    stream.push(packet(2), 960)
+    await wasm.finish()
+    expect(stream.path()).toBe("wasm")
+    expect(wasm.decoded.map((p) => p[0])).toEqual([2])
+  })
+
+  it("keeps recent audio when WASM compilation outlasts the queue", async () => {
+    const wasm = fakeWasm(() => [new Float32Array(4)])
+    const stream = new OpusStream(() => {}, () => wasm)
+    for (let i = 0; i < 100; i++) stream.push(packet(i), 960)
+    await wasm.finish()
+    expect(wasm.decoded.at(-1)![0]).toBe(99)
+    expect(wasm.decoded).toHaveLength(50)
+  })
+
   it("prefers the native AudioDecoder when the browser has one", () => {
     const configured: unknown[] = []
     class FakeNative {

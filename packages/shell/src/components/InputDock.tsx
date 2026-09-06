@@ -35,6 +35,7 @@ import { setDock, useDock } from "@/lib/dock"
 import { patchPrefs, usePrefSection } from "@/lib/prefs"
 import { setGamepad, useGamepad, useSetPads } from "@/gamepad/store"
 import { shieldActive } from "@/gamepad/shield"
+import { hasPhysicalGamepad } from "@/gamepad/physical"
 import { useSessionActions, useSessionState } from "@/session"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -142,7 +143,13 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
     // toggled off and on by hand. The disable on cleanup is a no-op to an
     // engine that has already parked the pad, so re-running is safe.
     actions.send({ type: "setGamepad", enabled: true })
-    return () => actions.send({ type: "setGamepad", enabled: false })
+    return () => {
+      // Closing the touch surface must not reset a physical controller's
+      // held buttons. Both input sources drive the same engine device.
+      if (!hasPhysicalGamepad(navigator.getGamepads?.() ?? [])) {
+        actions.send({ type: "setGamepad", enabled: false })
+      }
+    }
   }, [padOpen, controllerMode, actions, session])
 
   // Leaving the mouse surface ends its edit mode.

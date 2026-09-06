@@ -43,8 +43,8 @@ export const ShellChrome = memo(function ShellChrome({
   const [fired, setFired] = useState<NavItemId | null>(null)
   const actions = useSessionActions()
 
-  // Read a physical controller and feed it to the engine, and auto-hide the
-  // on-screen pad while one is connected. See `usePhysicalGamepad`.
+  // Feed physical controller input to the engine without changing the chosen
+  // on-screen surface or its tap shield. See `usePhysicalGamepad`.
   usePhysicalGamepad()
 
   const select = useCallback(

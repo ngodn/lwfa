@@ -1,10 +1,12 @@
 # lwfa controller input: architecture and the physical-gamepad bug
 
-## Fix attempt, 2026-09-06
+## Initial 1.4.1 fix attempt, 2026-09-06
 
 The implementation now polls immediately on connection and then every 8 ms
 using `setTimeout`, independent of animation frames. The rAF listings below
-describe the original implementation. The dock/shield behaviour is unchanged.
+describe the original implementation. This initial attempt kept dock/shield
+behaviour unchanged. The reliability follow-up at the end records subsequent
+dock fixes, current evidence, and the remaining iPad validation.
 
 A regression test runs the actual hook effect with animation callbacks stalled
 and gamepad state changing every 24 ms. Before the change, three presses and
@@ -480,3 +482,70 @@ sampling, not here.
 - `crates/lwfa-engine/src/gamepad.rs` - `VirtualPad` (uinput device)
 - `crates/lwfa-proto/src/lib.rs` - wire types, `GamepadButton`/`GamepadAxis` enums
 ```
+
+## Reliability follow-up, 2026-09-06
+
+The user still reports the controller failure on 1.4.1: iPad Pro M1 11-inch,
+iPadOS 26, both Wi-Fi and USB-C Ethernet, Baldur's Gate 3. The installed
+GE-Proton11-5 selection is confirmed in Steam configuration. This does not
+establish that polling was the root cause. See
+[the investigation index](research/reliability-index.md) for current evidence.
+
+Connecting a physical controller no longer closes the chosen input dock. The
+old automatic closure disabled its shield and sent `setGamepad(false)`, resetting
+held input. Keep the gamepad dock open with the shield enabled; use **Show the
+gamepad** in its settings to hide the drawn controls while retaining the surface.
+The old automatic-hide listings earlier in this document are historical.
+
+Gamepad settings now include **Controller troubleshooting**. Start a recording,
+close settings, reproduce missed presses, then return and choose **Stop and save
+recording**. It retains the last 4,096 polls, roughly 33 seconds at 125 Hz.
+The JSON contains raw Gamepad API values, timestamps, connection state, and
+messages passed to the shell send action. These are not engine delivery
+acknowledgments. No credentials or URL are captured. Recording is off by default.
+
+A gap in the sampled pressed states points before the send action; intact edges
+there still require comparison with evdev and Wine XInput. A current iPad trace
+and actual BG3 response remain necessary to close this bug.
+
+### Record the matching kernel events
+
+While collecting that browser recording, run this on the engine machine, using
+the controller event node reported by that engine's startup log:
+
+```sh
+node scripts/record-gamepad.mjs /dev/input/eventN 30 > controller-kernel.json
+```
+
+Replace `eventN` with the actual node, not a remembered number. Development and
+production engines have separate controllers with the same name. The recorder
+requires an explicit event node and verifies both sysfs and its opened handle
+identify `lwfa virtual controller`. It only reads, never grabs or injects input,
+and never reads credentials or `.env`. Close browser settings before reproducing
+the missed press; save its **Controller troubleshooting** recording afterwards.
+Use a recognizable sequence such as three slow A presses followed by the failing
+quick presses to align the two recordings without assuming synchronized clocks.
+
+The kernel JSON preserves every captured event's type, code, signed value,
+kernel timestamp, and the recorder's monotonic observation timestamp. A button
+event is type 1; A is code 304, with value 1 for press and 0 for release. Compare
+the kernel timestamps of paired edges to see whether a press became very short
+after transmission. Events read in one batch share an observation timestamp;
+that alone does not mean their original kernel timestamps were identical.
+
+The kernel timestamp uses evdev's default realtime clock. Monotonic observation
+times are a separate host clock and are not directly comparable to the iPad's
+`performance.now()`. The [Linux evdev implementation](https://github.com/torvalds/linux/blob/master/drivers/input/evdev.c)
+selects clocks per reader; this tool performs no clock-changing ioctl.
+
+Recording defaults to 30 seconds or 50,000 events, whichever comes first. An
+optional final argument lowers or raises the event limit, capped at 100,000;
+duration is capped at 120 seconds. Ctrl-C saves early. `reason: eventLimit` means
+the trace was truncated, and nonzero `synDropped` means the kernel reader lost
+events, so that trace cannot establish complete delivery. The current parser
+supports little-endian 64-bit Linux x64/arm64 only.
+
+Validation: five parser/device/limit tests pass, including two edges only five
+microseconds apart in one read. A 0.2-second read of the separate dev controller
+completed with valid empty JSON and `reason: duration`. No production recording
+was made during this smoke test.

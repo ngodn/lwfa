@@ -209,7 +209,7 @@ impl Encoders {
     /// the fly; the binding cannot ask it to.
     ///
     /// So only the windows whose share genuinely moved are rebuilt, and only
-    /// when it moved by more than a quarter. Without that, one window opening
+    /// when it moved by at least a quarter. Without that, one window opening
     /// shifts every other window's share by a few percent and rebuilds all of
     /// them for no visible gain.
     pub fn set_rates(&mut self, rates: std::collections::HashMap<WindowId, u32>, fallback: u32) {
@@ -358,7 +358,9 @@ fn out_of_view_longest(
 /// answer has to be "no" for the small drift that one window opening causes in
 /// every other window's share.
 fn worth_rebuilding(from: u32, to: u32) -> bool {
-    (f64::from(to) - f64::from(from)).abs() / f64::from(from.max(1)) > crate::bitrate::DEADBAND
+    // The ladder's 32 -> 24 Mbit/s cut is exactly a quarter. Excluding the
+    // boundary left that congestion response unapplied in every session.
+    (f64::from(to) - f64::from(from)).abs() / f64::from(from.max(1)) >= crate::bitrate::DEADBAND
 }
 
 /// The NVENC encoder for each codec.
@@ -618,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rebuild_is_worth_it_only_past_the_deadband() {
+    fn a_rebuild_is_worth_it_at_the_deadband() {
         // The rule both callers share. A window opening shifts every other
         // window's share by a few percent, and rebuilding all of them for that
         // would cost a screen full of keyframes for no visible gain.
@@ -627,13 +629,73 @@ mod tests {
         assert!(worth_rebuilding(500_000, 1_000_000));
         assert!(!worth_rebuilding(0, 0), "a rate of zero is not a division");
     }
+
+    #[test]
+    fn every_congestion_cut_on_the_bitrate_ladder_reaches_the_encoder() {
+        for pair in crate::bitrate::STEPS.windows(2) {
+            assert!(
+                worth_rebuilding(pair[1], pair[0]),
+                "the controller cut from {} to {}, but the encoder kept its old rate",
+                pair[1], pair[0],
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires NVENC; run alone with --ignored --test-threads=1"]
+    fn measure_motion_fixture_bitrates() {
+        let (width, height) = (1000, 700);
+        let mut rgba = vec![0_u8; width * height * 4];
+        for noisy in [false, true] {
+            for (codec, budget) in [(Some(lwfa_proto::Codec::H264), 500_000),
+                (Some(lwfa_proto::Codec::H264), 2_000_000), (None, 500_000)] {
+                let mut encoders = Encoders::new(crate::config::Stream::default());
+                assert!(encoders.available, "this hardware diagnostic requires NVENC");
+                encoders.set_codec(codec);
+                encoders.set_rates(HashMap::from([(WindowId(1), budget)]), budget);
+                let mut bits = 0_u64;
+                for tick in 0..150_u32 {
+                    for (pixel, bytes) in rgba.chunks_exact_mut(4).enumerate() {
+                        let x = (pixel % width) as u32;
+                        let y = (pixel / width) as u32;
+                        if noisy {
+                            // The difficult native-browser fixture, whose
+                            // rate excess also reproduces in FFmpeg CLI.
+                            let value = (x / 12 * 12 + tick).wrapping_mul(1_664_525)
+                                ^ (y / 12 * 12 + tick).wrapping_mul(1_013_904_223);
+                            bytes.copy_from_slice(&[value as u8, (value >> 8) as u8, (value >> 16) as u8, 255]);
+                        } else {
+                            // A scrolling page: fixed blue sidebar and toolbar,
+                            // lines of dark glyph-like blocks on a light page.
+                            let scroll = y + tick * 2;
+                            let text = scroll % 28 >= 8 && scroll % 28 < 18
+                                && x % 12 < 8 && (x / 12 + scroll / 28 * 5) % 11 < 8;
+                            let color = if x < 160 || y < 48 { [35, 70, 115, 255] }
+                                else if text { [45, 45, 45, 255] } else { [240, 240, 240, 255] };
+                            bytes.copy_from_slice(&color);
+                        }
+                    }
+                    let mut captured = CapturedFrame::for_tests(WindowId(1), width as u32, height as u32, &rgba);
+                    let encoded = encoders.encode(&mut captured).expect("encoded frame");
+                    assert_eq!(encoded.format, if codec.is_some() { FrameFormat::H264 } else { FrameFormat::Jpeg });
+                    if tick >= 30 { bits += encoded.bytes.len() as u64 * 8; }
+                }
+                // A diagnostic, not a promise that an arbitrary noise image
+                // fits a fixed resolution at every bitrate. These are 120
+                // sampled frames at the encoder's nominal 60fps timebase.
+                eprintln!("fixture={} codec={} budget={budget} nominal_60fps_bps={}",
+                    if noisy { "block-noise" } else { "scrolling-desktop" },
+                    if codec.is_some() { "h264" } else { "jpeg" }, bits / 2);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Running the encoder off the render loop
 // ---------------------------------------------------------------------------
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::thread;
@@ -674,10 +736,310 @@ pub struct EncodeWorker {
     queued: Arc<AtomicUsize>,
     /// Mirrored from the config so `has_capacity` stays a plain atomic read.
     queue_depth: usize,
+    admission: Arc<Mutex<CaptureAdmission>>,
+}
+
+struct CaptureAdmission {
+    windows: HashMap<WindowId, CaptureSlot>,
+    generation: u64,
+    codec: Option<lwfa_proto::Codec>,
+    next_ticket: u64,
+}
+
+impl Default for CaptureAdmission {
+    fn default() -> Self {
+        Self {
+            windows: HashMap::new(),
+            generation: 0,
+            codec: Some(lwfa_proto::Codec::H264),
+            next_ticket: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+struct CaptureSlot {
+    pending: bool,
+    ticket: u64,
+    generation: u64,
+    jpeg: Option<(std::time::Instant, usize)>,
+}
+
+impl CaptureAdmission {
+    fn prefetch(&self, id: WindowId) -> bool {
+        self.codec.is_some() && self.windows.get(&id).is_none_or(|slot| slot.jpeg.is_none())
+    }
+
+    fn ready(&self, id: WindowId, rate: u32, now: std::time::Instant) -> bool {
+        let Some(slot) = self.windows.get(&id) else {
+            return true;
+        };
+        if slot.pending {
+            return false;
+        }
+        let Some((sent, bytes)) = slot.jpeg else {
+            return true;
+        };
+        // Reprice the last independent frame against the current allocation,
+        // so recovery or a new split takes effect before another encode job.
+        // There is no FPS floor: a large JPEG cannot fit a small budget merely
+        // because the video codec's ten-fps floor says it should.
+        now.saturating_duration_since(sent).as_secs_f64()
+            >= bytes as f64 * 8.0 / f64::from(rate.max(1))
+    }
+
+    fn start(&mut self, id: WindowId) -> bool {
+        let slot = self.windows.entry(id).or_default();
+        if slot.pending {
+            return false;
+        }
+        slot.pending = true;
+        slot.ticket = self.next_ticket;
+        self.next_ticket = self.next_ticket.wrapping_add(1);
+        slot.generation = self.generation;
+        true
+    }
+
+    fn finish(
+        &mut self,
+        id: WindowId,
+        ticket: u64,
+        encoded: Option<(FrameFormat, usize)>,
+        now: std::time::Instant,
+    ) {
+        let Some(slot) = self.windows.get_mut(&id) else {
+            return;
+        };
+        if !slot.pending || slot.ticket != ticket {
+            return;
+        }
+        slot.pending = false;
+        if slot.generation != self.generation {
+            return;
+        }
+        if let Some((format, bytes)) = encoded {
+            slot.jpeg = (format == FrameFormat::Jpeg).then_some((now, bytes));
+        }
+    }
+
+    fn forget(&mut self, id: WindowId) {
+        self.windows.remove(&id);
+    }
+
+    fn codec_changed(&mut self, codec: Option<lwfa_proto::Codec>) {
+        if self.codec == codec {
+            return;
+        }
+        self.codec = codec;
+        self.generation = self.generation.wrapping_add(1);
+        for slot in self.windows.values_mut() {
+            slot.jpeg = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn large_jpegs_fit_their_byte_budget_instead_of_the_video_fps_floor() {
+        let mut admission = CaptureAdmission::default();
+        let base = Instant::now();
+        let id = WindowId(1);
+        let rate = 500_000;
+        let bytes = 90_000;
+        let mut sent = 0;
+        for tick in 0..600 {
+            let now = base + Duration::from_micros(tick * 16_667);
+            if admission.ready(id, rate, now) {
+                assert!(admission.start(id));
+                admission.finish(
+                    id,
+                    admission.windows.get(&id).map_or(0, |slot| slot.ticket),
+                    Some((FrameFormat::Jpeg, bytes)),
+                    now,
+                );
+                sent += bytes;
+            }
+        }
+        // Ten seconds of budget plus the first independent frame. There is
+        // never a waiting image: each admitted capture is the current image.
+        assert!(sent <= rate as usize * 10 / 8 + bytes, "sent {sent} bytes");
+    }
+
+    #[test]
+    fn current_budget_changes_when_the_next_jpeg_can_be_captured() {
+        let mut admission = CaptureAdmission::default();
+        let now = Instant::now();
+        let id = WindowId(1);
+        admission.start(id);
+        admission.finish(
+            id,
+            admission.windows.get(&id).map_or(0, |slot| slot.ticket),
+            Some((FrameFormat::Jpeg, 100_000)),
+            now,
+        );
+        assert!(!admission.ready(id, 500_000, now + Duration::from_millis(300)));
+        assert!(admission.ready(id, 4_000_000, now + Duration::from_millis(300)));
+        assert!(!admission.ready(id, 250_000, now + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn independent_jpeg_windows_use_their_allocations_without_banked_bursts() {
+        let mut admission = CaptureAdmission::default();
+        let base = Instant::now();
+        let ids = [WindowId(1), WindowId(2)];
+        let rates = crate::bitrate::allocate(1_000_000, &ids, None);
+        let mut sent = 0;
+        for tick in 0..600 {
+            let now = base + Duration::from_micros(tick * 16_667);
+            for id in ids {
+                if admission.ready(id, rates[&id], now) {
+                    admission.start(id);
+                    admission.finish(
+                        id,
+                        admission.windows.get(&id).map_or(0, |slot| slot.ticket),
+                        Some((FrameFormat::Jpeg, 90_000)),
+                        now,
+                    );
+                    sent += 90_000;
+                }
+            }
+        }
+        assert!(sent <= 1_000_000 * 10 / 8 + 180_000);
+        let later = base + Duration::from_secs(100);
+        assert!(admission.ready(ids[0], rates[&ids[0]], later));
+        admission.start(ids[0]);
+        admission.finish(
+            ids[0],
+            admission.windows[&ids[0]].ticket,
+            Some((FrameFormat::Jpeg, 90_000)),
+            later,
+        );
+        assert!(!admission.ready(ids[0], rates[&ids[0]], later));
+    }
+
+    #[test]
+    fn a_second_capture_waits_for_the_first_encode_without_blocking_other_windows() {
+        let mut admission = CaptureAdmission::default();
+        let now = Instant::now();
+        let id = WindowId(1);
+        assert!(admission.start(id));
+        assert!(!admission.start(id));
+        assert!(!admission.ready(id, 32_000_000, now));
+        assert!(admission.ready(WindowId(2), 500_000, now));
+        admission.finish(
+            id,
+            admission.windows.get(&id).map_or(0, |slot| slot.ticket),
+            None,
+            now,
+        );
+        assert!(admission.ready(id, 32_000_000, now));
+    }
+
+    #[test]
+    fn video_frames_are_not_throttled_by_jpeg_bytes() {
+        let mut admission = CaptureAdmission::default();
+        let now = Instant::now();
+        let id = WindowId(1);
+        for format in [FrameFormat::H264, FrameFormat::Hevc] {
+            admission.start(id);
+            admission.finish(
+                id,
+                admission.windows.get(&id).map_or(0, |slot| slot.ticket),
+                Some((format, 1_000_000)),
+                now,
+            );
+            assert!(admission.ready(id, 500_000, now));
+        }
+    }
+
+    #[test]
+    fn jpeg_admission_does_not_prefetch_an_image_for_the_next_budget_interval() {
+        let mut admission = CaptureAdmission::default();
+        let id = WindowId(1);
+        assert!(admission.prefetch(id));
+        admission.start(id);
+        admission.finish(id, admission.windows[&id].ticket,
+            Some((FrameFormat::Jpeg, 100_000)), Instant::now());
+        assert!(!admission.prefetch(id), "hardware fallback must also stop prefetch");
+        admission.codec_changed(Some(lwfa_proto::Codec::Hevc));
+        assert!(admission.prefetch(id));
+        admission.codec_changed(None);
+        assert!(!admission.prefetch(WindowId(2)), "explicit JPEG starts fresh on its first frame");
+    }
+
+    #[test]
+    fn codec_changes_ignore_old_inflight_jpeg_measurements() {
+        let mut admission = CaptureAdmission::default();
+        let now = Instant::now();
+        let id = WindowId(1);
+        admission.start(id);
+        admission.codec_changed(Some(lwfa_proto::Codec::Hevc));
+        admission.finish(
+            id,
+            admission.windows.get(&id).map_or(0, |slot| slot.ticket),
+            Some((FrameFormat::Jpeg, 1_000_000)),
+            now,
+        );
+        assert!(admission.ready(id, 500_000, now));
+    }
+
+    #[test]
+    fn repeating_codec_negotiation_does_not_bypass_jpeg_pacing() {
+        let mut admission = CaptureAdmission::default();
+        let now = Instant::now();
+        let id = WindowId(1);
+        admission.codec_changed(None);
+        admission.start(id);
+        admission.finish(
+            id,
+            admission.windows.get(&id).map_or(0, |slot| slot.ticket),
+            Some((FrameFormat::Jpeg, 1_000_000)),
+            now,
+        );
+        admission.codec_changed(None);
+        assert!(!admission.ready(id, 500_000, now));
+    }
+
+    #[test]
+    fn closing_a_window_removes_its_measurements_even_if_encode_finishes_late() {
+        let mut admission = CaptureAdmission::default();
+        let now = Instant::now();
+        let id = WindowId(1);
+        admission.start(id);
+        admission.forget(id);
+        admission.finish(
+            id,
+            admission.windows.get(&id).map_or(0, |slot| slot.ticket),
+            Some((FrameFormat::Jpeg, 1_000_000)),
+            now,
+        );
+        assert!(admission.windows.is_empty());
+    }
+
+    #[test]
+    fn retiring_and_readmitting_a_window_cannot_complete_the_new_job_with_old_bytes() {
+        let mut admission = CaptureAdmission::default();
+        let now = Instant::now();
+        let id = WindowId(1);
+        admission.start(id);
+        let old = admission.windows[&id].ticket;
+        admission.forget(id);
+        admission.start(id);
+        let current = admission.windows[&id].ticket;
+        admission.finish(id, old, Some((FrameFormat::Jpeg, 1_000_000)), now);
+        assert!(!admission.ready(id, 500_000, now));
+        admission.finish(id, current, Some((FrameFormat::Jpeg, 10_000)), now);
+        assert!(admission.ready(id, 500_000, now + Duration::from_millis(200)));
+    }
 }
 
 struct Job {
     frame: CapturedFrame,
+    ticket: u64,
 }
 
 enum Control {
@@ -695,6 +1057,8 @@ impl EncodeWorker {
         let (control_tx, control_rx) = sync_channel::<Control>(16);
         let queued = Arc::new(AtomicUsize::new(0));
         let worker_queued = Arc::clone(&queued);
+        let admission = Arc::new(Mutex::new(CaptureAdmission::default()));
+        let worker_admission = Arc::clone(&admission);
 
         thread::Builder::new()
             .name("lwfa-encode".into())
@@ -732,6 +1096,9 @@ impl EncodeWorker {
                     // A frame for a window that was just forgotten is stale;
                     // encoding it would rebuild the session it just dropped.
                     let Some(encoded) = encoders.encode(&mut job.frame) else {
+                        if let Ok(mut admission) = worker_admission.lock() {
+                            admission.finish(job.frame.id, job.ticket, None, std::time::Instant::now());
+                        }
                         continue;
                     };
 
@@ -744,7 +1111,12 @@ impl EncodeWorker {
                     };
                     // Addressed by window, because a frame goes only to the
                     // clients that asked for that window. See `FrameSink`.
-                    sink.send_frame(job.frame.id, header.encode_with_payload(&encoded.bytes));
+                    let bytes = header.encode_with_payload(&encoded.bytes);
+                    let size = bytes.len();
+                    sink.send_frame(job.frame.id, bytes);
+                    if let Ok(mut admission) = worker_admission.lock() {
+                        admission.finish(job.frame.id, job.ticket, Some((encoded.format, size)), std::time::Instant::now());
+                    }
                 }
             })?;
 
@@ -753,6 +1125,7 @@ impl EncodeWorker {
             control: control_tx,
             queued,
             queue_depth,
+            admission,
         })
     }
 
@@ -761,11 +1134,22 @@ impl EncodeWorker {
     /// Returns false when dropped, so the caller can leave the capture's damage
     /// state untouched and try again next frame rather than losing the update.
     pub fn submit(&self, frame: CapturedFrame) -> bool {
+        let id = frame.id;
+        let ticket = match self.admission.lock() {
+            Ok(mut admission) => {
+                if !admission.start(id) { return false; }
+                admission.windows[&id].ticket
+            }
+            Err(_) => 0,
+        };
         self.queued.fetch_add(1, Ordering::Relaxed);
-        match self.frames.try_send(Job { frame }) {
+        match self.frames.try_send(Job { frame, ticket }) {
             Ok(()) => true,
             Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
                 self.queued.fetch_sub(1, Ordering::Relaxed);
+                if let Ok(mut admission) = self.admission.lock() {
+                    admission.finish(id, ticket, None, std::time::Instant::now());
+                }
                 false
             }
         }
@@ -776,7 +1160,19 @@ impl EncodeWorker {
         self.queued.load(Ordering::Relaxed) < self.queue_depth
     }
 
+    /// Admit capture before it consumes damage or performs GPU readback.
+    pub fn can_capture(&self, id: WindowId, rate: u32, now: std::time::Instant) -> bool {
+        self.admission.lock().map(|admission| admission.ready(id, rate, now)).unwrap_or(true)
+    }
+
+    /// CPU video readback may pipeline across ticks. JPEG pacing must leave
+    /// the next image on the surface until its byte budget admits capture.
+    pub fn prefetch_capture(&self, id: WindowId) -> bool {
+        self.admission.lock().map(|admission| admission.prefetch(id)).unwrap_or(true)
+    }
+
     pub fn forget(&self, id: WindowId) {
+        if let Ok(mut admission) = self.admission.lock() { admission.forget(id); }
         let _ = self.control.try_send(Control::Forget(id));
     }
 
@@ -785,6 +1181,7 @@ impl EncodeWorker {
     /// Not the same as [`EncodeWorker::forget`], which is for a window that has
     /// closed. See [`Encoders::retire`].
     pub fn retire(&self, id: WindowId) {
+        if let Ok(mut admission) = self.admission.lock() { admission.forget(id); }
         let _ = self.control.try_send(Control::Retire(id));
     }
 
@@ -798,6 +1195,7 @@ impl EncodeWorker {
     }
 
     pub fn set_codec(&self, codec: Option<lwfa_proto::Codec>) {
+        if let Ok(mut admission) = self.admission.lock() { admission.codec_changed(codec); }
         let _ = self
             .control
             .try_send(Control::Codec(codec));

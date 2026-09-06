@@ -1,0 +1,503 @@
+[
+  {
+    "sample": "clear",
+    "elapsed": 5,
+    "frames": 266,
+    "mbit": 144.08236,
+    "videoMbit": 143.452096,
+    "keyframeMbit": 3.812584,
+    "keyframes": 3,
+    "budget": {
+      "kbit": 32000,
+      "cause": "link clear, queueing 5ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 5585
+  },
+  {
+    "sample": "clear",
+    "elapsed": 10,
+    "frames": 297,
+    "mbit": 166.932304,
+    "videoMbit": 167.523032,
+    "keyframeMbit": 1.196024,
+    "keyframes": 2,
+    "budget": {
+      "kbit": 32000,
+      "cause": "link clear, queueing 5ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 66836
+  },
+  {
+    "sample": "clear",
+    "elapsed": 15,
+    "frames": 296,
+    "mbit": 158.611624,
+    "videoMbit": 158.587624,
+    "keyframeMbit": 1.697016,
+    "keyframes": 3,
+    "budget": {
+      "kbit": 32000,
+      "cause": "link clear, queueing 5ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "name": "clear",
+    "frames": 859,
+    "deliveredMbit": 469.626288,
+    "changes": [
+      {
+        "kbit": 24000,
+        "cause": "link clear, queueing 3ms"
+      },
+      {
+        "kbit": 32000,
+        "cause": "link clear, queueing 5ms"
+      }
+    ]
+  },
+  {
+    "sample": "limited",
+    "elapsed": 5,
+    "frames": 9,
+    "mbit": 4.96,
+    "videoMbit": 4.821728,
+    "keyframeMbit": 0,
+    "keyframes": 0,
+    "budget": {
+      "kbit": 16000,
+      "cause": "socket backpressure, queueing 4ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 1073959
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 130966,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 169381
+  },
+  {
+    "sample": "limited",
+    "elapsed": 10,
+    "frames": 9,
+    "mbit": 4.97,
+    "videoMbit": 4.828664,
+    "keyframeMbit": 0,
+    "keyframes": 0,
+    "budget": {
+      "kbit": 2000,
+      "cause": "socket backpressure, queueing 2255ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 1065947
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 130966,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 137955
+  },
+  {
+    "sample": "limited",
+    "elapsed": 15,
+    "frames": 6,
+    "mbit": 4.97,
+    "videoMbit": 4.04324,
+    "keyframeMbit": 1.361176,
+    "keyframes": 1,
+    "budget": {
+      "kbit": 2000,
+      "cause": "socket backpressure, queueing 2255ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 1041994
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 68194,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 172065
+  },
+  {
+    "sample": "limited",
+    "elapsed": 20,
+    "frames": 8,
+    "mbit": 4.97,
+    "videoMbit": 5.774864,
+    "keyframeMbit": 1.07352,
+    "keyframes": 1,
+    "budget": {
+      "kbit": 500,
+      "cause": "delay rising, queueing 3106ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 1112880
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 27158,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 140639
+  },
+  {
+    "name": "limited",
+    "frames": 32,
+    "deliveredMbit": 19.87,
+    "changes": [
+      {
+        "kbit": 24000,
+        "cause": "socket backpressure, queueing 4ms"
+      },
+      {
+        "kbit": 16000,
+        "cause": "socket backpressure, queueing 4ms"
+      },
+      {
+        "kbit": 2000,
+        "cause": "socket backpressure, queueing 2255ms"
+      },
+      {
+        "kbit": 500,
+        "cause": "delay rising, queueing 3106ms"
+      }
+    ]
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 5,
+    "frames": 104,
+    "mbit": 23.265656,
+    "videoMbit": 23.660824,
+    "keyframeMbit": 0.980488,
+    "keyframes": 2,
+    "budget": {
+      "kbit": 500,
+      "cause": "delay rising, queueing 3106ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 10,
+    "frames": 61,
+    "mbit": 13.23132,
+    "videoMbit": 13.229128,
+    "keyframeMbit": 0.237336,
+    "keyframes": 1,
+    "budget": {
+      "kbit": 500,
+      "cause": "delay rising, queueing 3106ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 15,
+    "frames": 61,
+    "mbit": 13.177824,
+    "videoMbit": 13.175632,
+    "keyframeMbit": 0,
+    "keyframes": 0,
+    "budget": {
+      "kbit": 500,
+      "cause": "delay rising, queueing 3106ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 26845
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 20,
+    "frames": 62,
+    "mbit": 13.419752,
+    "videoMbit": 13.417512,
+    "keyframeMbit": 0.237256,
+    "keyframes": 1,
+    "budget": {
+      "kbit": 500,
+      "cause": "delay rising, queueing 3106ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 27021,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 25,
+    "frames": 61,
+    "mbit": 13.192656,
+    "videoMbit": 13.190464,
+    "keyframeMbit": 0,
+    "keyframes": 0,
+    "budget": {
+      "kbit": 500,
+      "cause": "delay rising, queueing 3106ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 30,
+    "frames": 61,
+    "mbit": 13.257648,
+    "videoMbit": 13.255456,
+    "keyframeMbit": 0.236144,
+    "keyframes": 1,
+    "budget": {
+      "kbit": 500,
+      "cause": "delay rising, queueing 3106ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 35,
+    "frames": 68,
+    "mbit": 12.515536,
+    "videoMbit": 12.513104,
+    "keyframeMbit": 0.466944,
+    "keyframes": 1,
+    "budget": {
+      "kbit": 1000,
+      "cause": "link clear, queueing 3ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 7780
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 40,
+    "frames": 80,
+    "mbit": 11.407416,
+    "videoMbit": 11.404568,
+    "keyframeMbit": 0,
+    "keyframes": 0,
+    "budget": {
+      "kbit": 1000,
+      "cause": "link clear, queueing 3ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "sample": "recovered",
+    "elapsed": 45,
+    "frames": 136,
+    "mbit": 28.577696,
+    "videoMbit": 28.572992,
+    "keyframeMbit": 0.847872,
+    "keyframes": 2,
+    "budget": {
+      "kbit": 2000,
+      "cause": "link clear, queueing 6ms"
+    },
+    "tcp": [
+      {
+        "local": "0100007F:ABB0",
+        "remote": "0100007F:1A4E",
+        "tx": 0,
+        "rx": 0
+      },
+      {
+        "local": "0100007F:1A4E",
+        "remote": "0100007F:ABB0",
+        "tx": 0,
+        "rx": 0
+      }
+    ],
+    "jsQueued": 0
+  },
+  {
+    "name": "recovered",
+    "frames": 694,
+    "deliveredMbit": 142.045504,
+    "changes": [
+      {
+        "kbit": 1000,
+        "cause": "link clear, queueing 3ms"
+      },
+      {
+        "kbit": 2000,
+        "cause": "link clear, queueing 6ms"
+      }
+    ]
+  }
+]

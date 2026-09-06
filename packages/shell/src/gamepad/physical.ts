@@ -120,6 +120,11 @@ export interface PollState {
 /** The starting point for `pollStep`: no pad, neutral baseline. */
 export const IDLE: PollState = { activeIndex: null, last: NEUTRAL }
 
+/** Whether the shared virtual controller is still driven by physical input. */
+export function hasPhysicalGamepad(pads: readonly (Gamepad | null)[]): boolean {
+  return pads.some((pad) => pad !== null && pad.connected !== false && pad.mapping === "standard")
+}
+
 /**
  * One frame of reading the gamepads: the messages to send and the next state.
  *

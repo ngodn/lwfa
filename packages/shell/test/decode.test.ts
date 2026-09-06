@@ -30,7 +30,10 @@ class FakeVideoDecoder {
   /** Set by a test that wants `configure` to refuse, as a real one may. */
   static refuseReconfigure = false
 
-  constructor(_init: VideoDecoderInit) {
+  static outputs: VideoFrameOutputCallback[] = []
+
+  constructor(init: VideoDecoderInit) {
+    FakeVideoDecoder.outputs.push(init.output)
     stats.constructed++
   }
   configure(_config: VideoDecoderConfig): void {
@@ -70,6 +73,7 @@ describe("the frame decoder", () => {
     stats.configured = 0
     stats.closed = 0
     FakeVideoDecoder.refuseReconfigure = false
+    FakeVideoDecoder.outputs = []
     vi.stubGlobal("VideoDecoder", FakeVideoDecoder)
     vi.stubGlobal("EncodedVideoChunk", class {})
   })
@@ -136,5 +140,96 @@ describe("the frame decoder", () => {
     expect(stats.constructed).toBe(2)
     decoder.close()
     expect(stats.closed).toBe(2)
+  })
+})
+
+
+describe("asynchronous frame delivery", () => {
+  beforeEach(() => {
+    FakeVideoDecoder.refuseReconfigure = false
+    FakeVideoDecoder.outputs = []
+    vi.stubGlobal("VideoDecoder", FakeVideoDecoder)
+    vi.stubGlobal("EncodedVideoChunk", class {})
+  })
+
+  for (const format of [FrameFormat.Jpeg, FrameFormat.H264]) {
+    for (const stop of ["forget", "close"] as const) {
+      it(`discards a pending ${format} bitmap after ${stop}`, async () => {
+        let resolve!: (value: ImageBitmap) => void
+        vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise<ImageBitmap>((r) => { resolve = r })))
+        const sink = vi.fn()
+        const decoder = new FrameDecoder(sink)
+        const pending = decoder.handle({ ...frame(800, 600), header: { ...frame(800, 600).header, format } })
+        const video = { close: vi.fn() } as unknown as VideoFrame
+        if (format === FrameFormat.H264) FakeVideoDecoder.outputs[0]!(video)
+        if (stop === "forget") decoder.forget(W)
+        else decoder.close()
+        const bitmap = { close: vi.fn() } as unknown as ImageBitmap
+        resolve(bitmap)
+        await pending
+        await Promise.resolve()
+        await Promise.resolve()
+        expect(sink).not.toHaveBeenCalled()
+        expect(bitmap.close).toHaveBeenCalledOnce()
+        if (format === FrameFormat.H264) expect(video.close).toHaveBeenCalledOnce()
+      })
+    }
+  }
+
+  for (const format of [FrameFormat.Jpeg, FrameFormat.H264]) {
+    it(`never lets an older ${format} bitmap replace a newer completed frame`, async () => {
+      const resolves: ((value: ImageBitmap) => void)[] = []
+      vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise<ImageBitmap>((r) => resolves.push(r))))
+      const sink = vi.fn()
+      const decoder = new FrameDecoder(sink)
+      const input = { ...frame(800, 600), header: { ...frame(800, 600).header, format } }
+      const older = decoder.handle(input)
+      if (format === FrameFormat.H264) FakeVideoDecoder.outputs[0]!({ close: vi.fn() } as unknown as VideoFrame)
+      const newer = decoder.handle(input)
+      if (format === FrameFormat.H264) FakeVideoDecoder.outputs[0]!({ close: vi.fn() } as unknown as VideoFrame)
+      const a = { close: vi.fn() } as unknown as ImageBitmap
+      const b = { close: vi.fn() } as unknown as ImageBitmap
+      resolves[1]!(b)
+      await newer
+      resolves[0]!(a)
+      await older
+      expect(sink).toHaveBeenCalledTimes(1)
+      expect(sink).toHaveBeenCalledWith(W, b)
+      expect(a.close).toHaveBeenCalledOnce()
+    })
+  }
+
+  it("drops a pending conversion from before a resize", async () => {
+    let resolve!: (value: ImageBitmap) => void
+    vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise<ImageBitmap>((r) => { resolve = r })))
+    const sink = vi.fn()
+    const decoder = new FrameDecoder(sink)
+    await decoder.handle(frame(800, 600))
+    FakeVideoDecoder.outputs[0]!({ close: vi.fn() } as unknown as VideoFrame)
+    await decoder.handle(frame(1024, 768))
+    const bitmap = { close: vi.fn() } as unknown as ImageBitmap
+    resolve(bitmap)
+    await Promise.resolve()
+    expect(sink).not.toHaveBeenCalled()
+    expect(bitmap.close).toHaveBeenCalledOnce()
+  })
+  it("rejects queued old video output delivered after reconfiguration", async () => {
+    const sink = vi.fn()
+    const bitmap = { close: vi.fn() } as unknown as ImageBitmap
+    const convert = vi.fn(async () => bitmap)
+    vi.stubGlobal("createImageBitmap", convert)
+    const decoder = new FrameDecoder(sink)
+    await decoder.handle(frame(800, 600))
+    await decoder.handle(frame(1024, 768))
+    const old = { timestamp: 16_667, close: vi.fn() } as unknown as VideoFrame
+    FakeVideoDecoder.outputs[0]!(old)
+    await Promise.resolve()
+    expect(convert).not.toHaveBeenCalled()
+    expect(sink).not.toHaveBeenCalled()
+    expect(old.close).toHaveBeenCalledOnce()
+    const current = { timestamp: 33_334, close: vi.fn() } as unknown as VideoFrame
+    FakeVideoDecoder.outputs[0]!(current)
+    await Promise.resolve()
+    expect(sink).toHaveBeenCalledWith(W, bitmap)
   })
 })

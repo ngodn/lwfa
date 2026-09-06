@@ -20,6 +20,7 @@ import { patchPrefs, usePrefs, type GamepadSkin } from "@/lib/prefs"
 import { DEFAULT_LAYOUT } from "@/gamepad/model"
 import { backupFilename, makeBackup, readBackup } from "@/gamepad/backup"
 import { setGamepad, useGamepad } from "@/gamepad/store"
+import { controllerTrace } from "@/gamepad/diagnostics"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
@@ -179,7 +180,38 @@ function GamepadPanel() {
           </p>
         ) : null}
       </PanelSection>
+      <ControllerDiagnostics />
     </div>
+  )
+}
+
+function ControllerDiagnostics() {
+  const [recording, setRecording] = useState(controllerTrace.recording)
+  return (
+    <details className="text-sm">
+      <summary className="cursor-pointer">Controller troubleshooting</summary>
+      <p className="my-3 text-xs text-muted-foreground">
+        Record input while playing, then return here to save it. Keeps the last
+        4,096 samples (about 33 seconds) to help locate missed presses.
+      </p>
+      <Button variant="outline" size="sm" onClick={() => {
+        if (!recording) {
+          controllerTrace.start()
+          setRecording(true)
+          return
+        }
+        const trace = { ...controllerTrace.stop(), browser: navigator.userAgent }
+        setRecording(false)
+        const url = URL.createObjectURL(new Blob([JSON.stringify(trace)], { type: "application/json" }))
+        const link = document.createElement("a")
+        link.href = url
+        link.download = "lwfa-controller-trace.json"
+        link.click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+      }}>
+        {recording ? "Stop and save recording" : "Record controller input"}
+      </Button>
+    </details>
   )
 }
 

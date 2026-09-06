@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 const harness = vi.hoisted(() => ({
   effects: [] as (() => void | (() => void))[],
   send: vi.fn(),
+  setDock: vi.fn(),
 }))
 
 // Run the real hook's polling effect without mounting the rest of the shell.
@@ -14,7 +15,7 @@ vi.mock("@/session", () => ({
   useSessionActions: () => ({ send: harness.send }),
   useSessionState: () => ({ session: "test", status: "connected" }),
 }))
-vi.mock("@/lib/dock", () => ({ useDock: () => "none", setDock: vi.fn() }))
+vi.mock("@/lib/dock", () => ({ useDock: () => "gamepad", setDock: harness.setDock }))
 
 import { usePhysicalGamepad } from "../src/gamepad/usePhysicalGamepad"
 
@@ -27,6 +28,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   harness.effects.length = 0
   harness.send.mockClear()
+  harness.setDock.mockClear()
   cleanup = []
   events = new EventTarget()
   buttons = [{ pressed: false, value: 0 }]
@@ -63,6 +65,10 @@ it("forwards repeated presses and releases while animation frames are stalled", 
       { type: "gamepadButton", button: 0, pressed: false },
     ]).flat(),
   )
+})
+
+it("keeps the user's gamepad dock and shield open when a physical pad connects", () => {
+  expect(harness.setDock).not.toHaveBeenCalled()
 })
 
 it("releases held input and stops polling when the last controller disconnects", () => {
