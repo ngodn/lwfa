@@ -2,7 +2,7 @@
  * Driving the engine's controller from a physical gamepad on the client.
  *
  * The browser has no "a button changed" event, only a list you poll, so this
- * reads `navigator.getGamepads` on every animation frame, diffs it, and sends
+ * reads `navigator.getGamepads` on an 8 ms timer, diffs it, and sends
  * what moved down the same wire the on-screen pad uses (see `physical.ts` and
  * `diffGamepad`). The engine already keeps a persistent virtual controller and
  * binds it to whoever sends input, so there is nothing to announce and no
@@ -30,7 +30,7 @@ export function usePhysicalGamepad(): void {
   const { session, status } = useSessionState()
   const dock = useDock()
 
-  // The handlers and the frame loop read these through refs, so they are bound
+  // The handlers and the polling loop read these through refs, so they are bound
   // once and never need the effect to re-run when a value changes.
   const send = useRef(actions.send)
   send.current = actions.send
@@ -43,10 +43,10 @@ export function usePhysicalGamepad(): void {
   const pollState = useRef<PollState>(IDLE)
   const hid = useRef(false)
   const connected = useRef(new Set<number>())
-  const raf = useRef(0)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // A reconnect is a fresh controller on the engine side, so forget the
-  // baseline: the next frame then re-sends whatever is currently held rather
+  // baseline: the next poll then re-sends whatever is currently held rather
   // than only future changes. See the engine's `gamepad_for`.
   useEffect(() => {
     pollState.current = { ...pollState.current, last: NEUTRAL }
@@ -60,12 +60,15 @@ export function usePhysicalGamepad(): void {
       pollState.current = IDLE
     }
 
+    // Input must keep flowing when video rendering skips animation frames.
+    // Timers still share the main thread and cannot recover transitions that
+    // the browser never exposes, but do not wait for the next paint.
     const step = () => {
       if (connected.current.size === 0) {
-        raf.current = 0
+        timer.current = null
         return
       }
-      raf.current = requestAnimationFrame(step)
+      timer.current = setTimeout(step, 8)
       if (!live.current) return
       const { messages, state } = pollStep(navigator.getGamepads?.() ?? [], pollState.current)
       for (const message of messages) send.current(message)
@@ -73,7 +76,7 @@ export function usePhysicalGamepad(): void {
     }
 
     const ensureLoop = () => {
-      if (raf.current === 0) raf.current = requestAnimationFrame(step)
+      if (timer.current === null) step()
     }
 
     const autoHide = () => {
@@ -91,6 +94,7 @@ export function usePhysicalGamepad(): void {
 
     const onDisconnect = (event: GamepadEvent) => {
       connected.current.delete(event.gamepad.index)
+      if (pollState.current.activeIndex === event.gamepad.index) release()
       if (connected.current.size > 0) return
       release()
       // Put the on-screen pad back, but only if nothing else took the surface
@@ -117,9 +121,9 @@ export function usePhysicalGamepad(): void {
     return () => {
       globalThis.removeEventListener("gamepadconnected", onConnect)
       globalThis.removeEventListener("gamepaddisconnected", onDisconnect)
-      if (raf.current !== 0) {
-        cancelAnimationFrame(raf.current)
-        raf.current = 0
+      if (timer.current !== null) {
+        clearTimeout(timer.current)
+        timer.current = null
       }
       release()
     }

@@ -50,6 +50,10 @@ fi
 # else while the first keeps running.
 export LWFA_SHELL_ADDR="${LWFA_SHELL_ADDR:-127.0.0.1:6734}"
 
+# Installed config can point at an older production bundle. Dev must serve the
+# checkout we just built; retain an explicit override for testing another build.
+export LWFA_SHELL_DIR="${LWFA_SHELL_DIR:-$ROOT/packages/shell/dist}"
+
 "$BIN" "$@" &
 PID=$!
 trap 'kill $PID 2>/dev/null' EXIT

@@ -117,6 +117,27 @@ function gp(
 }
 
 describe("pollStep", () => {
+  it("accumulates slow stick and trigger movement across small polling steps", () => {
+    let state = IDLE
+    const messages = []
+    for (let i = 1; i <= 100; i++) {
+      const value = i / 100
+      const result = pollStep([gp(0, [{ i: 6, value }], [value, 0, 0, 0])], state)
+      state = result.state
+      messages.push(...result.messages)
+    }
+    expect(messages.some((m) => m.type === "gamepadAxis" && m.axis === 0 && m.value > 0.95)).toBe(true)
+    expect(messages.some((m) => m.type === "gamepadAxis" && m.axis === 4 && m.value > 0.95)).toBe(true)
+  })
+
+  it("sends the trigger's final release even when it is smaller than epsilon", () => {
+    const first = pollStep([gp(0, [{ i: 6, value: 0.025 }])], IDLE)
+    const almost = pollStep([gp(0, [{ i: 6, value: 0.015 }])], first.state)
+    const released = pollStep([gp(0)], almost.state)
+    expect([...almost.messages, ...released.messages]).toContainEqual({ type: "gamepadAxis", axis: 4, value: 0 })
+    expect(diffGamepad(snap([{ i: 6, value: 0.015 }]), snap())).toContainEqual({ type: "gamepadAxis", axis: 4, value: 0 })
+  })
+
   it("does nothing and keeps state when no pad is present", () => {
     const result = pollStep([], IDLE)
     expect(result.messages).toEqual([])
@@ -154,7 +175,18 @@ describe("pollStep", () => {
     // A new pad at index 1 with a different button held: because the index
     // changed, its state is sent in full rather than diffed against pad 0.
     const second = pollStep([gp(1, [{ i: 3, pressed: true }])], first.state)
+    expect(second.messages[0]).toEqual({ type: "gamepadButton", button: 0, pressed: false })
     expect(second.messages).toContainEqual({ type: "gamepadButton", button: 3, pressed: true })
     expect(second.state.activeIndex).toBe(1)
+  })
+
+  it("releases held input when the active pad disappears from polling", () => {
+    const first = pollStep([gp(0, [{ i: 0, pressed: true }], [0.8, 0, 0, 0])], IDLE)
+    const gone = pollStep([], first.state)
+    expect(gone.messages).toEqual([
+      { type: "gamepadButton", button: 0, pressed: false },
+      { type: "gamepadAxis", axis: 0, value: 0 },
+    ])
+    expect(gone.state).toBe(IDLE)
   })
 })

@@ -50,6 +50,11 @@ function dead(value: number, deadzone: number): number {
   return Math.abs(value) < deadzone ? 0 : value
 }
 
+function analogChanged(before: number, after: number, epsilon: number): boolean {
+  // Always deliver neutral, including the last tiny part of a trigger release.
+  return Math.abs(after - before) >= epsilon || (after === 0 && before !== 0)
+}
+
 /**
  * The messages that carry a controller from `prev` to `curr`.
  *
@@ -77,7 +82,7 @@ export function diffGamepad(
       out.push({ type: "gamepadButton", button: i, pressed: after.pressed })
     }
     const axis = TRIGGER_AXIS[i]
-    if (axis !== undefined && Math.abs(after.value - before.value) >= epsilon) {
+    if (axis !== undefined && analogChanged(before.value, after.value, epsilon)) {
       out.push({ type: "gamepadAxis", axis, value: after.value })
     }
   }
@@ -85,7 +90,7 @@ export function diffGamepad(
   for (let i = 0; i < STICK_AXES; i++) {
     const before = dead(prev.axes[i] ?? 0, deadzone)
     const after = dead(curr.axes[i] ?? 0, deadzone)
-    if (Math.abs(after - before) >= epsilon) {
+    if (analogChanged(before, after, epsilon)) {
       out.push({ type: "gamepadAxis", axis: i, value: after })
     }
   }
@@ -122,7 +127,8 @@ export const IDLE: PollState = { activeIndex: null, last: NEUTRAL }
  * non-standard pad is skipped rather than mis-mapped. When the driven pad
  * changes (or is seen for the first time) the baseline resets to neutral, so
  * the new controller's held state is sent in full rather than diffed against
- * the old one. No pad at all is a no-op that leaves the state untouched.
+ * the old one. Release the old controller before a handoff, or when no usable
+ * pad remains, so its held input cannot stay stuck in the engine.
  */
 export function pollStep(
   pads: readonly (Gamepad | null)[],
@@ -136,11 +142,30 @@ export function pollStep(
       break
     }
   }
-  if (!pad) return { messages: [], state }
+  if (!pad) return { messages: diffGamepad(state.last, NEUTRAL, options), state: IDLE }
   const baseline = state.activeIndex === pad.index ? state.last : NEUTRAL
   const current = snapshotOf(pad)
+  const messages = diffGamepad(baseline, current, options)
+  const sentAxes = new Set(messages.flatMap((message) =>
+    message.type === "gamepadAxis" ? [message.axis] : [],
+  ))
+  // Compare analog input against what the engine received, not the previous
+  // sample. Otherwise slow movement below epsilon disappears at high poll rates.
+  const last: PadSnapshot = {
+    buttons: current.buttons.map((button, index) => {
+      const axis = TRIGGER_AXIS[index]
+      return axis === undefined || sentAxes.has(axis)
+        ? button
+        : { ...button, value: baseline.buttons[index]?.value ?? 0 }
+    }),
+    axes: current.axes.map((value, axis) =>
+      sentAxes.has(axis) ? value : baseline.axes[axis] ?? 0,
+    ),
+  }
   return {
-    messages: diffGamepad(baseline, current, options),
-    state: { activeIndex: pad.index, last: current },
+    messages: state.activeIndex !== null && state.activeIndex !== pad.index
+      ? [...diffGamepad(state.last, NEUTRAL, options), ...messages]
+      : messages,
+    state: { activeIndex: pad.index, last },
   }
 }
