@@ -116,7 +116,6 @@ try {
  console.log('PASS: manual dock closure preserves physical held input');
  await page.getByRole('button',{name:'Gamepad',exact:true}).click();
  await page.locator('main').getByRole('button',{name:'Settings',exact:true}).click();
- await page.getByText('Controller troubleshooting',{exact:true}).click();
  await page.getByRole('button',{name:'Record controller input',exact:true}).click();
  await page.evaluate(()=>{testPads[1].buttons[0]={pressed:true,value:1}});
  await page.waitForTimeout(100);

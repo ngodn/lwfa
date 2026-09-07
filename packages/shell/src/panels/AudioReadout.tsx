@@ -22,6 +22,7 @@
 import { useEffect, useState } from "react"
 import * as audio from "@/lib/audio"
 import { cn } from "@/lib/utils"
+import { PanelGroup, ReadoutRow } from "@/panels/parts"
 
 export function AudioReadout() {
   const [state, setState] = useState(() => audio.diagnostics())
@@ -55,52 +56,49 @@ export function AudioReadout() {
   return (
     <div
       className={cn(
-        "space-y-1 rounded-lg border p-3 text-xs",
-        stalled || starved || laggy ? "border-warning/40 bg-warning/10" : "border-dashed",
+        "space-y-2 text-xs",
+        stalled || starved || laggy ? "text-warning" : "",
       )}
     >
-      <dl className="space-y-1">
-        <Readout label="Audio context" value={state.contextState} />
-        <Readout label="Playback path" value={describePath(state.path)} />
-        <Readout
-          label="From the machine"
-          value={
-            state.wire === "none"
-              ? "nothing yet"
-              : state.wire === "opus"
-                ? `Opus, ${state.wireKbits > 0 ? `${state.wireKbits} kbit/s` : "measuring"}`
-                : "raw PCM, 1536 kbit/s"
-          }
-        />
-        {state.bufferedMs >= 0 ? (
-          <Readout label="Held for playback" value={`${state.bufferedMs} ms`} />
-        ) : null}
-        <Readout label="Chunks received" value={String(state.chunks)} />
-        <Readout label="Dropouts" value={String(state.underruns)} />
-      </dl>
+      <PanelGroup asChild>
+        <dl>
+          <Readout label="Audio context" value={state.contextState} />
+          <Readout label="Playback path" value={describePath(state.path)} />
+          <Readout
+            label="Incoming audio"
+            value={
+              state.wire === "none"
+                ? "nothing yet"
+                : state.wire === "opus"
+                  ? `Opus, ${state.wireKbits > 0 ? `${state.wireKbits} kbit/s` : "measuring"}`
+                  : "raw PCM, 1536 kbit/s"
+            }
+          />
+          {state.bufferedMs >= 0 ? (
+            <Readout label="Playback buffer" value={`${state.bufferedMs} ms`} />
+          ) : null}
+          <Readout label="Chunks received" value={String(state.chunks)} />
+          <Readout label="Dropouts" value={String(state.underruns)} />
+        </dl>
+      </PanelGroup>
       {state.wire === "pcm" ? (
         <p className="pt-1 text-muted-foreground">
-          Uncompressed audio. It uses more bandwidth than the video does and
-          cannot adapt. This should only happen if the Opus decoder failed to
-          load.
+          Uncompressed audio fallback is active.
         </p>
       ) : null}
       {laggy ? (
         <p className="pt-1 text-muted-foreground">
-          Sound is running behind the picture. It catches up at the next quiet
-          moment.
+          Playback buffer is high.
         </p>
       ) : null}
       {stalled ? (
         <p className="pt-1 text-muted-foreground">
-          Tap anywhere to start audio. Browsers will not play sound until the
-          page has been touched.
+          Tap to start audio.
         </p>
       ) : null}
       {starved ? (
         <p className="pt-1 text-muted-foreground">
-          Nothing is arriving from the machine. That is the connection, not
-          this device.
+          No audio received yet.
         </p>
       ) : null}
     </div>
@@ -128,9 +126,9 @@ function describePath(path: "worklet" | "scheduled" | "none"): string {
 
 function Readout({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-right">{value}</dd>
-    </div>
+    <ReadoutRow>
+      <dt className="font-medium text-foreground">{label}</dt>
+      <dd className="min-w-0 break-words text-right text-muted-foreground tabular-nums">{value}</dd>
+    </ReadoutRow>
   )
 }

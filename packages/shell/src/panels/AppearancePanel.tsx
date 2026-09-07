@@ -7,7 +7,7 @@ import { Monitor, Moon, Sun } from "lucide-react"
 import { patchPrefs, setPrefs, usePrefs, type ThemeMode } from "@/lib/prefs"
 import { Label } from "@/components/ui/label"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Field, FieldRow, PanelSection } from "@/panels/parts"
+import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { Switch } from "@/components/ui/switch"
 
 const MODES: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
@@ -20,10 +20,9 @@ function AppearancePanel() {
   const prefs = usePrefs()
 
   return (
-    <div className="space-y-6 pt-2">
+    <div className="space-y-[15px]">
       <PanelSection
         title="Theme"
-        description="System follows your device setting."
       >
         <ToggleGroup
           type="single"
@@ -47,56 +46,54 @@ function AppearancePanel() {
         * panel is for. "Animate windows" lived under Settings > Stream, where
         * it had nothing to do with the video stream or with anything else on
         * that tab; it is a look, and this is where looks are chosen. */}
-      <PanelSection title="Movement">
-        <FieldRow>
-          <Field
-            label="Animate windows"
-            hint={prefs.motion.animate ? "Windows slide" : "Windows jump"}
-          />
-          <Switch
-            checked={prefs.motion.animate}
-            onCheckedChange={(animate) => patchPrefs("motion", { animate })}
-            aria-label="Animate windows"
-          />
-        </FieldRow>
-        <FieldRow>
-          <Field
-            label="Follow the engine's scroll"
-            hint="Mirror the desktop's scroll position."
-          />
-          <Switch
-            checked={prefs.followEngineScroll}
-            onCheckedChange={(followEngineScroll) =>
-              setPrefs((p) => ({ ...p, followEngineScroll }))
-            }
-          />
-        </FieldRow>
+      <PanelSection title="Motion">
+        <PanelGroup>
+          <FieldRow>
+            <Field label="Animate window movement" />
+            <Switch
+              checked={prefs.motion.animate}
+              onCheckedChange={(animate) => patchPrefs("motion", { animate })}
+              aria-label="Animate window movement"
+            />
+          </FieldRow>
+          <FieldRow>
+            <Field label="Mirror the desktop's scroll" />
+            <Switch
+              aria-label="Mirror the desktop's scroll"
+              checked={prefs.followEngineScroll}
+              onCheckedChange={(followEngineScroll) =>
+                setPrefs((p) => ({ ...p, followEngineScroll }))
+              }
+            />
+          </FieldRow>
+        </PanelGroup>
       </PanelSection>
 
       <PanelSection
-        title="Touch feedback"
-        description="Vibrate when a control is pressed."
+        title="Haptics"
       >
-        <FieldRow>
-          <Label htmlFor="kb-haptics" className="font-normal">
-            Keyboard
-          </Label>
-          <Switch
-            id="kb-haptics"
-            checked={prefs.keyboard.haptics}
-            onCheckedChange={(haptics) => patchPrefs("keyboard", { haptics })}
-          />
-        </FieldRow>
-        <FieldRow>
-          <Label htmlFor="gp-haptics" className="font-normal">
-            Gamepad
-          </Label>
-          <Switch
-            id="gp-haptics"
-            checked={prefs.gamepad.haptics}
-            onCheckedChange={(haptics) => patchPrefs("gamepad", { haptics })}
-          />
-        </FieldRow>
+        <PanelGroup>
+          <FieldRow>
+            <Label htmlFor="kb-haptics" className="text-[13.5px] font-medium">
+              Keyboard
+            </Label>
+            <Switch
+              id="kb-haptics"
+              checked={prefs.keyboard.haptics}
+              onCheckedChange={(haptics) => patchPrefs("keyboard", { haptics })}
+            />
+          </FieldRow>
+          <FieldRow>
+            <Label htmlFor="gp-haptics" className="text-[13.5px] font-medium">
+              Gamepad
+            </Label>
+            <Switch
+              id="gp-haptics"
+              checked={prefs.gamepad.haptics}
+              onCheckedChange={(haptics) => patchPrefs("gamepad", { haptics })}
+            />
+          </FieldRow>
+        </PanelGroup>
       </PanelSection>
     </div>
   )

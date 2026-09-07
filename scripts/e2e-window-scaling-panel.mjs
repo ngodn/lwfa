@@ -99,7 +99,7 @@ try {
   assert.equal(await factor(1).getAttribute("aria-pressed"), "true", "rejected request never becomes a selected factor")
   await page.evaluate(() => { acceptChanges = true; updateInfo({scaling:{mode:'workspace',scale:2},effectiveScale:1.75}) })
   await page.getByText("Workspace request: 1.75×.", {exact:false}).waitFor()
-  await page.getByText("Apps may round or limit the requested size.", {exact:false}).waitFor()
+  await page.getByText("Apps may limit this size.", {exact:false}).waitFor()
   assert.equal(await factor(2).getAttribute("aria-pressed"), "true", "selection and bounded workspace request remain distinct")
   assert.equal(await page.getByText("Applied:", {exact:false}).count(), 0, "a workspace request does not claim the app accepted that size")
 
@@ -108,7 +108,7 @@ try {
   assert.equal(await factor(1).getAttribute("aria-pressed"), "true")
   assert(await factor(2).isDisabled())
   assert(await page.getByRole("button", {name:"Auto",exact:true}).isDisabled())
-  await page.getByText("This Xwayland app uses 1× here.", {exact:false}).waitFor()
+  await page.getByText("Xwayland supports 1× in Sharper mode.", {exact:false}).waitFor()
   await mode("More space").click()
   assert(await factor(2).isEnabled(), "Xwayland supports More space")
   await factor(2).click()
@@ -118,7 +118,7 @@ try {
   assert(await mode("Sharper").isDisabled(), "follower cannot change mode")
   assert(await factor(2).isDisabled(), "follower cannot change factor")
   await page.evaluate(() => { setPrimary(true); updateInfo({scaling:undefined}) })
-  await page.getByText("Scaling requires an updated engine.").waitFor()
+  await page.getByText("Update the engine to enable scaling.").waitFor()
   assert(await mode("Sharper").isDisabled(), "older engine does not offer dead controls")
 
   assert(!(await page.evaluate(() => messages.some(message => message.type === 'focusWindow'))), "scaling never focuses the remote app")

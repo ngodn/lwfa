@@ -12,7 +12,7 @@
  * # Why sending needs a button at all
  *
  * Because no browser will let a page read the clipboard without being
- * asked, and Safari never will. So "Send what I copied" is a tap that
+ * asked, and Safari never will. So "Send clipboard" is a tap that
  * triggers the browser's own paste confirmation, and the box under it
  * catches everything that route cannot reach: files of any kind, images
  * from apps that only paste, and a line of text somebody would rather type
@@ -58,7 +58,7 @@ import {
   type Outgoing,
 } from "@/lib/clipboard"
 import { Button } from "@/components/ui/button"
-import { PanelSection } from "@/panels/parts"
+import { PanelGroup, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
 function ClipboardPanel() {
@@ -81,30 +81,31 @@ function ClipboardPanel() {
   const greeted = session !== 0
   if (greeted && permissions.mode !== "interact") {
     return (
-      <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-        The clipboard needs a session that can interact with the machine. This
-        one can only watch.
+      <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+        Clipboard access requires permission to interact.
       </p>
     )
   }
   if (!channel) {
     return (
-      <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+      <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
         {greeted ? "Not connected to the machine." : "Connecting\u2026"}
       </p>
     )
   }
 
   return (
-    <div className="space-y-6 pt-2">
-      <PanelSection title="Send from this device">
+    <div className="space-y-4">
+      <PanelSection title="Send">
         <SendControls />
         {outgoing.length > 0 ? (
-          <ul className="divide-y rounded-lg border">
-            {outgoing.map((row) => (
-              <OutgoingRow key={row.id} row={row} />
-            ))}
-          </ul>
+          <PanelGroup asChild>
+            <ul>
+              {outgoing.map((row) => (
+                <OutgoingRow key={row.id} row={row} />
+              ))}
+            </ul>
+          </PanelGroup>
         ) : null}
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </PanelSection>
@@ -113,9 +114,8 @@ function ClipboardPanel() {
         {loading ? (
           <Skeletons />
         ) : items.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-            Nothing has been copied yet. Copy something in a window here, on the
-            machine&rsquo;s own desktop, or on this device.
+          <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+            No clipboard history.
           </p>
         ) : (
           <ul className="space-y-2">
@@ -128,7 +128,7 @@ function ClipboardPanel() {
         {more ? (
           <Button
             variant="outline"
-            className="w-full"
+            className="h-11 w-full"
             disabled={paging}
             onClick={() => loadMore(actions.send)}
           >
@@ -159,7 +159,7 @@ const SendControls = memo(function SendControls() {
       const what = await sendDeviceClipboard(actions.send)
       setSaid(
         what === "nothing"
-          ? "Nothing on this device's clipboard."
+          ? "Clipboard is empty."
           : what === "image"
             ? "Image sent."
             : "Text sent.",
@@ -167,7 +167,7 @@ const SendControls = memo(function SendControls() {
     } catch {
       // Declining the browser's paste prompt lands here, and is a choice
       // rather than a fault, so it reads as one.
-      setSaid("This device would not share its clipboard. Use the box below.")
+      setSaid("Clipboard access was denied. Paste into the box below.")
     } finally {
       setAsking(false)
     }
@@ -193,17 +193,17 @@ const SendControls = memo(function SendControls() {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" onClick={() => void grab()} disabled={asking}>
+        <Button variant="outline" className="h-11 flex-1" onClick={() => void grab()} disabled={asking}>
           {asking ? (
             <Loader2 className="size-4 animate-spin" aria-hidden />
           ) : (
             <ClipboardPaste className="size-4" aria-hidden />
           )}
-          Send what I copied
+          Send clipboard
         </Button>
-        <Button variant="outline" onClick={() => files.current?.click()}>
+        <Button variant="outline" className="h-11 flex-1" onClick={() => files.current?.click()}>
           <Upload className="size-4" aria-hidden />
-          Pick files
+          Choose files
         </Button>
         <input
           ref={files}
@@ -224,10 +224,11 @@ const SendControls = memo(function SendControls() {
           onChange={(event) => setDraft(event.target.value)}
           onPaste={paste}
           rows={2}
-          placeholder="Or paste here, then send"
-          className="min-h-16 w-full resize-y rounded-lg border bg-transparent p-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          aria-label="Text or files to send"
+          placeholder="Paste text or a file here"
+          className="min-h-16 w-full resize-y rounded-xl border bg-card p-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
-        <Button onClick={post} disabled={draft.trim().length === 0}>
+        <Button className="h-11" onClick={post} disabled={draft.trim().length === 0}>
           <Send className="size-4" aria-hidden />
           Send
         </Button>
@@ -270,7 +271,7 @@ const OutgoingRow = memo(function OutgoingRow({ row }: { row: Outgoing }) {
           <button
             type="button"
             aria-label={`Dismiss ${row.name}`}
-            className="text-muted-foreground hover:text-foreground"
+            className="grid size-11 shrink-0 place-items-center rounded-lg text-muted-foreground hover:text-foreground"
             onClick={() => dismissOutgoing(row.id)}
           >
             <Trash2 className="size-3.5" aria-hidden />
@@ -325,70 +326,78 @@ const EntryRow = memo(function EntryRow({
   return (
     <li
       className={cn(
-        "space-y-2 rounded-lg border p-3",
-        current ? "border-primary/50 bg-primary/5" : null,
+        "overflow-hidden rounded-xl border bg-card",
+        current ? "border-primary/50" : null,
       )}
     >
-      <div className="flex items-start gap-3">
-        <Thumbnail item={item} />
-        <div className="min-w-0 flex-1 space-y-1">
-          {item.kind === "text" ? (
-            <p className="line-clamp-3 whitespace-pre-wrap break-words font-mono text-xs leading-snug">
-              {item.preview}
-              {item.whole ? "" : "…"}
-            </p>
-          ) : (
-            <p className="truncate text-sm" title={item.preview}>
-              {item.preview}
-            </p>
-          )}
-          <p className="text-xs text-muted-foreground">
-            {current ? "On the clipboard now · " : ""}
-            {whereFrom(item)} · {prettySize(item.bytes)}
-            {item.width && item.height ? ` · ${item.width}×${item.height}` : ""} ·{" "}
-            {ago(item.at)}
-          </p>
+      {current ? (
+        <div className="flex items-center justify-between gap-2 border-b bg-primary/10 px-3 py-1.5">
+          <span className="text-[10.5px] font-semibold uppercase tracking-wide text-primary">On the clipboard</span>
+          <span className="text-xs text-muted-foreground">{ago(item.at)}</span>
         </div>
-      </div>
+      ) : null}
+      <div className="space-y-2 p-3">
+        <div className="flex items-start gap-3">
+          {item.kind !== "text" ? <Thumbnail item={item} /> : null}
+          <div className="min-w-0 flex-1 space-y-1">
+            {item.kind === "text" ? (
+              <p className="line-clamp-3 whitespace-pre-wrap break-words font-mono text-xs leading-snug">
+                {item.preview}
+                {item.whole ? "" : "…"}
+              </p>
+            ) : (
+              <p className="truncate text-sm" title={item.preview}>
+                {item.preview}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {whereFrom(item)} · {prettySize(item.bytes)}
+              {item.width && item.height ? ` · ${item.width}×${item.height}` : ""}
+              {current ? "" : ` · ${ago(item.at)}`}
+            </p>
+          </div>
+        </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" onClick={() => void copy()} disabled={copying}>
-          {copied ? (
-            <Check className="size-3.5" aria-hidden />
-          ) : copying ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          ) : (
-            <ClipboardPaste className="size-3.5" aria-hidden />
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" className="h-11" variant="outline" onClick={() => void copy()} disabled={copying}>
+            {copied ? (
+              <Check className="size-3.5" aria-hidden />
+            ) : copying ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            ) : (
+              <ClipboardPaste className="size-3.5" aria-hidden />
+            )}
+            {copied ? "Copied here" : "Copy here"}
+          </Button>
+          {current ? null : (
+            <Button
+              size="sm"
+              className="h-11"
+              variant="outline"
+              onClick={() => actions.send({ type: "clipUse", id: item.id })}
+            >
+              <Monitor className="size-3.5" aria-hidden />
+              Put back
+            </Button>
           )}
-          {copied ? "Copied here" : "Copy here"}
-        </Button>
-        {current ? null : (
+          {canDownload ? (
+            <Button size="sm" className="h-11" variant="outline" asChild>
+              <a href={download} download>
+                <Download className="size-3.5" aria-hidden />
+                Download
+              </a>
+            </Button>
+          ) : null}
           <Button
             size="sm"
-            variant="outline"
-            onClick={() => actions.send({ type: "clipUse", id: item.id })}
+            variant="ghost"
+            className="ml-auto size-11 p-0 text-muted-foreground"
+            aria-label="Forget this entry"
+            onClick={() => actions.send({ type: "clipDrop", id: item.id })}
           >
-            <Monitor className="size-3.5" aria-hidden />
-            Put back
+            <Trash2 className="size-3.5" aria-hidden />
           </Button>
-        )}
-        {canDownload ? (
-          <Button size="sm" variant="outline" asChild>
-            <a href={download} download>
-              <Download className="size-3.5" aria-hidden />
-              Download
-            </a>
-          </Button>
-        ) : null}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="ml-auto text-muted-foreground"
-          aria-label="Forget this entry"
-          onClick={() => actions.send({ type: "clipDrop", id: item.id })}
-        >
-          <Trash2 className="size-3.5" aria-hidden />
-        </Button>
+        </div>
       </div>
     </li>
   )
@@ -429,7 +438,7 @@ function Skeletons() {
   return (
     <ul className="space-y-2" aria-hidden>
       {[0, 1, 2].map((n) => (
-        <li key={n} className="flex gap-3 rounded-lg border p-3">
+        <li key={n} className="flex gap-3 rounded-xl border p-3">
           <div className="size-12 shrink-0 animate-pulse rounded bg-muted" />
           <div className="flex-1 space-y-2 py-1">
             <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
@@ -449,11 +458,11 @@ function Skeletons() {
 function whereFrom(item: ClipItem): string {
   switch (item.origin) {
     case "lwfa":
-      return "Copied in a window here"
+      return "Session window"
     case "desktop":
-      return "Copied on the machine's desktop"
+      return "Machine desktop"
     default:
-      return item.device ? `Sent from ${item.device}` : "Sent from a device"
+      return item.device ? item.device : "Device"
   }
 }
 

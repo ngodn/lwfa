@@ -57,7 +57,7 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Field, FieldRow, PanelSection } from "@/panels/parts"
+import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 import { WindowScalingControls } from "@/panels/WindowScalingControls"
 
@@ -145,7 +145,7 @@ function WindowsPanel() {
      * children into this flex container, so every block below is spaced by the
      * same rule whether or not it sits inside the fieldset.
      */
-    <div className="flex flex-col gap-6 pt-2">
+    <div className="flex flex-col gap-4">
       {!primary ? <Following /> : null}
 
       <fieldset disabled={!primary} className="contents">
@@ -153,39 +153,43 @@ function WindowsPanel() {
           * and takes the full width. */}
         <Button
           size="lg"
-          className="h-12 w-full justify-start gap-2.5 text-[0.95rem]"
+          className="h-11 w-full justify-center gap-2 text-sm"
           onClick={() => setArrange(true)}
         >
           <LayoutGrid className="size-5" aria-hidden />
           Arrange windows
         </Button>
 
-        <PanelSection title="Workspaces">
+        <PanelSection title="Workspace">
           <Workspaces />
-          <FitToScreen columns={groups.length} />
+          <PanelGroup>
+            <FitToScreen columns={groups.length} />
+          </PanelGroup>
         </PanelSection>
 
         <PanelSection title="Windows">
           {groups.length === 0 ? <NoWindows /> : null}
           {groups.length > 0 ? (
-            <ul className="overflow-hidden rounded-lg border">
-              {groups.map((group) => (
-                <ColumnItem
-                  key={group.index}
-                  group={group}
-                  focused={focused}
-                  fullscreen={isFullscreen(strip)}
-                  // A fitted workspace streams everything in it, so as far as
-                  // the per-column switch is concerned nothing is paused.
-                  // Passing the effective answer keeps one rule in one place
-                  // instead of every control checking both flags.
-                  paused={pauseInactive && !workspace.fit}
-                  fitted={workspace.fit}
-                  open={open}
-                  onToggle={toggle}
-                />
-              ))}
-            </ul>
+            <PanelGroup asChild>
+              <ul>
+                {groups.map((group) => (
+                  <ColumnItem
+                    key={group.index}
+                    group={group}
+                    focused={focused}
+                    fullscreen={isFullscreen(strip)}
+                    // A fitted workspace streams everything in it, so as far as
+                    // the per-column switch is concerned nothing is paused.
+                    // Passing the effective answer keeps one rule in one place
+                    // instead of every control checking both flags.
+                    paused={pauseInactive && !workspace.fit}
+                    fitted={workspace.fit}
+                    open={open}
+                    onToggle={toggle}
+                  />
+                ))}
+              </ul>
+            </PanelGroup>
           ) : null}
           <Spawning />
         </PanelSection>
@@ -225,7 +229,7 @@ const Workspaces = memo(function Workspaces() {
               }
               onClick={() => actions.focusWorkspace(index)}
               className={cn(
-                "flex h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-lg border px-3",
+                "flex h-12 min-w-12 flex-1 flex-col items-center justify-center gap-1 rounded-xl border px-3",
                 "text-sm transition-colors",
                 here
                   ? "border-primary bg-primary text-primary-foreground"
@@ -233,28 +237,8 @@ const Workspaces = memo(function Workspaces() {
               )}
             >
               <span className="leading-none font-medium">{index + 1}</span>
-              {/* Dots rather than a number: the useful question is "is there
-                * anything over there", and a shape answers it without reading. */}
-              <span className="flex h-1.5 items-center gap-0.5">
-                {Array.from({ length: Math.min(count, 4) }, (_, dot) => (
-                  <span
-                    key={dot}
-                    className={cn(
-                      "size-1 rounded-full",
-                      here ? "bg-primary-foreground/70" : "bg-muted-foreground/60",
-                    )}
-                  />
-                ))}
-                {count > 4 ? (
-                  <span
-                    className={cn(
-                      "text-[9px] leading-none",
-                      here ? "text-primary-foreground/70" : "text-muted-foreground",
-                    )}
-                  >
-                    +
-                  </span>
-                ) : null}
+              <span className={cn("text-[10px] leading-none", here ? "text-primary-foreground/75" : "text-muted-foreground")}>
+                {count === 0 ? "empty" : `${count} win`}
               </span>
             </button>
           )
@@ -295,8 +279,8 @@ const FitToScreen = memo(function FitToScreen({ columns }: { columns: number }) 
             : !room && !fitted
               ? `${columns} columns will not fit; the strip keeps scrolling`
               : fitted
-                ? "Columns share the screen and all of them stream"
-                : "Columns keep their own width and the strip scrolls"
+                ? "Columns share the screen; all windows stream"
+                : "Columns keep their width; the strip scrolls"
         }
       />
       <Switch
@@ -378,7 +362,7 @@ const ColumnItem = memo(function ColumnItem({
   const isOpen = open === key
 
   return (
-    <li className="border-b last:border-b-0">
+    <li>
       <div className="flex items-stretch bg-muted/40">
         <div className="flex min-h-11 min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5">
           <span
@@ -427,7 +411,7 @@ const ColumnItem = memo(function ColumnItem({
       </div>
 
       {isOpen ? (
-        <div className="border-t bg-muted/30 px-2.5 py-2">
+        <div className="border-t bg-muted/20 px-3 py-2">
           <ColumnControls group={group} paused={paused} fitted={fitted} />
         </div>
       ) : null}
@@ -567,7 +551,7 @@ const WindowItem = memo(function WindowItem({
   )
 
   return (
-    <li className={cn("border-b last:border-b-0", focused && "bg-accent/60")}>
+    <li className={cn(!solo && "border-b last:border-b-0", focused && "bg-primary/5")}>
       <div className="flex items-stretch">
         <button
           type="button"
@@ -587,7 +571,7 @@ const WindowItem = memo(function WindowItem({
           )}
 
           {unnamed ? (
-            <span className="flex-1 py-0.5" aria-label="Waiting for this window to say what it is">
+            <span className="flex-1 py-0.5" aria-label="Loading window title">
               <span className="block h-3 w-2/3 animate-pulse rounded bg-muted" />
             </span>
           ) : (
@@ -627,7 +611,7 @@ const WindowItem = memo(function WindowItem({
         * screen reader) and everything wraps, so a narrow sheet gets more
         * lines rather than clipped controls. Targets stay 44px throughout. */}
       {open ? (
-        <div className="space-y-1.5 border-t bg-muted/30 px-2.5 py-2">
+        <div className="space-y-1.5 border-t bg-muted/20 px-3 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <IconAction
               label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
@@ -716,7 +700,7 @@ const SendTo = memo(function SendTo({ id }: { id: WindowId }) {
  * amount anybody can weigh against their connection.
  */
 function liveLabel(group: ColumnGroup, paused: boolean): string {
-  if (group.windows.length < 2) return "Nothing else shares this column"
+  if (group.windows.length < 2) return "Only one window in this column"
   if (!paused) return "Every visible window already streams"
   if (group.live) return "Stream only the focused window of this column"
   return `Stream all ${group.windows.length} windows in this column`
@@ -775,8 +759,8 @@ function IconAction({
 const NoWindows = memo(function NoWindows() {
   const actions = useSessionActions()
   return (
-    <div className="rounded-lg border border-dashed p-8 text-center">
-      <p className="text-sm text-muted-foreground">Nothing open on this workspace.</p>
+    <div className="rounded-xl border border-dashed p-8 text-center">
+      <p className="text-sm text-muted-foreground">No windows in this workspace.</p>
       <Button
         variant="outline"
         className="mt-3 h-11 gap-1.5"
@@ -810,7 +794,7 @@ const Spawning = memo(function Spawning() {
       {waiting.map((name) => (
         <li
           key={name}
-          className="flex items-center gap-2 rounded-lg border border-dashed px-2.5 py-2.5"
+          className="flex items-center gap-2 rounded-xl border border-dashed px-2.5 py-2.5"
         >
           <span
             className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground"
@@ -838,12 +822,12 @@ const Following = memo(function Following() {
   const driver = peers.find((peer) => peer.primary)
 
   return (
-    <div className="space-y-3 rounded-lg border border-warning/40 bg-warning/10 p-3">
+    <div className="space-y-3 rounded-xl border border-warning/40 bg-warning/10 p-3">
       <p className="text-sm">
         <span className="font-medium">
-          {driver ? driver.device : "Another device"} is arranging the windows.
+          {driver ? driver.device : "Another device"} is driving.
         </span>{" "}
-        <span className="text-muted-foreground">You can still type, click and scroll.</span>
+        <span className="text-muted-foreground">Input remains available.</span>
       </p>
       <Button className="h-11 w-full" onClick={actions.takeControl}>
         Arrange from this device
@@ -867,9 +851,9 @@ const ORIENTATIONS = [
 const StripSettings = memo(function StripSettings() {
   const { layout: prefs } = usePrefs()
   return (
-    <div className="space-y-3">
-      <div className="space-y-1.5">
-        <Field label="Direction" hint="Auto follows the shape of the screen." />
+    <PanelGroup>
+      <div className="space-y-2 px-3 py-2">
+        <Field label="Direction" hint="Auto follows the screen orientation." />
         <ToggleGroup
           type="single"
           value={prefs.orientation}
@@ -887,7 +871,7 @@ const StripSettings = memo(function StripSettings() {
         </ToggleGroup>
       </div>
 
-      <div className="space-y-1.5">
+      <div className="space-y-2 px-3 py-2">
         <Field label="New window size" />
         <ToggleGroup
           type="single"
@@ -908,10 +892,11 @@ const StripSettings = memo(function StripSettings() {
         <Field label="Keep focus centred" />
         <Switch
           checked={prefs.centreFocused}
+          aria-label="Keep focus centred"
           onCheckedChange={(centreFocused) => patchPrefs("layout", { centreFocused })}
         />
       </FieldRow>
-    </div>
+    </PanelGroup>
   )
 })
 

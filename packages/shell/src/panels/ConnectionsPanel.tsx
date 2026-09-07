@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { PanelSection } from "@/panels/parts"
+import { PanelGroup, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
 function ConnectionsPanel() {
@@ -46,9 +46,9 @@ function ConnectionsPanel() {
   const others = connections.filter((c) => c.url !== endpoint)
 
   return (
-    <div className="space-y-6 pt-2">
+    <div className="space-y-4">
       <PanelSection title="Connected to">
-        <div className="flex items-center gap-3 rounded-lg border bg-card p-3">
+        <div className="flex items-center gap-3 rounded-xl border bg-card p-3">
           <span
             className={cn(
               "size-2 shrink-0 rounded-full",
@@ -61,14 +61,14 @@ function ConnectionsPanel() {
             <p className="truncate font-mono text-xs text-muted-foreground">{endpoint}</p>
           </div>
           {account ? (
-            <span className="shrink-0 text-xs text-muted-foreground">{account}</span>
+            <Badge variant="outline" className="shrink-0 text-xs text-muted-foreground">{account}</Badge>
           ) : null}
         </div>
         {!here ? (
           <Button
             variant="outline"
             size="sm"
-            className="w-full gap-2"
+            className="h-11 w-full gap-2"
             onClick={() =>
               saveConnection({
                 label: hostOf(endpoint),
@@ -84,51 +84,55 @@ function ConnectionsPanel() {
       </PanelSection>
 
       <PanelSection
-        title="Devices watching right now"
-        description="All devices see the same windows. One decides the layout."
+        title="Attached devices"
+        description="One device controls the layout."
       >
         {peers.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-            Just this one.
+          <p className="rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground">
+            No other devices.
           </p>
         ) : (
-          <ul className="space-y-1">
-            {peers.map((peer) => (
-              <PeerRow
-                key={peer.id}
-                peer={peer}
-                you={peer.id === session}
-                manageable={owner && peer.id !== session}
-              />
-            ))}
-          </ul>
+          <PanelGroup asChild>
+            <ul>
+              {peers.map((peer) => (
+                <PeerRow
+                  key={peer.id}
+                  peer={peer}
+                  you={peer.id === session}
+                  manageable={owner && peer.id !== session}
+                />
+              ))}
+            </ul>
+          </PanelGroup>
         )}
         {!primary ? <TakeControl /> : null}
       </PanelSection>
 
       <PanelSection
-        title="Saved machines"
+        title="Saved"
         description="Stored on this device. Switching reloads the page."
       >
         {others.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-            Nothing saved yet.
+          <p className="rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground">
+            No saved machines.
           </p>
         ) : (
-          <ul className="space-y-1">
-            {[...others]
-              .sort((a, b) => b.lastUsed - a.lastUsed)
-              .map((entry) => (
-                <ConnectionRow key={entry.id} entry={entry} />
-              ))}
-          </ul>
+          <PanelGroup asChild>
+            <ul>
+              {[...others]
+                .sort((a, b) => b.lastUsed - a.lastUsed)
+                .map((entry) => (
+                  <ConnectionRow key={entry.id} entry={entry} />
+                ))}
+            </ul>
+          </PanelGroup>
         )}
       </PanelSection>
 
       {adding ? (
         <AddConnection onDone={() => setAdding(false)} />
       ) : (
-        <Button variant="outline" className="w-full gap-2" onClick={() => setAdding(true)}>
+        <Button variant="outline" className="h-11 w-full gap-2" onClick={() => setAdding(true)}>
           <Plus className="size-4" aria-hidden />
           Add a machine
         </Button>
@@ -159,8 +163,8 @@ const PeerRow = memo(function PeerRow({
   const viewing = peer.mode === "view"
 
   return (
-    <li className="space-y-2 rounded-lg border bg-card p-2">
-      <div className="flex items-center gap-2">
+    <li className="space-y-2 px-3 py-2">
+      <div className="flex min-h-7 items-center gap-2.5">
         <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium">
@@ -194,7 +198,7 @@ const PeerRow = memo(function PeerRow({
           <Button
             size="sm"
             variant="outline"
-            className="gap-1.5"
+            className="h-11 flex-1 gap-1.5"
             onClick={() =>
               actions.setSessionMode(peer.id, viewing ? "interact" : "view")
             }
@@ -204,12 +208,12 @@ const PeerRow = memo(function PeerRow({
             ) : (
               <Eye className="size-3.5" aria-hidden />
             )}
-            {viewing ? "Let them interact" : "Viewing only"}
+            {viewing ? "Allow input" : "Viewing only"}
           </Button>
           <Button
             size="sm"
             variant="outline"
-            className="gap-1.5 text-muted-foreground hover:text-destructive"
+            className="h-11 flex-1 gap-1.5 text-muted-foreground hover:text-destructive"
             onClick={() => actions.endSession(peer.id)}
           >
             <LogOut className="size-3.5" aria-hidden />
@@ -224,7 +228,7 @@ const PeerRow = memo(function PeerRow({
 function TakeControl() {
   const actions = useSessionActions()
   return (
-    <Button variant="outline" className="w-full gap-2" onClick={actions.takeControl}>
+    <Button variant="outline" className="h-11 w-full gap-2" onClick={actions.takeControl}>
       <Gamepad2 className="size-4" aria-hidden />
       Drive from this device
     </Button>
@@ -240,16 +244,16 @@ function deviceIcon(device: string) {
 
 const ConnectionRow = memo(function ConnectionRow({ entry }: { entry: Connection }) {
   return (
-    <li className="flex items-center gap-2 rounded-lg border bg-card p-2">
+    <li className="flex min-h-11 items-center gap-2.5 py-1 pl-3 pr-1.5">
       <Monitor className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <button className="min-w-0 flex-1 text-left" onClick={() => connectTo(entry)}>
+      <button className="min-h-11 min-w-0 flex-1 text-left" onClick={() => connectTo(entry)}>
         <span className="block truncate text-sm font-medium">{entry.label}</span>
         <span className="block truncate font-mono text-xs text-muted-foreground">{entry.url}</span>
       </button>
       <Button
         variant="ghost"
         size="icon"
-        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+        className="size-11 shrink-0 text-muted-foreground hover:text-destructive"
         aria-label={`Forget ${entry.label}`}
         onClick={() => forgetConnection(entry.id)}
       >
@@ -266,7 +270,7 @@ function AddConnection({ onDone }: { onDone: () => void }) {
 
   return (
     <form
-      className="space-y-3 rounded-lg border bg-card p-3"
+      className="space-y-3 rounded-xl border bg-card p-3"
       onSubmit={(event) => {
         event.preventDefault()
         const url = normalise(host)
@@ -277,7 +281,7 @@ function AddConnection({ onDone }: { onDone: () => void }) {
     >
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium">Add a machine</h3>
-        <Button type="button" variant="ghost" size="icon" className="size-7" onClick={onDone} aria-label="Cancel">
+        <Button type="button" variant="ghost" size="icon" className="size-11" onClick={onDone} aria-label="Cancel">
           <X className="size-4" aria-hidden />
         </Button>
       </div>
@@ -323,7 +327,7 @@ function AddConnection({ onDone }: { onDone: () => void }) {
         />
       </div>
 
-      <Button type="submit" className="w-full gap-2" disabled={!host.trim()}>
+      <Button type="submit" className="h-11 w-full gap-2" disabled={!host.trim()}>
         <Check className="size-4" aria-hidden />
         Save
       </Button>

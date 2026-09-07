@@ -49,7 +49,7 @@ import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Field, FieldRow, PanelSection } from "@/panels/parts"
+import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
 const EDGES: { value: NavEdgePref; label: string; icon: typeof PanelLeft }[] = [
@@ -61,9 +61,9 @@ const EDGES: { value: NavEdgePref; label: string; icon: typeof PanelLeft }[] = [
 ]
 
 const SIZES = [
-  { value: "sm", label: "Small" },
-  { value: "md", label: "Medium" },
-  { value: "lg", label: "Large" },
+  { value: "sm", label: "36 px" },
+  { value: "md", label: "44 px" },
+  { value: "lg", label: "52 px" },
 ] as const
 
 function SettingsPanel() {
@@ -90,7 +90,7 @@ function SettingsPanel() {
   }, [])
 
   return (
-    <Tabs defaultValue="navigation" className="pt-2">
+    <Tabs defaultValue="navigation" className="gap-[15px]">
       {/* Sticky, because these lists are long and losing the way back to the
         * other groups halfway down is the whole failure tabs exist to avoid. */}
       <TabsList className="sticky top-0 z-10 w-full">
@@ -105,7 +105,7 @@ function SettingsPanel() {
         </TabsTrigger>
       </TabsList>
 
-      <TabsContent value="navigation" className="space-y-6">
+      <TabsContent value="navigation" className="space-y-[15px]">
       <PanelSection
         title="Position"
         description="Auto follows the shape of the screen."
@@ -133,7 +133,6 @@ function SettingsPanel() {
 
       <PanelSection
         title="Button size"
-        description="Bigger targets for touch, smaller for a mouse."
       >
         <ToggleGroup
           type="single"
@@ -154,26 +153,26 @@ function SettingsPanel() {
 
       </TabsContent>
 
-      <TabsContent value="buttons" className="space-y-6">
+      <TabsContent value="buttons" className="space-y-[15px]">
       <PanelSection
         title="Buttons"
-        description="Reorder, hide, or pin buttons."
       >
-        <ul className="divide-y rounded-lg border">
+        <PanelGroup asChild>
+        <ul>
           {nav.order.map((id, index) => {
             const item = NAV_ITEMS[id]
             const hidden = nav.hidden.includes(id)
             const anchored = nav.anchored.includes(id)
             const Icon = item.icon
             return (
-              <li key={id} className="flex items-center gap-2 p-2">
+              <li key={id} className="flex min-h-11 items-center gap-1 px-3 py-1">
                 <Icon
                   className={cn("size-4 shrink-0", hidden && "opacity-40")}
                   aria-hidden
                 />
                 <span
                   className={cn(
-                    "min-w-0 flex-1 truncate text-sm",
+                    "min-w-0 flex-1 truncate text-[13.5px]",
                     hidden && "text-muted-foreground line-through",
                   )}
                 >
@@ -182,7 +181,7 @@ function SettingsPanel() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-8"
+                  className="size-11 shrink-0"
                   aria-label={`Move ${item.label} ${index === 0 ? "to the end" : "earlier"}`}
                   disabled={index === 0}
                   onClick={() => move(id, -1)}
@@ -192,7 +191,7 @@ function SettingsPanel() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-8"
+                  className="size-11 shrink-0"
                   aria-label={`Move ${item.label} later`}
                   disabled={index === nav.order.length - 1}
                   onClick={() => move(id, 1)}
@@ -202,7 +201,7 @@ function SettingsPanel() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-8"
+                  className="size-11 shrink-0"
                   aria-label={
                     anchored
                       ? `Move ${item.label} to the near end`
@@ -220,7 +219,7 @@ function SettingsPanel() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-8"
+                  className="size-11 shrink-0"
                   aria-label={hidden ? `Show ${item.label}` : `Hide ${item.label}`}
                   aria-pressed={!hidden}
                   onClick={() => toggle(id)}
@@ -235,27 +234,30 @@ function SettingsPanel() {
             )
           })}
         </ul>
+        </PanelGroup>
       </PanelSection>
 
       </TabsContent>
 
-      <TabsContent value="stream" className="space-y-6">
+      <TabsContent value="stream" className="space-y-[15px]">
         <StreamSettings />
       </TabsContent>
 
       {/* Outside the tabs on purpose: it resets all of them, so filing it under
         * one would be a lie about what it does. */}
       <PanelSection title="Reset">
-        <FieldRow>
-          <Field
-            label="Restore defaults"
-            hint="Resets this device only."
-          />
-          <Button variant="outline" size="sm" onClick={resetPrefs} className="gap-2">
-            <RotateCcw className="size-3.5" aria-hidden />
-            Reset
-          </Button>
-        </FieldRow>
+        <PanelGroup>
+          <FieldRow>
+            <Field
+              label="Restore defaults"
+              hint="Resets this device only."
+            />
+            <Button variant="outline" size="sm" onClick={resetPrefs} className="gap-2">
+              <RotateCcw className="size-3.5" aria-hidden />
+              Reset
+            </Button>
+          </FieldRow>
+        </PanelGroup>
       </PanelSection>
     </Tabs>
   )
@@ -307,13 +309,9 @@ function PauseInactive({ value, disabled }: { value: boolean; disabled: boolean 
         />
       </FieldRow>
       {confirming ? (
-        <div className="space-y-3 rounded-lg border border-warning/40 bg-warning/10 p-3">
+        <div className="space-y-3 bg-warning/10 p-3">
           <p className="text-sm">
-            <span className="font-medium">Streaming every window costs real performance.</span>{" "}
-            <span className="text-muted-foreground">
-              Windows you are not looking at keep encoding anyway. With
-              several open, that is what makes things feel slow.
-            </span>
+            Streaming all visible windows uses more bandwidth and battery.
           </p>
           <div className="flex gap-1.5">
             <Button
@@ -325,7 +323,7 @@ function PauseInactive({ value, disabled }: { value: boolean; disabled: boolean 
                 setConfirming(false)
               }}
             >
-              Stream them all anyway
+              Stream all windows
             </Button>
             <Button size="sm" className="h-11 flex-1" onClick={() => setConfirming(false)}>
               Keep pausing
@@ -359,20 +357,22 @@ function StreamSettings() {
     <>
       <PanelSection
         title="Video"
-        description="Pause video to save battery. Stays connected."
+        description="Pausing video keeps the connection open."
       >
-        <FieldRow>
-          <Field
-            label="Show the desktop"
-            hint={stream.enabled ? "Receiving video" : "Paused"}
-          />
-          <Switch
-            checked={stream.enabled}
-            onCheckedChange={(enabled) => patchPrefs("stream", { enabled })}
-            aria-label="Show the desktop"
-          />
-        </FieldRow>
-        <PauseInactive value={stream.pauseInactive} disabled={!stream.enabled} />
+        <PanelGroup>
+          <FieldRow>
+            <Field
+              label="Show the desktop"
+              hint={stream.enabled ? "Receiving video" : "Paused"}
+            />
+            <Switch
+              checked={stream.enabled}
+              onCheckedChange={(enabled) => patchPrefs("stream", { enabled })}
+              aria-label="Show the desktop"
+            />
+          </FieldRow>
+          <PauseInactive value={stream.pauseInactive} disabled={!stream.enabled} />
+        </PanelGroup>
       </PanelSection>
 
       <PanelSection
@@ -417,62 +417,62 @@ function StreamSettings() {
           */}
         {!hardware ? (
           <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            Browsers block hardware decoding over plain HTTP, so this falls
-            back to JPEG. Serve the shell over HTTPS for H.264.
+            No supported video decoder detected. Using JPEG. HTTPS is required
+            for H.264 and HEVC.
           </p>
         ) : null}
       </PanelSection>
 
       <PanelSection
         title="Sound"
-        description="Sound from apps running on the desktop."
       >
-        <FieldRow>
-          <Field
-            label="Enable audio"
-            hint={stream.audio ? "Streaming" : "Muted"}
-          />
-          <Switch
-            checked={stream.audio}
-            onCheckedChange={(audio) => patchPrefs("stream", { audio })}
-            aria-label="Enable audio"
-          />
-        </FieldRow>
+        <PanelGroup>
+          <FieldRow>
+            <Field
+              label="Enable audio"
+              hint={stream.audio ? "Streaming" : "Muted"}
+            />
+            <Switch
+              checked={stream.audio}
+              onCheckedChange={(audio) => patchPrefs("stream", { audio })}
+              aria-label="Enable audio"
+            />
+          </FieldRow>
+          {stream.audio ? (
+            <FieldRow>
+              <Field
+                label="Also play on the desktop's speakers"
+                hint={
+                  stream.localPlayback
+                    ? "Plays on the host and this device"
+                    : "Plays on connected devices only"
+                }
+              />
+              <Switch
+                checked={stream.localPlayback}
+                onCheckedChange={(localPlayback) => patchPrefs("stream", { localPlayback })}
+                aria-label="Also play on the desktop's speakers"
+              />
+            </FieldRow>
+          ) : null}
+          {stream.audio ? <VolumeRow saved={stream.volume} /> : null}
+        </PanelGroup>
         {/*
           * There is no way to detect the iOS mute switch, so this says it
           * rather than leaving someone to conclude the feature is broken.
           */}
         {stream.audio && isApple() ? (
           <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            No sound? Check the ringer switch. iOS mutes web audio when the
-            ringer is off.
+            If audio is silent on iOS, check Silent Mode.
           </p>
         ) : null}
-        {stream.audio ? (
-          <FieldRow>
-            <Field
-              label="Also play on the desktop's speakers"
-              hint={
-                stream.localPlayback
-                  ? "Anyone in that room hears it too"
-                  : "Only devices listening like this one"
-              }
-            />
-            <Switch
-              checked={stream.localPlayback}
-              onCheckedChange={(localPlayback) => patchPrefs("stream", { localPlayback })}
-              aria-label="Also play on the desktop's speakers"
-            />
-          </FieldRow>
-        ) : null}
-        {stream.audio ? <VolumeRow saved={stream.volume} /> : null}
         {stream.audio ? (
           <div className="space-y-1.5">
             <Field
               label="Sound quality"
               hint={
                 stream.audioQuality === "auto"
-                  ? "Follows the connection, like the picture"
+                  ? "Adapts to the connection"
                   : { high: "128 kbit/s", medium: "96 kbit/s", low: "64 kbit/s" }[
                       stream.audioQuality
                     ]
@@ -508,24 +508,6 @@ function StreamSettings() {
         ) : null}
       </PanelSection>
 
-      {/* Where the answers went.
-        *
-        * This tab used to end with a "Status" block and a set of audio
-        * diagnostics, which is a different kind of thing from everything above
-        * it: those are readings, and this is a set of switches. Splitting them
-        * was not tidying. A settings screen is where you go to *change* the
-        * session and the session panel is where you go when it looks wrong, so
-        * a reading filed here is a reading nobody finds at the moment they
-        * need it, and it was duplicated against the session panel besides.
-        *
-        * Two of them were also lying, which is what a readout kept next to the
-        * controls rather than next to the measurement gets you: the sound line
-        * said "uncompressed" while Opus was being decoded three inches above
-        * it, and the playback line decided which audio path was in use by
-        * asking whether the browser could decode *video*. */}
-      <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-        The readings are in the session panel.
-      </p>
     </>
   )
 }
@@ -546,7 +528,7 @@ function VolumeRow({ saved }: { saved: number }) {
     <FieldRow>
       <Field label="Volume" hint={`${Math.round(volume * 100)}%`} />
       <Slider
-        className="w-40"
+        className="w-[min(40%,150px)] shrink-0"
         min={0}
         max={1}
         step={0.05}

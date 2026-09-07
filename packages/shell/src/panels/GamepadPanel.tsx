@@ -11,7 +11,7 @@ import {
   ClipboardPaste,
   Copy,
   Download,
-  Gamepad2,
+  Plus,
   Pencil,
   RotateCcw,
   Upload,
@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Field, FieldRow, PanelSection } from "@/panels/parts"
+import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { PlacementChoice, hapticHintProp } from "@/panels/placement"
 import { CustomKeys } from "@/panels/CustomKeys"
 
@@ -39,22 +39,21 @@ const SKINS: { value: GamepadSkin; label: string; sample: string }[] = [
 function GamepadPanel() {
   const prefs = usePrefs()
   const { visible, editing } = useGamepad()
+  const hapticHint = hapticHintProp().hint
 
   return (
-    <div className="space-y-6 pt-2">
-      <PanelSection>
+    <div className="space-y-[15px]">
+      <PanelGroup>
         <FieldRow>
-          <Field label="Show the gamepad" hint="Drawn over the desktop." />
+          <Field label="Show the gamepad" />
           <Switch
             checked={visible}
             onCheckedChange={(v) => setGamepad({ visible: v, editing: v ? editing : false })}
+            aria-label="Show the gamepad"
           />
         </FieldRow>
         <FieldRow>
-          <Field
-            label="Edit layout"
-            hint="Drag the controls to rearrange them."
-          />
+          <Field label="Edit layout" hint={visible ? "Drag the controls to rearrange them." : "Turn the gamepad on first."} />
           <Button
             size="sm"
             variant={editing ? "default" : "outline"}
@@ -67,33 +66,19 @@ function GamepadPanel() {
             {editing ? "Done" : "Edit"}
           </Button>
         </FieldRow>
-        <Backup />
-      </PanelSection>
+      </PanelGroup>
 
-      <PanelSection title="Physical controller">
-        <p className="text-xs text-muted-foreground">
-          If input gets stuck, release the controller buttons and tap reset.
-          Clears held input without restarting the game. Each control becomes
-          available again when it returns to its resting position.
-        </p>
-        <Button variant="outline" size="sm" onClick={resetPhysicalGamepad}>
-          Reset physical controller
-        </Button>
-      </PanelSection>
-
-      <PanelSection
-        title="Buttons"
-        description="Changes button labels only."
-      >
+      <PanelSection title="Labels">
         <ToggleGroup
           type="single"
           value={prefs.gamepad.skin}
           onValueChange={(v) => v && patchPrefs("gamepad", { skin: v as GamepadSkin })}
           variant="outline"
           className="grid w-full grid-cols-3"
+          aria-label="Gamepad button labels"
         >
           {SKINS.map(({ value, label, sample }) => (
-            <ToggleGroupItem key={value} value={value} className="h-auto flex-col gap-0.5 py-2">
+            <ToggleGroupItem key={value} value={value} className="h-auto flex-col gap-0.5 px-1 py-2">
               <span className="text-xs">{label}</span>
               <span className="text-[10px] opacity-70">{sample}</span>
             </ToggleGroupItem>
@@ -102,27 +87,29 @@ function GamepadPanel() {
       </PanelSection>
 
       <PanelSection title="Opacity">
-        <div className="flex items-center gap-3">
-          <Slider
-            value={[prefs.gamepad.opacity]}
-            min={0.2}
-            max={1}
-            step={0.05}
-            onValueChange={([opacity]) =>
-              opacity !== undefined && patchPrefs("gamepad", { opacity })
-            }
-            className="flex-1"
-            aria-label="Gamepad opacity"
-          />
-          <span className="w-10 text-right font-mono text-xs text-muted-foreground">
-            {Math.round(prefs.gamepad.opacity * 100)}%
-          </span>
-        </div>
+        <PanelGroup>
+          <FieldRow>
+            <Slider
+              value={[prefs.gamepad.opacity]}
+              min={0.2}
+              max={1}
+              step={0.05}
+              onValueChange={([opacity]) =>
+                opacity !== undefined && patchPrefs("gamepad", { opacity })
+              }
+              className="flex-1"
+              aria-label="Gamepad opacity"
+            />
+            <span className="w-10 text-right text-[13px] tabular-nums text-muted-foreground">
+              {Math.round(prefs.gamepad.opacity * 100)}%
+            </span>
+          </FieldRow>
+        </PanelGroup>
       </PanelSection>
 
       <PanelSection
         title="Placement"
-        description="Overlay floats over the game. Stacked gives the pad its own space and the desktop shrinks to fit."
+        description="Stacked reduces the desktop to make room for the gamepad."
       >
         <PlacementChoice
           value={prefs.gamepad.placement}
@@ -133,66 +120,79 @@ function GamepadPanel() {
 
       <PanelSection
         title="Stray taps"
-        description="Many games switch to mouse control the moment they see a click, and stop reading the pad until something switches them back. Blocking stops a near miss costing you the controller."
       >
-        <FieldRow>
-          <Field
-            label="Block taps outside the pads"
-            hint={
-              prefs.gamepad.placement === "overlay"
-                ? "Only while the controller is up, and never while editing its layout."
-                : "Only applies to an overlay controller. Stacked has its own space, so nothing sits behind it."
-            }
-          />
-          <Switch
-            checked={prefs.gamepad.shield}
-            disabled={prefs.gamepad.placement !== "overlay"}
-            onCheckedChange={(shield) => patchPrefs("gamepad", { shield })}
-            aria-label="Block taps outside the pads"
-          />
-        </FieldRow>
+        <PanelGroup>
+          <FieldRow>
+            <Field
+              label="Block taps outside the pads"
+              hint={prefs.gamepad.placement === "overlay"
+                ? "Overlay only, never while editing."
+                : "Only applies to an overlay controller."}
+            />
+            <Switch
+              checked={prefs.gamepad.shield}
+              disabled={prefs.gamepad.placement !== "overlay"}
+              onCheckedChange={(shield) => patchPrefs("gamepad", { shield })}
+              aria-label="Block taps outside the pads"
+            />
+          </FieldRow>
+        </PanelGroup>
       </PanelSection>
 
-      <PanelSection title="Feedback">
-        <FieldRow>
-          <Field label="Vibrate on press" {...hapticHintProp()} />
-          <Switch
-            checked={prefs.gamepad.haptics}
-            onCheckedChange={(haptics) => patchPrefs("gamepad", { haptics })}
-          />
-        </FieldRow>
-      </PanelSection>
-
-      <PanelSection
-        title="Keyboard buttons"
-        description="A key or a chord as a button on the pad, for the things a controller has no button for."
-      >
-        <CustomKeys />
+      <PanelSection title="Haptics" {...(hapticHint ? { description: hapticHint } : {})}>
+        <PanelGroup>
+          <FieldRow>
+            <Field label="Vibrate on press" />
+            <Switch
+              checked={prefs.gamepad.haptics}
+              onCheckedChange={(haptics) => patchPrefs("gamepad", { haptics })}
+              aria-label="Vibrate on press"
+            />
+          </FieldRow>
+        </PanelGroup>
       </PanelSection>
 
       <PanelSection title="Layout">
-        <FieldRow>
-          <Field
-            label="Restore the default arrangement"
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            className="gap-2"
-            onClick={() => setGamepad({ pads: DEFAULT_LAYOUT })}
-          >
-            <RotateCcw className="size-3.5" aria-hidden />
-            Reset
-          </Button>
-        </FieldRow>
-        {!visible ? (
-          <p className="flex items-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-            <Gamepad2 className="size-4 shrink-0" aria-hidden />
-            Turn the gamepad on to edit it.
-          </p>
-        ) : null}
+        <PanelGroup>
+          <details>
+            <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-3 py-2 text-[13.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+              Keyboard buttons
+              <span className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground">
+                <Plus className="size-3.5" aria-hidden /> Add a key
+              </span>
+            </summary>
+            <div className="px-3 pb-3">
+              <p className="mb-3 text-xs text-muted-foreground">A key or a chord as a button on the pad.</p>
+              <CustomKeys />
+            </div>
+          </details>
+          <Backup />
+          <FieldRow>
+            <Field label="Restore the default arrangement" />
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-2"
+              onClick={() => setGamepad({ pads: DEFAULT_LAYOUT })}
+            >
+              <RotateCcw className="size-3.5" aria-hidden />
+              Reset
+            </Button>
+          </FieldRow>
+        </PanelGroup>
       </PanelSection>
-      <ControllerDiagnostics />
+
+      <PanelSection title="Physical controller" description="Release the controller buttons before resetting.">
+        <PanelGroup>
+          <FieldRow>
+            <Field label="Clear held input" />
+            <Button variant="outline" size="sm" onClick={resetPhysicalGamepad} aria-label="Reset physical controller">
+              Reset
+            </Button>
+          </FieldRow>
+          <ControllerDiagnostics />
+        </PanelGroup>
+      </PanelSection>
     </div>
   )
 }
@@ -200,13 +200,9 @@ function GamepadPanel() {
 function ControllerDiagnostics() {
   const [recording, setRecording] = useState(controllerTrace.recording)
   return (
-    <details className="text-sm">
-      <summary className="cursor-pointer">Controller troubleshooting</summary>
-      <p className="my-3 text-xs text-muted-foreground">
-        Record input while playing, then return here to save it. Keeps the last
-        4,096 samples (about 33 seconds) to help locate missed presses.
-      </p>
-      <Button variant="outline" size="sm" onClick={() => {
+    <FieldRow>
+      <Field label="Record input" hint="Last 4,096 samples, about 33 seconds." />
+      <Button variant="outline" size="sm" aria-label={recording ? "Stop and save recording" : "Record controller input"} onClick={() => {
         if (!recording) {
           controllerTrace.start()
           setRecording(true)
@@ -221,9 +217,9 @@ function ControllerDiagnostics() {
         link.click()
         setTimeout(() => URL.revokeObjectURL(url), 1000)
       }}>
-        {recording ? "Stop and save recording" : "Record controller input"}
+        {recording ? "Stop and save" : "Record"}
       </Button>
-    </details>
+    </FieldRow>
   )
 }
 
@@ -268,9 +264,9 @@ const Backup = memo(function Backup() {
       <FieldRow>
         <Field
           label="Save a backup"
-          hint="Layout, sizes, positions and every setting on this panel."
+          hint="Layout and controller settings."
         />
-        <div className="flex gap-1.5">
+        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
           <Button
             size="sm"
             variant="outline"
@@ -314,7 +310,7 @@ const Backup = memo(function Backup() {
 
       <FieldRow>
         <Field label="Restore" hint="Replaces the controller with a saved one." />
-        <div className="flex gap-1.5">
+        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
           <input
             ref={file}
             type="file"
@@ -357,7 +353,7 @@ const Backup = memo(function Backup() {
       </FieldRow>
 
       {pasting ? (
-        <div className="space-y-2">
+        <div className="space-y-2 px-3 pb-3">
           <textarea
             value={pasted}
             onChange={(event) => setPasted(event.target.value)}
@@ -379,12 +375,12 @@ const Backup = memo(function Backup() {
       ) : null}
 
       {problem ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 m-3 p-2 text-xs text-destructive">
           {problem}
         </p>
       ) : null}
       {restored ? (
-        <p className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
+        <p className="rounded-md border border-dashed m-3 p-2 text-xs text-muted-foreground">
           Controller restored.
         </p>
       ) : null}

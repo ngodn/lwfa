@@ -250,3 +250,125 @@
     padding-right: env(safe-area-inset-right);
   }
 }
+
+/* Grouped panels share surfaces and controls without changing the input dock. */
+.panel-group {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--card-foreground);
+}
+
+.panel-group > * {
+  position: relative;
+  min-width: 0;
+}
+
+.panel-group > * + *::before {
+  position: absolute;
+  inset: 0 12px auto;
+  border-top: 1px solid var(--border);
+  pointer-events: none;
+  content: "";
+}
+
+.shell-panel {
+  box-shadow: 12px 0 40px -16px rgb(0 0 0 / 35%);
+}
+
+.shell-panel .panel-row > :first-child,
+.shell-panel .panel-readout > :first-child {
+  min-width: 0;
+}
+
+.shell-panel .panel-readout > :last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.shell-panel [data-slot="toggle-group"],
+.shell-panel [data-slot="tabs-list"] {
+  gap: 3px;
+  height: auto;
+  padding: 3px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--muted);
+  box-shadow: none;
+}
+
+.shell-panel [data-slot="toggle-group-item"],
+.shell-panel [data-slot="tabs-trigger"] {
+  position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  height: auto;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  box-shadow: none;
+}
+
+.shell-panel [data-slot="toggle-group-item"][data-state="on"],
+.shell-panel [data-slot="tabs-trigger"][data-state="active"] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 16%);
+  font-weight: 600;
+}
+
+.shell-panel [data-slot="toggle-group-item"][data-state="on"] > svg {
+  color: var(--primary);
+}
+
+.shell-panel [data-slot="button"] {
+  position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+/* The visual control is 32px; its 44px hit area stays inside a 44px row. */
+.shell-panel .panel-row [data-slot="button"] {
+  min-height: 32px;
+  height: 32px;
+}
+
+.shell-panel .panel-row [data-slot="button"]::after {
+  position: absolute;
+  inset: 50% 0 auto;
+  height: max(100%, 44px);
+  transform: translateY(-50%);
+  content: "";
+}
+
+.shell-panel [data-slot="switch"]::before {
+  inset: 50% auto auto 50%;
+  width: max(100%, 44px);
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+.shell-panel [data-slot="slider"][data-orientation="horizontal"] {
+  min-height: 44px;
+}
+
+.shell-panel [data-slot="input"],
+.shell-panel [data-slot="select-trigger"] {
+  min-height: 44px;
+  border-radius: 9px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-panel {
+    animation: none;
+    transition: none;
+  }
+}

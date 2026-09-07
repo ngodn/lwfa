@@ -12,11 +12,11 @@
  */
 
 import { Suspense, lazy, memo, useMemo } from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, X } from "lucide-react"
 import { resolveEdge, usePrefSection, type NavItemId } from "@/lib/prefs"
 import { NAV_GROUPS, NAV_ITEMS, type NavGroupId } from "@/nav/registry"
 import { usePortrait } from "@/components/NavRail"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useFocusReturn } from "@/lib/useFocusReturn"
@@ -127,6 +127,7 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
     <Sheet open={active !== null} onOpenChange={(open) => !open && onClose()} modal={false}>
       <SheetContent
         side={side}
+        showCloseButton={false}
         className={cnPanel(vertical)}
         style={geometry}
         onOpenAutoFocus={focusReturn.onOpenAutoFocus}
@@ -150,22 +151,16 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
       >
         {view === null ? null : view.kind === "item" ? (
           <>
-            <SheetHeader className="shrink-0">
-              <SheetTitle>{view.item.label}</SheetTitle>
-              <SheetDescription>{view.item.hint}</SheetDescription>
-            </SheetHeader>
+            <PanelHeader title={view.item.label} description={view.item.hint} />
             <PanelBody id={view.item.id} />
           </>
         ) : (
           <>
-            <SheetHeader className="shrink-0">
-              <SheetTitle>{view.group.label}</SheetTitle>
-              <SheetDescription>{view.group.hint}</SheetDescription>
-            </SheetHeader>
+            <PanelHeader title={view.group.label} description={view.group.hint} />
             <Tabs defaultValue={view.first} className="flex min-h-0 flex-1 flex-col">
-              <TabsList className="mx-4 shrink-0 justify-start overflow-x-auto">
+              <TabsList className="mx-3.5 mt-3.5 max-w-[calc(100%-1.75rem)] shrink-0 justify-start overflow-x-auto">
                 {view.members.map((id) => (
-                  <TabsTrigger key={id} value={id} className="gap-1.5">
+                  <TabsTrigger key={id} value={id} className="shrink-0 gap-1.5">
                     {NAV_ITEMS[id].label}
                   </TabsTrigger>
                 ))}
@@ -193,7 +188,21 @@ function cnPanel(vertical: boolean): string {
   // `overflow-hidden` is the backstop. A panel whose content outgrows the sheet
   // should scroll inside it; if some future panel finds a way to escape anyway,
   // it gets clipped rather than laid over the rail.
-  return ["flex flex-col gap-4 overflow-hidden p-0 pt-4", vertical ? "h-full" : "w-full"].join(" ")
+  return ["shell-panel flex flex-col gap-0 overflow-hidden p-0", vertical ? "h-full" : "w-full"].join(" ")
+}
+
+function PanelHeader({ title, description }: { title: string; description: string }) {
+  return (
+    <SheetHeader className="h-16 shrink-0 flex-row items-center justify-between gap-3 border-b px-5 py-0">
+      <SheetTitle className="text-lg tracking-[-0.01em]">{title}</SheetTitle>
+      <SheetDescription className="sr-only">{description}</SheetDescription>
+      <SheetClose aria-label="Close" className="grid size-11 shrink-0 place-items-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <span className="grid size-[34px] place-items-center rounded-full bg-muted transition-colors hover:bg-accent" aria-hidden>
+          <X className="size-[15px]" strokeWidth={2.2} />
+        </span>
+      </SheetClose>
+    </SheetHeader>
+  )
 }
 
 const PanelBody = memo(function PanelBody({ id }: { id: NavItemId }) {
@@ -203,7 +212,7 @@ const PanelBody = memo(function PanelBody({ id }: { id: NavItemId }) {
     <ScrollArea className="min-h-0 flex-1">
       {/* The sheet itself reaches the physical bottom edge, so the last row
           of content needs to clear the home indicator. */}
-      <div className="px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]" data-selectable>
+      <div className="panel-body px-3.5 pt-3.5 pb-[max(1.375rem,env(safe-area-inset-bottom))]" data-selectable>
         <Suspense fallback={<PanelPending />}>
           <Panel />
         </Suspense>

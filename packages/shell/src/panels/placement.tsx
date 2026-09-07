@@ -29,13 +29,13 @@ export const PlacementChoice = memo(function PlacementChoice({
       className="grid w-full grid-cols-2"
       aria-label={label}
     >
-      <ToggleGroupItem value="overlay" className="h-auto flex-col gap-1 py-2.5">
-        <Layers className="size-4" aria-hidden />
+      <ToggleGroupItem value="overlay" className="h-auto flex-col gap-0.5 px-1 py-2">
+        <Layers className="size-[15px]" aria-hidden />
         <span className="text-xs">Overlay</span>
         <span className="text-[10px] opacity-70">Floats on top</span>
       </ToggleGroupItem>
-      <ToggleGroupItem value="stacked" className="h-auto flex-col gap-1 py-2.5">
-        <PanelBottom className="size-4" aria-hidden />
+      <ToggleGroupItem value="stacked" className="h-auto flex-col gap-0.5 px-1 py-2">
+        <PanelBottom className="size-[15px]" aria-hidden />
         <span className="text-xs">Stacked</span>
         <span className="text-[10px] opacity-70">Takes its own space</span>
       </ToggleGroupItem>
@@ -55,12 +55,10 @@ function hapticHint(): string | undefined {
     case "vibration":
       return undefined
     case "switch":
-      // Deliberately specific. "Not supported" would be wrong on iOS 26.4 and
-      // earlier, where it does work, and vague on 26.5 and later, where the
-      // web has no way to ask for a haptic at all.
-      return "Safari has no vibration API. lwfa uses the system toggle's haptic instead, which Apple removed in iOS 26.5."
+      // The switch capability does not guarantee vibration feedback.
+      return "Vibration may be unavailable in this browser."
     case "none":
-      return "This browser cannot vibrate."
+      return "Vibration is unavailable in this browser."
   }
 }
 

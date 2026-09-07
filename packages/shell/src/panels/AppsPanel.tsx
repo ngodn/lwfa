@@ -22,7 +22,7 @@ import { useApps } from "@/lib/apps"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { PanelSection } from "@/panels/parts"
+import { PanelGroup, PanelSection } from "@/panels/parts"
 import { markPending, usePending } from "@/lib/pending"
 import { cn } from "@/lib/utils"
 
@@ -43,7 +43,7 @@ function AppsPanel() {
   }, [apps.length, loading, actions])
 
   return (
-    <div className="space-y-4 pt-2">
+    <div className="space-y-4">
       <div className="relative">
         <Search
           className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
@@ -53,7 +53,7 @@ function AppsPanel() {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search applications"
-          className="pl-9"
+          className="h-11 pl-9"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
@@ -67,60 +67,62 @@ function AppsPanel() {
           Reading installed applications&hellip;
         </div>
       ) : matches.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-8 text-center">
+        <div className="rounded-xl border border-dashed p-8 text-center">
           <p className="text-sm text-muted-foreground">
             {query ? `Nothing matches “${query}”.` : "No applications found."}
           </p>
         </div>
       ) : (
         <PanelSection title={`${matches.length} application${matches.length === 1 ? "" : "s"}`}>
-          <ul className="space-y-1">
-            {matches.map((app) => (
-              <AppRow
-                key={app.id}
-                app={app}
-                icon={icons.get(app.id)}
-                onLaunch={() => {
-                  // Keyed on the command rather than the entry id, because
-                  // that is what `windowOpened` can be matched back to. See
-                  // `lib/pending` and the launch tracking in App.
-                  markPending(launchKey(app.exec), LAUNCH_TIMEOUT_MS)
-                  actions.spawn(app.exec, app.terminal)
-                }}
-              />
-            ))}
-          </ul>
+          <PanelGroup asChild>
+            <ul>
+              {matches.map((app) => (
+                <AppRow
+                  key={app.id}
+                  app={app}
+                  icon={icons.get(app.id)}
+                  onLaunch={() => {
+                    // Keyed on the command rather than the entry id, because
+                    // that is what `windowOpened` can be matched back to. See
+                    // `lib/pending` and the launch tracking in App.
+                    markPending(launchKey(app.exec), LAUNCH_TIMEOUT_MS)
+                    actions.spawn(app.exec, app.terminal)
+                  }}
+                />
+              ))}
+            </ul>
+          </PanelGroup>
         </PanelSection>
       )}
 
       {windowless.length > 0 && (
         <PanelSection title="Running with no window">
           <p className="mb-2 text-xs text-muted-foreground">
-            Still running here, with nothing on screen. There is no tray in this
-            session, so they cannot be reached any other way. Steam does this
-            when you close its window, and it keeps the machine's own copy from
-            starting until it lets go.
+            Background applications.
           </p>
-          <ul className="flex flex-col gap-1">
-            {windowless.map((app) => (
-              <li
-                key={app.pid}
-                className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-2 py-1.5"
-              >
-                <span className="min-w-0 truncate text-sm">
-                  {app.program}
-                  <span className="ml-1.5 text-xs text-muted-foreground">{app.pid}</span>
-                </span>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => actions.send({ type: "quitWindowless", pid: app.pid })}
+          <PanelGroup asChild>
+            <ul>
+              {windowless.map((app) => (
+                <li
+                  key={app.pid}
+                  className="flex min-h-11 items-center justify-between gap-2 px-3 py-2"
                 >
-                  Quit
-                </Button>
-              </li>
-            ))}
-          </ul>
+                  <span className="min-w-0 truncate text-sm">
+                    {app.program}
+                    <span className="ml-1.5 text-xs text-muted-foreground">{app.pid}</span>
+                  </span>
+                  <Button
+                    size="sm"
+                    className="h-11"
+                    variant="secondary"
+                    onClick={() => actions.send({ type: "quitWindowless", pid: app.pid })}
+                  >
+                    Quit
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </PanelGroup>
         </PanelSection>
       )}
 
@@ -165,13 +167,13 @@ const AppRow = memo(function AppRow({
     // rows scrolled out of view. A hundred rows with an image each is enough
     // that this is measurable, and `contain-intrinsic-size` keeps the scrollbar
     // honest by telling it how tall a skipped row would be.
-    <li style={{ contentVisibility: "auto", containIntrinsicSize: "auto 56px" }}>
+    <li style={{ contentVisibility: "auto", containIntrinsicSize: "auto 52px" }}>
       <button
         onClick={onLaunch}
         disabled={starting}
         aria-busy={starting || undefined}
         className={cn(
-          "flex w-full items-center gap-3 rounded-lg border border-transparent p-2 text-left",
+          "flex min-h-11 w-full items-center gap-2.5 px-3 py-2 text-left",
           "transition-colors active:bg-accent [@media(hover:hover)]:hover:bg-accent",
           // Not `disabled:opacity-50`: a launching app should look busy, not
           // unavailable. Dimming it reads as "you cannot have this".
@@ -185,13 +187,13 @@ const AppRow = memo(function AppRow({
             // Decoded off the main thread and never lazy: the list is short and
             // a launcher that pops icons in as you scroll feels broken.
             decoding="async"
-            className="size-9 shrink-0 rounded-lg object-contain"
+            className="size-8 shrink-0 rounded-lg object-contain"
           />
         ) : (
           // No icon resolved. A coloured initial beats a broken-image glyph,
           // and is stable per app so the list stays recognisable.
           <span
-            className="grid size-9 shrink-0 place-items-center rounded-lg text-sm font-semibold text-white"
+            className="grid size-8 shrink-0 place-items-center rounded-lg text-sm font-semibold text-white"
             style={{ background: tint(app.id) }}
             aria-hidden
           >
@@ -221,7 +223,7 @@ function RunBox({ onRun }: { onRun: (command: string) => void }) {
   const [command, setCommand] = useState("")
   return (
     <form
-      className="flex gap-2"
+      className="flex gap-2 rounded-xl border bg-card p-2"
       onSubmit={(event) => {
         event.preventDefault()
         const trimmed = command.trim()
@@ -234,13 +236,13 @@ function RunBox({ onRun }: { onRun: (command: string) => void }) {
         value={command}
         onChange={(event) => setCommand(event.target.value)}
         placeholder="alacritty"
-        className="font-mono text-sm"
+        className="h-11 min-w-0 font-mono text-sm"
         autoCapitalize="none"
         autoCorrect="off"
         spellCheck={false}
         aria-label="Command to run"
       />
-      <Button type="submit" variant="outline" disabled={!command.trim()}>
+      <Button type="submit" className="h-11" variant="outline" disabled={!command.trim()}>
         Run
       </Button>
     </form>

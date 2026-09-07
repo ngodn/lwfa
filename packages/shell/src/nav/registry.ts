@@ -59,43 +59,43 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   info: {
     id: "info",
     label: "Session",
-    hint: "How the stream and connection are doing",
+    hint: "Connection and stream status",
     icon: Info,
   },
   connections: {
     id: "connections",
     label: "Connections",
-    hint: "Machines you can reach",
+    hint: "Saved connections",
     icon: Network,
   },
   access: {
     id: "access",
     label: "Access",
-    hint: "Who may connect, and what they can do",
+    hint: "Accounts and permissions",
     icon: Users,
   },
   theme: {
     id: "theme",
     label: "Appearance",
-    hint: "Theme, movement and touch feedback",
+    hint: "Theme and feedback",
     icon: SunMoon,
   },
   settings: {
     id: "settings",
     label: "Settings",
-    hint: "Navigation, input and stream",
+    hint: "Navigation and streaming",
     icon: Settings,
   },
   apps: {
     id: "apps",
     label: "Apps",
-    hint: "Launch something on the remote machine",
+    hint: "Launch apps",
     icon: Grid3x3,
   },
   escape: {
     id: "escape",
     label: "Escape",
-    hint: "Closes menus, and leaves vim's insert mode",
+    hint: "Send Escape",
     // Never drawn: `glyph` wins. Present because every item has an icon, and
     // there is no icon anyone reads as "Escape" — a keycap is how keyboards
     // have labelled it for forty years.
@@ -106,34 +106,34 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   gamepad: {
     id: "gamepad",
     label: "Gamepad",
-    hint: "On-screen controller you can rearrange",
+    hint: "Show controller",
     icon: Gamepad2,
     kind: "dock",
   },
   mouse: {
     id: "mouse",
     label: "Mouse",
-    hint: "Tap where you want, as a real mouse click",
+    hint: "Show mouse controls",
     icon: Mouse,
     kind: "dock",
   },
   keyboard: {
     id: "keyboard",
     label: "Keyboard",
-    hint: "On-screen keyboard, with held modifiers",
+    hint: "Show keyboard",
     icon: KeyboardIcon,
     kind: "dock",
   },
   clipboard: {
     id: "clipboard",
     label: "Clipboard",
-    hint: "What has been copied, here and on the machine",
+    hint: "Clipboard history",
     icon: ClipboardList,
   },
   workspaces: {
     id: "workspaces",
     label: "Windows",
-    hint: "Workspaces, arrangement and focus",
+    hint: "Window layout and scaling",
     icon: AppWindow,
   },
 }
@@ -165,7 +165,7 @@ export const NAV_GROUPS: Record<NavGroupId, NavGroup> = {
   more: {
     id: "more",
     label: "More",
-    hint: "Everything else",
+    hint: "Session and settings",
     icon: MoreHorizontal,
     // Order matters: this is the order they appear inside the panel, and
     // the clipboard is the one thing in here somebody reaches for mid-task

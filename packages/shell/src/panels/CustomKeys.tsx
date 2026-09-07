@@ -102,16 +102,16 @@ export const CustomKeys = memo(function CustomKeys() {
   return (
     <div className="space-y-3">
       {custom.length > 0 ? (
-        <ul className="space-y-1.5">
+        <ul className="divide-y divide-border rounded-lg border bg-muted/20">
           {custom.map((pad) => (
-            <li key={pad.id} className="flex items-center gap-2">
-              <span className="flex-1 truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
+            <li key={pad.id} className="flex min-h-11 items-center gap-2 px-2">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs">
                 {pad.label ?? (pad.chord ? chordLabel(pad.chord) : "key")}
               </span>
               <Button
                 size="icon"
                 variant="ghost"
-                className="size-7 shrink-0"
+                className="size-11 shrink-0"
                 aria-label={`Remove ${pad.chord ? chordLabel(pad.chord) : "button"}`}
                 onClick={() => setPads(pads.filter((other) => other.id !== pad.id))}
               >
@@ -137,7 +137,7 @@ export const CustomKeys = memo(function CustomKeys() {
                 return next
               })
             }
-            className="h-7 px-2 text-xs"
+            className="h-11 min-w-11 flex-1 rounded-lg px-2 text-xs"
           >
             {label}
           </Toggle>
@@ -145,7 +145,7 @@ export const CustomKeys = memo(function CustomKeys() {
       </div>
 
       <div
-        className="grid max-h-44 grid-cols-[repeat(auto-fill,minmax(2.6rem,1fr))] gap-1 overflow-y-auto rounded-md border p-1.5"
+        className="grid max-h-56 grid-cols-[repeat(auto-fill,minmax(2.75rem,1fr))] gap-1 overflow-y-auto rounded-md border p-1.5"
         role="listbox"
         aria-label="Key"
       >
@@ -157,7 +157,7 @@ export const CustomKeys = memo(function CustomKeys() {
             aria-selected={code === key.code}
             onClick={() => setCode(key.code === code ? null : key.code)}
             className={cn(
-              "rounded px-1 py-1 text-[0.65rem] leading-tight",
+              "min-h-11 min-w-11 rounded-md px-1 py-1 text-xs leading-tight",
               "border border-transparent hover:bg-accent",
               code === key.code && "border-primary bg-primary/15 font-medium",
             )}
@@ -167,10 +167,10 @@ export const CustomKeys = memo(function CustomKeys() {
         ))}
       </div>
 
-      <FieldRow>
+      <FieldRow className="px-0">
         <Field
           label={chord ? chordLabel(chord) : "Pick a key"}
-          hint={chord ? "Lands in the middle; drag it in edit mode." : "Modifiers are optional."}
+          hint={chord ? "Drag to reposition in edit mode." : "Modifiers are optional."}
         />
         <Button size="sm" className="gap-1.5" disabled={!chord} onClick={add}>
           <Plus className="size-3.5" aria-hidden />

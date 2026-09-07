@@ -22,24 +22,17 @@
 
 import { memo } from "react"
 import {
-  Activity,
-  AppWindow,
-  Cpu,
   Gamepad2,
-  Gauge,
-  Layers,
   LogOut,
-  Radio,
   RefreshCw,
 } from "lucide-react"
 import { useSessionActions, useSessionState } from "@/session"
 import { useLog } from "@/lib/log"
 import { supportsH264 } from "@/decode"
 import { currentWorkspace, focusedWindow } from "@/strip"
-import { usePrefs } from "@/lib/prefs"
-import { Badge } from "@/components/ui/badge"
+import { patchPrefs, usePrefs } from "@/lib/prefs"
 import { Button } from "@/components/ui/button"
-import { PanelSection } from "@/panels/parts"
+import { FieldRow, PanelGroup, PanelSection, ReadoutRow } from "@/panels/parts"
 import { describeStatus, type Tone } from "@/lib/status"
 import { describeFormat, useStreamFormat } from "@/lib/streamFormat"
 import { useStreamStats } from "@/lib/streamStats"
@@ -76,29 +69,22 @@ function SessionPanel() {
   const stale = engineVersion !== null && engineVersion !== SHELL_VERSION
 
   return (
-    <div className="space-y-6 pt-2">
+    <div className="space-y-4">
       <PanelSection title="Connection">
-        <div className="grid grid-cols-2 gap-2">
-          <Stat icon={Radio} label="Status" value={report.label} tone={report.tone} />
-          {/* What is arriving, not what this browser could take. The engine
-            * picks the codec from what every connected client reports, so it
-            * is not knowable here in advance; the frames are the only honest
-            * source. See `lib/streamFormat`. */}
-          <Stat icon={Cpu} label="Decode" value={describeFormat(format)} verbatim />
-          <Stat icon={Layers} label="Windows" value={String(windows.size)} />
-          <Stat
-            icon={Activity}
-            label="Viewport"
-            value={output.width > 0 ? `${output.width}×${output.height}` : "—"}
-            verbatim
-          />
-        </div>
+        <PanelGroup asChild>
+          <dl>
+            <Row label="Status" value={<span className={cn("inline-flex items-center gap-1.5 capitalize", toneClass(report.tone))}><span className="size-1.5 rounded-full bg-current" aria-hidden />{report.label}</span>} />
+            <Row label="Decode" value={describeFormat(format)} />
+            <Row label="Windows" value={windows.size} />
+            <Row label="Viewport" value={output.width > 0 ? `${output.width} × ${output.height}` : "Unavailable"} />
+          </dl>
+        </PanelGroup>
         {report.tone === "good" ? null : (
           <p className="text-xs text-muted-foreground">{report.hint}</p>
         )}
         {!supportsH264() ? (
           <p className="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning">
-            Using JPEG. Serve the shell over HTTPS to enable H.264.
+            H.264 unavailable. A supported browser and HTTPS are required.
           </p>
         ) : null}
       </PanelSection>
@@ -115,43 +101,24 @@ function SessionPanel() {
         */}
       <PanelSection
         title="Video"
-        description="Counted as the video arrives."
       >
         {!streamPrefs.enabled ? (
-          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            Paused. Turn the picture back on in Settings.
+          <p className="rounded-xl border border-dashed p-3 text-xs text-muted-foreground">
+            Video paused. Enable it in Stream.
           </p>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-2">
-              <Stat
-                icon={Gauge}
-                label="Frame rate"
-                value={stats.fps > 0 ? `${stats.fps}/s` : "—"}
-                tone={rateTone(stats.fps)}
-                verbatim
-              />
-              <Stat
-                icon={Activity}
-                label="Bitrate"
-                value={describeRate(stats.kbits)}
-                verbatim
-              />
-            </div>
-            <dl className="space-y-1.5 text-xs">
-              <Row label="Largest frame" value={stats.size ?? "—"} />
-              {/* An all-keyframe stream is JPEG by another name, and the ratio
-                * is the cheapest way to notice an encoder rebuilding itself
-                * over and over: every rebuild costs one. */}
-              <Row
-                label="Keyframes"
-                value={stats.fps > 0 ? `${stats.keyframes} of ${stats.fps}` : "—"}
-              />
-            </dl>
+            <PanelGroup asChild>
+              <dl>
+                <Row label="Frame rate" value={<span className={toneClass(rateTone(stats.fps))}>{stats.fps > 0 ? `${stats.fps} /s` : "Nothing yet"}</span>} />
+                <Row label="Bitrate" value={describeRate(stats.kbits)} />
+                <Row label="Largest frame" value={stats.size ?? "Nothing yet"} />
+                <Row label="Keyframes" value={stats.fps > 0 ? `${stats.keyframes} of ${stats.fps}` : "Nothing yet"} />
+              </dl>
+            </PanelGroup>
             {stats.fps > 0 && stats.fps < 20 ? (
-              <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-                The connection cannot carry more, so the engine is sending
-                fewer frames. That is the link, not this device.
+              <p className="rounded-xl border border-dashed p-3 text-xs text-muted-foreground">
+                Low frame rate.
               </p>
             ) : null}
           </>
@@ -159,60 +126,39 @@ function SessionPanel() {
       </PanelSection>
 
       {/* Moved here whole from Settings > Stream, where the switches are. */}
-      <PanelSection title="Sound" description="Why there might be no sound.">
+      <PanelSection title="Sound">
         {streamPrefs.audio ? (
           <AudioReadout />
         ) : (
-          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            Muted. Turn sound on in Settings.
-          </p>
+          <PanelGroup>
+            <FieldRow>
+              <span className="text-sm text-muted-foreground">Muted</span>
+              <Button variant="outline" size="sm" className="h-11" onClick={() => patchPrefs("stream", { audio: true })}>Enable</Button>
+            </FieldRow>
+          </PanelGroup>
         )}
       </PanelSection>
 
       <PanelSection title="Session">
-        <dl className="space-y-1.5 text-xs">
-          <Row label="Engine" value={<code className="font-mono">{endpoint}</code>} />
-          <Row label="Account" value={account || "—"} />
-          <Row
-            label="Permissions"
-            value={
-              <Badge variant="outline" className="text-[10px]">
-                {permissions.mode}
-                {permissions.allowedApps === null ? " · any app" : ` · ${permissions.allowedApps.length} apps`}
-              </Badge>
-            }
-          />
-          <Row label="Workspace" value={`${strip.focus + 1} of ${strip.workspaces.length}`} />
-          <Row label="Columns" value={String(workspace.columns.length)} />
-          <Row
-            label="Devices"
-            value={peers.length <= 1 ? "This one only" : `${peers.length} attached`}
-          />
-          <Row label="Layout" value={primary ? "Decided here" : "Following another device"} />
-          <Row
-            label="Version"
-            value={
-              stale ? (
-                <span className="text-warning">
-                  {SHELL_VERSION} · machine has {engineVersion}
-                </span>
-              ) : (
-                SHELL_VERSION
-              )
-            }
-          />
-        </dl>
+        <PanelGroup asChild>
+          <dl>
+            <Row label="Engine" value={<code className="font-mono text-xs">{endpoint}</code>} />
+            <Row label="Account" value={`${account || "Not connected"} · ${permissions.mode} · ${permissions.allowedApps === null ? "all apps" : `${permissions.allowedApps.length} apps`}`} />
+            <Row label="Workspace" value={`${strip.focus + 1} of ${strip.workspaces.length} · ${workspace.columns.length} columns`} />
+            <Row label="Devices" value={`${peers.length <= 1 ? "This one only" : `${peers.length} attached`} · ${primary ? "driving here" : "following"}`} />
+            <Row label="Focus" value={focusedTitle ?? "Nothing focused"} />
+            <Row label="Version" value={stale ? <span className="text-warning">{SHELL_VERSION} · machine has {engineVersion}</span> : SHELL_VERSION} />
+          </dl>
+        </PanelGroup>
 
         {stale ? (
-          <div className="space-y-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs">
+          <div className="space-y-2 rounded-xl border border-warning/40 bg-warning/10 p-3 text-xs">
             <p className="text-muted-foreground">
-              This page is older than the machine. Reloading picks up{" "}
-              {engineVersion}. Your windows stay open, because they live on the
-              machine, not here.
+              Reload to match engine version {engineVersion}. Windows stay open.
             </p>
             <Button
               size="sm"
-              className="w-full gap-1.5"
+              className="h-11 w-full gap-1.5"
               onClick={() => {
                 // Enough on its own: the engine serves index.html as
                 // `no-cache` and every asset under a content-hashed name, so a
@@ -228,7 +174,7 @@ function SessionPanel() {
         ) : null}
 
         {!primary ? (
-          <Button size="sm" variant="outline" className="w-full gap-1.5" onClick={actions.takeControl}>
+          <Button size="sm" variant="outline" className="h-11 w-full gap-1.5" onClick={actions.takeControl}>
             <Gamepad2 className="size-3.5" aria-hidden />
             Arrange from this device
           </Button>
@@ -236,27 +182,15 @@ function SessionPanel() {
       </PanelSection>
 
       <PanelSection
-        title="Focused window"
-        description="Which window has the keyboard."
-      >
-        <div className="flex items-center gap-2 rounded-lg border bg-card p-2.5">
-          <AppWindow className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-sm">
-            {focusedTitle ?? <span className="text-muted-foreground">Nothing focused</span>}
-          </span>
-        </div>
-      </PanelSection>
-
-      <PanelSection
-        title="Recent events"
+        title="Log"
         description="Newest first."
       >
         {entries.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
+          <p className="rounded-xl border border-dashed p-4 text-center text-xs text-muted-foreground">
             Nothing yet.
           </p>
         ) : (
-          <ol className="space-y-0.5 rounded-lg border p-2 font-mono text-[11px]">
+          <ol className="space-y-0.5 rounded-xl border bg-card px-3 py-2.5 font-mono text-[11px] leading-relaxed">
             {entries.map((entry, index) => (
               <li key={index} className="flex gap-2">
                 <span className="shrink-0 text-muted-foreground">{entry.at}</span>
@@ -275,12 +209,10 @@ function SessionPanel() {
         )}
       </PanelSection>
 
-      <PanelSection title="Sign out">
-        <Button variant="outline" size="sm" className="w-full gap-2" onClick={actions.signOut}>
-          <LogOut className="size-3.5" aria-hidden />
-          Forget the password on this device
-        </Button>
-      </PanelSection>
+      <Button variant="outline" size="sm" className="h-11 w-full gap-2" onClick={actions.signOut}>
+        <LogOut className="size-3.5" aria-hidden />
+        Sign out of this device
+      </Button>
     </div>
   )
 }
@@ -297,7 +229,7 @@ function titleOf(info: { title?: string | null; appId?: string | null } | undefi
  * "0 Mbit/s" and worth making differently.
  */
 function describeRate(kbits: number): string {
-  if (kbits <= 0) return "—"
+  if (kbits <= 0) return "Nothing yet"
   if (kbits < 1000) return `${kbits} kbit/s`
   return `${(kbits / 1000).toFixed(1)} Mbit/s`
 }
@@ -316,56 +248,20 @@ function rateTone(fps: number): Tone | undefined {
   return "good"
 }
 
-const Stat = memo(function Stat({
-  icon: Icon,
-  label,
-  value,
-  tone,
-  verbatim,
-}: {
-  icon: typeof Radio
-  label: string
-  value: string
-  tone?: Tone | undefined
-  /**
-   * Show the value exactly as given.
-   *
-   * The status words ("connected", "waiting") are written lower case and
-   * capitalised here, which is wrong for anything with a unit in it: it
-   * rendered "218 kbit/s" as "218 Kbit/S".
-   */
-  verbatim?: boolean | undefined
-}) {
-  return (
-    <div className="rounded-lg border bg-card p-2.5">
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-        <Icon className="size-3" aria-hidden />
-        {label}
-      </div>
-      <p
-        className={cn(
-          "mt-0.5 truncate text-sm font-medium",
-          !verbatim && "capitalize",
-          tone === "good" && "text-success",
-          // Amber rather than red: something in progress is not a failure, and
-          // colouring a reconnect the same as a refused password is what made
-          // every hiccup look like a breakage.
-          tone === "busy" && "text-warning",
-          tone === "bad" && "text-destructive",
-        )}
-      >
-        {value}
-      </p>
-    </div>
+function toneClass(tone: Tone | undefined): string {
+  return cn(
+    tone === "good" && "text-success",
+    tone === "busy" && "text-warning",
+    tone === "bad" && "text-destructive",
   )
-})
+}
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-right">{value}</dd>
-    </div>
+    <ReadoutRow>
+      <dt className="shrink-0 font-medium">{label}</dt>
+      <dd className="min-w-0 break-words text-right text-muted-foreground tabular-nums">{value}</dd>
+    </ReadoutRow>
   )
 }
 

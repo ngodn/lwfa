@@ -240,9 +240,10 @@ const RailButton = memo(function RailButton({
             aria-pressed={active}
             onClick={handle}
             className={cn(
-              "relative shrink-0 rounded-lg text-sidebar-foreground/70 transition-colors",
+              "relative shrink-0 rounded-xl text-sidebar-foreground/65 transition-colors",
               "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-              active && "bg-sidebar-accent text-sidebar-accent-foreground",
+              active && "bg-card text-primary shadow-[0_1px_3px_#00000035] hover:bg-card hover:text-primary",
+              glyph && !fired && "bg-foreground/[0.08] text-foreground/75",
               fired && "bg-primary text-primary-foreground",
             )}
             style={{ width: metrics.button, height: metrics.button }}
@@ -287,7 +288,6 @@ const RailButton = memo(function RailButton({
           className="max-w-56"
         >
           <p className="font-medium">{meta.label}</p>
-          <p className="text-xs opacity-80">{meta.hint}</p>
         </TooltipContent>
       </Tooltip>
   )

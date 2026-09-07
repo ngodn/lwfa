@@ -32,7 +32,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Field, FieldRow, PanelSection } from "@/panels/parts"
+import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
 
 function AccessPanel() {
@@ -47,20 +47,19 @@ function AccessPanel() {
 
   if (!isOwner) {
     return (
-      <div className="space-y-4 pt-2">
+      <div className="space-y-4">
         <PanelSection title="This session">
           <SelfSummary name={account} permissions={permissions} />
         </PanelSection>
-        <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-          Only the owner can manage accounts. Sign in with the password from the
-          machine&rsquo;s <code className="font-mono">.env</code> to do that.
+        <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+          Sign in as the owner to manage accounts.
         </p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-6 pt-2">
+    <div className="space-y-4">
       <PanelSection title="This session">
         <SelfSummary name={account} permissions={permissions} />
       </PanelSection>
@@ -84,15 +83,17 @@ function AccessPanel() {
             Loading&hellip;
           </div>
         ) : accounts.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-            No accounts yet. Only the owner password works.
+          <p className="rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground">
+            No additional accounts.
           </p>
         ) : (
-          <ul className="space-y-2">
-            {accounts.map((entry) => (
-              <AccountRow key={entry.id} account={entry} />
-            ))}
-          </ul>
+          <PanelGroup asChild>
+            <ul>
+              {accounts.map((entry) => (
+                <AccountRow key={entry.id} account={entry} />
+              ))}
+            </ul>
+          </PanelGroup>
         )}
       </PanelSection>
 
@@ -110,14 +111,14 @@ const SelfSummary = memo(function SelfSummary({
 }) {
   const count = permissions.allowedApps?.length ?? 0
   return (
-    <div className="flex items-center gap-3 rounded-lg border bg-card p-3">
+    <div className="flex items-center gap-3 rounded-xl border bg-card p-3">
       <ShieldCheck className="size-5 shrink-0 text-primary" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{name || "not connected"}</p>
         <p className="text-xs text-muted-foreground">
-          {permissions.mode === "interact" ? "Can interact" : "Can watch only"}
+          {permissions.mode === "interact" ? "Interact" : "View only"}
           {permissions.allowedApps === null
-            ? " · any application"
+            ? " · all apps"
             : ` · ${count} application${count === 1 ? "" : "s"}`}
         </p>
       </div>
@@ -142,8 +143,8 @@ const AccountRow = memo(function AccountRow({ account }: { account: AccountInfo 
   )
 
   return (
-    <li className="rounded-lg border bg-card">
-      <div className="flex items-center gap-2 p-2">
+    <li>
+      <div className={cn("flex min-h-11 items-center gap-2 px-3 py-2", open && "bg-primary/5")}>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{account.name}</span>
         <Badge variant="outline" className="gap-1 text-[10px]">
           {account.permissions.mode === "interact" ? (
@@ -156,16 +157,16 @@ const AccountRow = memo(function AccountRow({ account }: { account: AccountInfo 
         <Button
           variant="ghost"
           size="sm"
-          className="h-8"
+          className="h-11"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >
-          {open ? "Close" : "Edit"}
+          {open ? "Done" : "Edit"}
         </Button>
       </div>
 
       {open ? (
-        <div className="space-y-3 border-t p-3">
+        <div className="space-y-3 border-t bg-primary/3 p-3">
           <ToggleGroup
             type="single"
             value={account.permissions.mode}
@@ -173,11 +174,11 @@ const AccountRow = memo(function AccountRow({ account }: { account: AccountInfo 
             variant="outline"
             className="w-full"
           >
-            <ToggleGroupItem value="view" className="flex-1 gap-1.5">
+            <ToggleGroupItem value="view" className="h-11 flex-1 gap-1.5">
               <Eye className="size-3.5" aria-hidden />
-              Watch only
+              View
             </ToggleGroupItem>
-            <ToggleGroupItem value="interact" className="flex-1 gap-1.5">
+            <ToggleGroupItem value="interact" className="h-11 flex-1 gap-1.5">
               <Hand className="size-3.5" aria-hidden />
               Interact
             </ToggleGroupItem>
@@ -189,11 +190,11 @@ const AccountRow = memo(function AccountRow({ account }: { account: AccountInfo 
             <Button
               variant="ghost"
               size="sm"
-              className="gap-1.5 text-destructive hover:text-destructive"
+              className="h-11 gap-1.5 text-destructive hover:text-destructive"
               onClick={() => actions.send({ type: "deleteAccount", id: account.id })}
             >
               <Trash2 className="size-3.5" aria-hidden />
-              Delete
+              Delete account
             </Button>
           </div>
         </div>
@@ -205,7 +206,7 @@ const AccountRow = memo(function AccountRow({ account }: { account: AccountInfo 
 /**
  * Which applications an account may launch.
  *
- * "Any" is a distinct state rather than "every id ticked". An application
+ * "All" is a distinct state rather than "every id ticked". An application
  * installed next week should be covered by "any" and should *not* quietly join
  * a list somebody curated on purpose.
  */
@@ -232,20 +233,25 @@ const AppAllowList = memo(function AppAllowList({ account }: { account: AccountI
 
   return (
     <div className="space-y-2">
-      <FieldRow>
-        <Field label="Applications" hint="What this account may launch." />
-        <Button
-          size="sm"
-          variant={allowed === null ? "default" : "outline"}
-          className="h-8"
-          onClick={() => update(allowed === null ? [] : null)}
+      <FieldRow className="flex-wrap px-0">
+        <Field label="Applications" />
+        <ToggleGroup
+          type="single"
+          value={allowed === null ? "all" : "selected"}
+          onValueChange={(value) => {
+            if (value === "all" && allowed !== null) update(null)
+            if (value === "selected" && allowed === null) update([])
+          }}
+          aria-label="Allowed applications"
+          variant="outline"
         >
-          {allowed === null ? "Any" : "Choose"}
-        </Button>
+          <ToggleGroupItem value="all" className="h-11">All</ToggleGroupItem>
+          <ToggleGroupItem value="selected" className="h-11">Selected</ToggleGroupItem>
+        </ToggleGroup>
       </FieldRow>
 
       {allowed !== null ? (
-        <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-1">
+        <div className="max-h-48 divide-y overflow-y-auto rounded-lg border bg-card">
           {apps.length === 0 ? (
             <p className="p-2 text-xs text-muted-foreground">Reading applications&hellip;</p>
           ) : (
@@ -257,8 +263,9 @@ const AppAllowList = memo(function AppAllowList({ account }: { account: AccountI
                   onClick={() =>
                     update(on ? allowed.filter((id) => id !== app.id) : [...allowed, app.id])
                   }
+                  aria-pressed={on}
                   className={cn(
-                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs",
+                    "flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-xs",
                     on ? "bg-primary/15 text-primary" : "hover:bg-accent",
                   )}
                 >
@@ -300,7 +307,7 @@ const NewAccount = memo(function NewAccount() {
 
   if (!open) {
     return (
-      <Button variant="outline" className="w-full gap-2" onClick={() => setOpen(true)}>
+      <Button variant="outline" className="h-11 w-full gap-2" onClick={() => setOpen(true)}>
         <Plus className="size-4" aria-hidden />
         Add an account
       </Button>
@@ -308,14 +315,14 @@ const NewAccount = memo(function NewAccount() {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3 rounded-lg border bg-card p-3">
+    <form onSubmit={submit} className="space-y-3 rounded-xl border bg-card p-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium">New account</h3>
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="size-7"
+          className="size-11"
           onClick={() => setOpen(false)}
           aria-label="Cancel"
         >
@@ -349,7 +356,7 @@ const NewAccount = memo(function NewAccount() {
           required
         />
         <p className="text-xs text-muted-foreground">
-          Anyone with this password gets this account.
+          Use this password to sign in to the account.
         </p>
       </div>
 
@@ -360,17 +367,17 @@ const NewAccount = memo(function NewAccount() {
         variant="outline"
         className="w-full"
       >
-        <ToggleGroupItem value="view" className="flex-1 gap-1.5">
+        <ToggleGroupItem value="view" className="h-11 flex-1 gap-1.5">
           <Eye className="size-3.5" aria-hidden />
-          Watch only
+          View
         </ToggleGroupItem>
-        <ToggleGroupItem value="interact" className="flex-1 gap-1.5">
+        <ToggleGroupItem value="interact" className="h-11 flex-1 gap-1.5">
           <Hand className="size-3.5" aria-hidden />
           Interact
         </ToggleGroupItem>
       </ToggleGroup>
 
-      <Button type="submit" className="w-full" disabled={!name.trim() || !password}>
+      <Button type="submit" className="h-11 w-full" disabled={!name.trim() || !password}>
         Create
       </Button>
     </form>
