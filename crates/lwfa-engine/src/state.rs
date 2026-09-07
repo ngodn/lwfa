@@ -250,6 +250,8 @@ pub struct Lwfa {
     last_popup_map: Option<std::time::Instant>,
     /// Repairs X input focus when it points at nothing. See `xfocus.rs`.
     pub xfocus: Option<crate::xfocus::Guardian>,
+    /// Initial _NET_WM_STATE reader: connection, state atom, fullscreen atom.
+    pub(crate) x11_initial_state: Option<(x11rb::rust_connection::RustConnection, u32, u32)>,
     /// A controller surviving a session flap. See [`Self::begin_session_grace`].
     /// Keys each session currently holds, so they can be let go if it dies.
     /// See `Lwfa::remote_key`.
@@ -438,6 +440,7 @@ impl Lwfa {
             reassert_timer: None,
             last_popup_map: None,
             xfocus: None,
+            x11_initial_state: None,
             held_keys: std::collections::HashMap::new(),
             portal: None,
             pending_files: std::collections::HashMap::new(),
@@ -571,8 +574,9 @@ impl Lwfa {
             scaling: self.window_scaling(id), xwayland: window.is_x11(), effective_scale: self.effective_scale(id) })
     }
 
-    /// Whether a window currently fills the whole output, which is what the
-    /// engine treats as fullscreen.
+    /// Whether the browser layout currently fills the whole output.
+    /// An X11 application's native fullscreen workspace can still be presented
+    /// in a browser column, so its fullscreen intent is separate from this.
     ///
     /// The same rule `send_configures` uses to tell a client it is fullscreen:
     /// a window covering the output *is* fullscreen, however it got that size.
@@ -697,10 +701,16 @@ impl Lwfa {
         let Some(id) = self.layout.id_of(&window) else {
             return;
         };
-        // Told as well as asked, unlike xdg-shell: an X11 client has no way to
-        // decline, and its own idea of its state has to be kept in step or a
-        // player will show the wrong button.
+        if self.layout.x11_fullscreen(id) == fullscreen {
+            return;
+        }
+        let pending = self.layout.set_x11_fullscreen(id, fullscreen, std::time::Instant::now());
+        // Fullscreen state and its native monitor-sized geometry must agree.
+        // The browser can still present this workspace at a different size.
         let _ = surface.set_fullscreen(fullscreen);
+        self.send_configures(pending.into_iter().collect());
+        self.capture.invalidate(id);
+        self.report_window_changes(id);
         tracing::info!(
             "X11 window {id} asked to {} fullscreen",
             if fullscreen { "enter" } else { "leave" }

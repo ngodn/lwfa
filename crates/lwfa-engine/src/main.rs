@@ -384,6 +384,7 @@ fn init_xwayland(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut Ca
             // in the environment; see `Lwfa::spawn` for why.
             data.xdisplay = Some(display_number);
             data.xfocus = Some(crate::xfocus::Guardian::new(display_number));
+            data.x11_initial_state = None;
             match X11Wm::start_wm(data.loop_handle.clone(), x11_socket, client.clone()) {
                 Ok(wm) => {
                     data.xwm = Some(wm);

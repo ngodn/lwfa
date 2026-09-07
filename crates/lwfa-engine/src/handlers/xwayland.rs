@@ -18,9 +18,10 @@
 //! and for exactly the same reason: under scrollable tiling windows do not
 //! float, so a client asking to be dragged has nothing to be granted.
 //!
-//! Maximise and fullscreen requests are also refused. The shell owns column
-//! width, and an X11 client that could take the whole strip on its own would be
-//! deciding layout, which is the one thing the engine does not let anything do.
+//! Maximise requests are refused because the shell owns column width.
+//! Application fullscreen uses the fixed X11 monitor workspace and asks the
+//! shell to change its presentation. The browser can present that full workspace
+//! at a different size without clipping the application's rendering.
 //!
 //! ## Override-redirect
 //!
@@ -47,6 +48,8 @@ use smithay::xwayland::{X11Surface, X11Wm, XwmHandler};
 use crate::layout::Mode;
 use crate::state::Lwfa;
 use lwfa_proto::ToShell;
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
+use x11rb::rust_connection::RustConnection;
 
 impl XWaylandShellHandler for Lwfa {
     fn xwayland_shell_state(&mut self) -> &mut XWaylandShellState {
@@ -75,10 +78,23 @@ impl XwmHandler for Lwfa {
             tracing::warn!("failed to map an X11 window: {err}");
             return;
         }
+        // Smithay 0.7 never imports initial _NET_WM_STATE into its cache.
+        // set_mapped only writes WM_STATE and flushes the preceding ungrab,
+        // making a separate connection safe here. Read before set_focus can
+        // overwrite the initial property through set_activated.
+        let fullscreen = self.initial_x11_fullscreen(surface.window_id())
+            .unwrap_or_else(|| surface.is_fullscreen());
+        if fullscreen && let Err(err) = surface.set_fullscreen(true) {
+            tracing::warn!("failed to preserve initial X11 fullscreen state: {err}");
+        }
 
         let window = Window::new_x11_window(surface);
         let id = self.next_window_id();
         self.layout.track(id, window.clone());
+        if fullscreen {
+            let pending = self.layout.set_x11_fullscreen(id, true, std::time::Instant::now());
+            self.send_configures(pending.into_iter().collect());
+        }
 
         // Off-screen with no size yet, like the Wayland path: invisible until
         // something places it, so it cannot flash at the origin for a frame.
@@ -301,6 +317,29 @@ impl XwmHandler for Lwfa {
 }
 
 impl Lwfa {
+    fn initial_x11_fullscreen(&mut self, window: u32) -> Option<bool> {
+        let display = self.xdisplay?;
+        let result = (|| -> Result<bool, Box<dyn std::error::Error>> {
+            if self.x11_initial_state.is_none() {
+                let (conn, _) = RustConnection::connect(Some(&format!(":{display}")))?;
+                let state = conn.intern_atom(true, b"_NET_WM_STATE")?.reply()?.atom;
+                let fullscreen = conn.intern_atom(true, b"_NET_WM_STATE_FULLSCREEN")?.reply()?.atom;
+                self.x11_initial_state = Some((conn, state, fullscreen));
+            }
+            let (conn, state, fullscreen) = self.x11_initial_state.as_ref().unwrap();
+            let reply = conn.get_property(false, window, *state, AtomEnum::ATOM, 0, 64)?.reply()?;
+            Ok(reply.value32().is_some_and(|mut atoms| atoms.any(|atom| atom == *fullscreen)))
+        })();
+        match result {
+            Ok(fullscreen) => Some(fullscreen),
+            Err(err) => {
+                tracing::warn!("could not read initial fullscreen state for X11 window {window:#x}: {err}");
+                self.x11_initial_state = None;
+                None
+            }
+        }
+    }
+
     /// The id of a tracked X11 window, if the layout knows this surface.
     fn id_of_x11(&self, surface: &X11Surface) -> Option<lwfa_proto::WindowId> {
         self.layout.all_ids().into_iter().find(|id| {

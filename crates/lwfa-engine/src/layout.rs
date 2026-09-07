@@ -126,6 +126,8 @@ impl Animated {
 struct Tracked {
     window: Window,
     workspace_scale: f64,
+    /// Application fullscreen intent, separate from the browser's presentation.
+    x11_fullscreen: bool,
     base_rect: Option<Rectangle<i32, Logical>>,
     x: Animated,
     y: Animated,
@@ -227,11 +229,40 @@ impl Layout {
         factor: f64,
     ) -> Option<Rectangle<i32, Logical>> {
         let tracked = self.tracked.get(&id)?;
-        Some(client_rect(
-            workspace_rect(tracked.base_rect?, factor),
+        Some(configured_workspace_rect(
+            tracked.base_rect?, factor,
             tracked.window.is_x11(),
+            tracked.x11_fullscreen,
             self.x11_output_size,
         ))
+    }
+
+    pub(crate) fn x11_fullscreen(&self, id: WindowId) -> bool {
+        self.tracked.get(&id).is_some_and(|tracked| tracked.x11_fullscreen)
+    }
+
+    /// Keep a fullscreen application's native workspace at the fixed monitor
+    /// size. Its browser rectangle remains available for presentation and exit.
+    pub(crate) fn set_x11_fullscreen(
+        &mut self,
+        id: WindowId,
+        fullscreen: bool,
+        now: Instant,
+    ) -> Option<PendingConfigure> {
+        let tracked = self.tracked.get_mut(&id)?;
+        if !tracked.window.is_x11() { return None; }
+        tracked.x11_fullscreen = fullscreen;
+        let base = match tracked.base_rect {
+            Some(rect) => rect,
+            None if fullscreen => Rectangle::from_size(self.x11_output_size?),
+            None => return None,
+        };
+        let rect = configured_workspace_rect(
+            base, tracked.workspace_scale, true, fullscreen, self.x11_output_size,
+        );
+        if !tracked.needs_configure(rect) { return None; }
+        tracked.configured(rect, now);
+        Some(PendingConfigure { window: tracked.window.clone(), rect })
     }
 
     pub fn preview_rect(&self, id: WindowId) -> Option<Rectangle<i32, Logical>> {
@@ -244,7 +275,7 @@ impl Layout {
     pub fn set_workspace_scale(&mut self, id: WindowId, factor: f64, now: Instant) -> Option<PendingConfigure> {
         let tracked = self.tracked.get_mut(&id)?;
         tracked.workspace_scale = factor;
-        let rect = client_rect(workspace_rect(tracked.base_rect?, factor), tracked.window.is_x11(), self.x11_output_size);
+        let rect = configured_workspace_rect(tracked.base_rect?, factor, tracked.window.is_x11(), tracked.x11_fullscreen, self.x11_output_size);
         if !tracked.needs_configure(rect) { return None; }
         tracked.configured(rect, now);
         Some(PendingConfigure { window: tracked.window.clone(), rect })
@@ -277,6 +308,7 @@ impl Layout {
             Tracked {
                 window,
                 workspace_scale: 1.0,
+                x11_fullscreen: false,
                 base_rect: None,
                 x: Animated::new(0.0),
                 y: Animated::new(0.0),
@@ -390,7 +422,7 @@ impl Layout {
                     .into(),
             );
             tracked.base_rect = Some(rect);
-            let rect = client_rect(workspace_rect(rect, tracked.workspace_scale), tracked.window.is_x11(), self.x11_output_size);
+            let rect = configured_workspace_rect(rect, tracked.workspace_scale, tracked.window.is_x11(), tracked.x11_fullscreen, self.x11_output_size);
             if tracked.needs_configure(rect) {
                 tracked.configured(rect, now);
                 configures.push(PendingConfigure {
@@ -425,7 +457,7 @@ impl Layout {
             tracked.y.snap_to(0.0);
             let rect = Rectangle::new((0, 0).into(), size);
             tracked.base_rect = Some(rect);
-            let rect = client_rect(workspace_rect(rect, tracked.workspace_scale), tracked.window.is_x11(), self.x11_output_size);
+            let rect = configured_workspace_rect(rect, tracked.workspace_scale, tracked.window.is_x11(), tracked.x11_fullscreen, self.x11_output_size);
             if tracked.needs_configure(rect) {
                 tracked.configured(rect, now);
                 configures.push(PendingConfigure {
@@ -704,6 +736,22 @@ mod tests {
     }
 }
 
+/// Resolve native app geometry without changing the browser preview.
+fn configured_workspace_rect(
+    preview: Rectangle<i32, Logical>,
+    factor: f64,
+    x11: bool,
+    fullscreen: bool,
+    x11_output_size: Option<Size<i32, Logical>>,
+) -> Rectangle<i32, Logical> {
+    if x11 && fullscreen && let Some(size) = x11_output_size {
+        // Fullscreen swapchains can keep their monitor-sized render target
+        // after a WM resize. A smaller X11 parent would clip their contents.
+        return Rectangle::from_size(size);
+    }
+    client_rect(workspace_rect(preview, factor), x11, x11_output_size)
+}
+
 /// Keep placement in the shell's coordinates while changing only app layout.
 fn workspace_rect(mut rect: Rectangle<i32, Logical>, factor: f64) -> Rectangle<i32, Logical> {
     let factor = crate::scaling::bounded_density(rect.size, factor);
@@ -744,6 +792,40 @@ fn client_rect(
 #[cfg(test)]
 mod scaling_tests {
     use super::*;
+
+    #[test]
+    fn app_fullscreen_keeps_native_swapchain_extent_across_browser_resizes() {
+        let monitor = Size::from((2560, 1440));
+        for size in [(1324, 838), (640, 900), (2560, 1440)] {
+            let preview = Rectangle::new((300, -100).into(), size.into());
+            for factor in [0.5, 1.0, 1.5, 2.0] {
+                let app = configured_workspace_rect(preview, factor, true, true, Some(monitor));
+                assert_eq!(app, Rectangle::from_size(monitor));
+                assert_eq!(preview.loc, Point::from((300, -100)));
+                assert_eq!(preview.size, Size::from(size));
+            }
+        }
+    }
+
+    #[test]
+    fn leaving_app_fullscreen_restores_workspace_scale_and_position() {
+        let monitor = Size::from((2560, 1440));
+        let preview = Rectangle::new((100, 200).into(), (1000, 600).into());
+        let normal = configured_workspace_rect(preview, 1.5, true, false, Some(monitor));
+        assert_eq!(normal, Rectangle::new((100, 200).into(), (1500, 900).into()));
+        assert_eq!(configured_workspace_rect(preview, 1.5, true, true, Some(monitor)),
+            Rectangle::from_size(monitor));
+        assert_eq!(configured_workspace_rect(preview, 1.5, true, false, Some(monitor)), normal);
+    }
+
+    #[test]
+    fn browser_fullscreen_does_not_imply_native_x11_fullscreen() {
+        let monitor = Size::from((2560, 1440));
+        let browser = Rectangle::from_size((1324, 838).into());
+        assert_eq!(configured_workspace_rect(browser, 1.0, true, false, Some(monitor)), browser);
+        assert_eq!(configured_workspace_rect(browser, 1.5, false, true, Some(monitor)),
+            workspace_rect(browser, 1.5));
+    }
 
     #[test]
     fn oversized_x11_workspaces_fit_without_cropping_or_changing_preview_geometry() {

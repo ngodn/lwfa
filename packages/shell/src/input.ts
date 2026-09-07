@@ -111,18 +111,32 @@ export function evdevFromButton(button: number): ButtonCode | null {
  * sending it. The engine then maps that fraction into actual app geometry,
  * independently of frame resolution. Callers sending pixel coordinates must
  * still use the application's actual size, as in the example above.
+ * `containedImage` matches a canvas drawn with `object-fit: contain`; its
+ * letterbox margins are excluded from the pointer's coordinate space.
  */
 export function windowPoint(
   event: { clientX: number; clientY: number },
   element: Element,
   content: { width: number; height: number },
+  containedImage?: { width: number; height: number },
 ): { x: number; y: number } | null {
   const box = element.getBoundingClientRect()
   if (box.width <= 0 || box.height <= 0) return null
   if (content.width <= 0 || content.height <= 0) return null
+  let width = box.width, height = box.height
+  if (containedImage) {
+    if (containedImage.width <= 0 || containedImage.height <= 0) return null
+    const scale = Math.min(width / containedImage.width, height / containedImage.height)
+    width = containedImage.width * scale
+    height = containedImage.height * scale
+  }
+  // Match object-fit: contain, including the centered letterbox margins.
+  // Keep outside coordinates so captured drags can still reach the edges.
+  const left = box.left + (box.width - width) / 2
+  const top = box.top + (box.height - height) / 2
   return {
-    x: ((event.clientX - box.left) / box.width) * content.width,
-    y: ((event.clientY - box.top) / box.height) * content.height,
+    x: ((event.clientX - left) / width) * content.width,
+    y: ((event.clientY - top) / height) * content.height,
   }
 }
 

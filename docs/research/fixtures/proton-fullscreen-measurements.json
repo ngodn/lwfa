@@ -1,0 +1,516 @@
+{
+  "description": "Selected measurements from isolated GE-Proton11-6 DXVK fullscreen fixtures. This is synthetic verification, not a completed Innocence retest.",
+  "cases": [
+    {
+      "case": "1.5.2-baseline",
+      "source": "target/innocence-fullscreen/fixture-dxvk-baseline/results.json",
+      "startedAt": "2026-09-07T18:32:23.135Z",
+      "passed": false,
+      "browserViewport": {
+        "width": 1324,
+        "height": 838
+      },
+      "sharedX11Display": [
+        2560,
+        1440
+      ],
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "client": [
+            1324,
+            838
+          ],
+          "wineMonitor": [
+            2560,
+            1440
+          ],
+          "x11Window": [
+            1324,
+            838
+          ],
+          "stream": [
+            1324,
+            838
+          ],
+          "d3dBuffer": [
+            2560,
+            1440
+          ],
+          "d3dFullscreen": true,
+          "cornersRgb": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              45,
+              45,
+              45
+            ],
+            [
+              45,
+              45,
+              45
+            ],
+            [
+              45,
+              45,
+              45
+            ]
+          ],
+          "allCornersVisible": false,
+          "mouse": [
+            1297,
+            821
+          ],
+          "inputReachesBottomRight": true
+        }
+      ]
+    },
+    {
+      "case": "1.5.3-fixed-matrix",
+      "source": "target/innocence-fullscreen/fixture-dxvk-final-matrix/results.json",
+      "startedAt": "2026-09-07T18:50:33.791Z",
+      "passed": true,
+      "browserViewport": {
+        "width": 1324,
+        "height": 838
+      },
+      "sharedX11Display": [
+        2560,
+        1440
+      ],
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "client": [
+            2560,
+            1440
+          ],
+          "wineMonitor": [
+            2560,
+            1440
+          ],
+          "x11Window": [
+            2560,
+            1440
+          ],
+          "stream": [
+            2560,
+            1440
+          ],
+          "d3dBuffer": [
+            2560,
+            1440
+          ],
+          "d3dFullscreen": true,
+          "cornersRgb": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "allCornersVisible": true,
+          "mouse": [
+            2508,
+            1411
+          ],
+          "inputReachesBottomRight": true
+        },
+        {
+          "phase": "browser-viewport-resize",
+          "client": [
+            2560,
+            1440
+          ],
+          "wineMonitor": [
+            2560,
+            1440
+          ],
+          "x11Window": [
+            2560,
+            1440
+          ],
+          "stream": [
+            2560,
+            1440
+          ],
+          "d3dBuffer": [
+            2560,
+            1440
+          ],
+          "d3dFullscreen": true,
+          "cornersRgb": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "allCornersVisible": true,
+          "mouse": [
+            2508,
+            1411
+          ],
+          "inputReachesBottomRight": true
+        },
+        {
+          "phase": "fullscreen-workspace-1.5",
+          "client": [
+            2560,
+            1440
+          ],
+          "wineMonitor": [
+            2560,
+            1440
+          ],
+          "x11Window": [
+            2560,
+            1440
+          ],
+          "stream": [
+            2560,
+            1440
+          ],
+          "d3dBuffer": [
+            2560,
+            1440
+          ],
+          "d3dFullscreen": true,
+          "cornersRgb": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "allCornersVisible": true,
+          "mouse": [
+            2508,
+            1411
+          ],
+          "inputReachesBottomRight": true
+        },
+        {
+          "phase": "fullscreen-workspace-2",
+          "client": [
+            2560,
+            1440
+          ],
+          "wineMonitor": [
+            2560,
+            1440
+          ],
+          "x11Window": [
+            2560,
+            1440
+          ],
+          "stream": [
+            2560,
+            1440
+          ],
+          "d3dBuffer": [
+            2560,
+            1440
+          ],
+          "d3dFullscreen": true,
+          "cornersRgb": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "allCornersVisible": true,
+          "mouse": [
+            2508,
+            1411
+          ],
+          "inputReachesBottomRight": true
+        },
+        {
+          "phase": "windowed-restored",
+          "client": [
+            1324,
+            838
+          ],
+          "wineMonitor": [
+            2560,
+            1440
+          ],
+          "x11Window": [
+            1324,
+            838
+          ],
+          "stream": [
+            1324,
+            838
+          ],
+          "d3dBuffer": [
+            1324,
+            838
+          ],
+          "d3dFullscreen": false,
+          "cornersRgb": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "allCornersVisible": true,
+          "mouse": [
+            1297,
+            821
+          ],
+          "inputReachesBottomRight": true
+        },
+        {
+          "phase": "windowed-workspace-1.5",
+          "client": [
+            1986,
+            1257
+          ],
+          "wineMonitor": [
+            2560,
+            1440
+          ],
+          "x11Window": [
+            1986,
+            1257
+          ],
+          "stream": [
+            1986,
+            1257
+          ],
+          "d3dBuffer": [
+            1986,
+            1257
+          ],
+          "d3dFullscreen": false,
+          "cornersRgb": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "allCornersVisible": true,
+          "mouse": [
+            1946,
+            1231
+          ],
+          "inputReachesBottomRight": true
+        }
+      ]
+    },
+    {
+      "case": "1.5.3-fixed-emulated-1280x720",
+      "source": "target/innocence-fullscreen/fixture-dxvk-1280/results.json",
+      "startedAt": "2026-09-07T18:51:01.973Z",
+      "passed": true,
+      "browserViewport": {
+        "width": 1324,
+        "height": 838
+      },
+      "sharedX11Display": [
+        2560,
+        1440
+      ],
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "client": [
+            1280,
+            720
+          ],
+          "wineMonitor": [
+            1280,
+            720
+          ],
+          "x11Window": [
+            2560,
+            1440
+          ],
+          "stream": [
+            2560,
+            1440
+          ],
+          "d3dBuffer": [
+            1280,
+            720
+          ],
+          "d3dFullscreen": true,
+          "cornersRgb": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "allCornersVisible": true,
+          "mouse": [
+            1254,
+            706
+          ],
+          "inputReachesBottomRight": true
+        }
+      ]
+    }
+  ],
+  "captureBaseline": {
+    "source": "target/innocence-fullscreen/fixture-dxvk-capture-trace/engine.log",
+    "window": [
+      1324,
+      838
+    ],
+    "sourceRectangle": [
+      1324,
+      838
+    ],
+    "destinationRectangle": [
+      1324,
+      838
+    ],
+    "captureTarget": [
+      1324,
+      838
+    ],
+    "d3dBuffer": [
+      2560,
+      1440
+    ]
+  },
+  "builtShell": {
+    "source": "target/innocence-fullscreen/fixture-dxvk-built-shell/results.json",
+    "passed": true,
+    "objectFit": "contain",
+    "sourceSize": [
+      2560,
+      1440
+    ],
+    "browserSize": [
+      1324,
+      838
+    ],
+    "bottomRightMouse": {
+      "x": 2508,
+      "y": 1438
+    },
+    "letterboxButtonEvents": [
+      {
+        "type": "pointerButton",
+        "button": 272,
+        "pressed": false
+      }
+    ]
+  }
+}
