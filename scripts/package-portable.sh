@@ -54,7 +54,7 @@
 #
 # Setting `"mtu"` in /etc/docker/daemon.json is the machine-wide version of
 # this, and the only one that would also cover the image build.
-set -uo pipefail
+set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -83,7 +83,7 @@ route_mtu() {
 }
 
 NET_ARGS=()
-MTU="$(route_mtu)"
+MTU="$(route_mtu || true)"
 if [ -n "$MTU" ] && [ "$MTU" -lt 1500 ] 2>/dev/null; then
   NET="lwfa-build-mtu$MTU"
   if ! docker network inspect "$NET" >/dev/null 2>&1; then
@@ -108,6 +108,7 @@ echo "building the engine and packaging inside it"
 # The engine goes to /tmp inside the container rather than /src/target, so the
 # host's own build is left alone.
 docker run --rm "${NET_ARGS[@]}" \
+  -e "LWFA_PACKAGE_OWNER=$(id -u):$(id -g)" \
   -v "$ROOT:/src" \
   -v "$HOME/.cargo/registry:/root/.cargo/registry" \
   "$IMAGE" \

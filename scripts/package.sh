@@ -61,7 +61,8 @@
 # Verified in a clean archlinux:base container with only libva, libx11,
 # libxext, libdrm and ocl-icd added: zero unresolved libraries, and the binary
 # runs to the expected "no Wayland socket" failure rather than a loader error.
-set -uo pipefail
+set -euo pipefail
+shopt -s nullglob
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -72,8 +73,14 @@ BUILD=1
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/lwfa-engine/Cargo.toml | head -1)"
 [ -n "$VERSION" ] || { echo "could not read the version from Cargo.toml" >&2; exit 1; }
 
-STAGE="$ROOT/target/package/lwfa-$VERSION"
 OUT="$ROOT/releases/lwfa-$VERSION.run"
+WORK=""
+OUT_TMP=""
+cleanup() {
+  [ -z "$OUT_TMP" ] || rm -f -- "$OUT_TMP"
+  [ -z "$WORK" ] || rm -rf -- "$WORK"
+}
+trap cleanup EXIT
 
 # Libraries that must come from the machine lwfa runs on, not this one.
 #
@@ -111,7 +118,10 @@ DIST="$ROOT/packages/shell/dist"
 # ---------------------------------------------------------------------------
 # Stage
 # ---------------------------------------------------------------------------
-rm -rf "$STAGE"
+# Container builds used to leave root-owned staging directories in target/.
+# Each invocation now owns its staging tree and removes it on exit.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/lwfa-package.XXXXXX")"
+STAGE="$WORK/lwfa-$VERSION"
 mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/share/lwfa/shell" "$STAGE/deploy"
 
 mkdir -p "$STAGE/libexec"
@@ -119,23 +129,31 @@ cp "$ENGINE" "$STAGE/libexec/lwfa-engine"
 cp -r "$DIST/." "$STAGE/share/lwfa/shell/"
 cp "$ROOT/install.sh" "$STAGE/install.sh"
 cp "$ROOT/configs/defaults.toml" "$STAGE/share/lwfa/defaults.toml"
-cp -r "$ROOT/deploy/." "$STAGE/deploy/" 2>/dev/null
+cp -r "$ROOT/deploy/." "$STAGE/deploy/"
 rm -rf "$STAGE/deploy/local" "$STAGE/deploy/docker/certs"
-cp "$ROOT/README.md" "$STAGE/README.md" 2>/dev/null
+cp "$ROOT/README.md" "$STAGE/README.md"
 # The README is a landing page that links into docs/, so the pages travel with
 # it. Without them an extracted release has a table of contents pointing at
 # nothing.
 mkdir -p "$STAGE/docs"
 for doc in "$ROOT"/docs/*.md; do
-  cp "$doc" "$STAGE/docs/" 2>/dev/null
+  cp "$doc" "$STAGE/docs/"
 done
-cp "$ROOT/LICENSE" "$STAGE/LICENSE" 2>/dev/null
+cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 
 say "collecting libraries"
 COPIED=0
 SKIPPED=0
+# Process substitution would hide ldd's exit status from the packaging script.
+ldd "$ENGINE" > "$WORK/ldd.txt"
+if grep -q '=> not found' "$WORK/ldd.txt"; then
+  echo "engine has unresolved libraries:" >&2
+  cat "$WORK/ldd.txt" >&2
+  exit 1
+fi
+awk '$2 == "=>" && $3 ~ /^\// { print $3 }' "$WORK/ldd.txt" | sort -u > "$WORK/libraries.txt"
 while read -r lib; do
-  [ -f "$lib" ] || continue
+  [ -f "$lib" ] || { echo "library disappeared: $lib" >&2; exit 1; }
   base="$(basename "$lib")"
   # Match on the soname without its version, so libavcodec.so.62 is tested as
   # "libavcodec" and the exclude list stays readable.
@@ -144,8 +162,9 @@ while read -r lib; do
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
-  cp -L "$lib" "$STAGE/lib/$base" 2>/dev/null && COPIED=$((COPIED + 1))
-done < <(ldd "$ENGINE" | grep -oP '=> \K[^ ]+' | sort -u)
+  cp -L "$lib" "$STAGE/lib/$base"
+  COPIED=$((COPIED + 1))
+done < "$WORK/libraries.txt"
 say "  bundled $COPIED, left $SKIPPED to the host"
 
 # Point the binary at the bundled libraries, relative to itself.
@@ -166,7 +185,7 @@ if command -v patchelf >/dev/null 2>&1; then
   # The bundled libraries need it too, for the same reason: libavcodec loading
   # libx264 must find the bundled one rather than the host's.
   for lib in "$STAGE"/lib/*.so*; do
-    [ -f "$lib" ] && patchelf --force-rpath --set-rpath '$ORIGIN' "$lib" 2>/dev/null
+    patchelf --force-rpath --set-rpath '$ORIGIN' "$lib"
   done
   say "  set RPATH to \$ORIGIN/../lib"
 else
@@ -191,10 +210,12 @@ say "  staged $SIZE at $STAGE"
 # where the payload starts by counting its own lines, which is why the marker
 # below must stay the last line of the script half.
 mkdir -p "$ROOT/releases"
-PAYLOAD="$ROOT/target/package/payload.tar.gz"
+PAYLOAD="$WORK/payload.tar.gz"
 tar czf "$PAYLOAD" -C "$(dirname "$STAGE")" "$(basename "$STAGE")"
 
-cat > "$OUT" <<'HEADER'
+# Build beside the destination, so a failed archive never replaces a good one.
+OUT_TMP="$(mktemp "$ROOT/releases/.lwfa-$VERSION.XXXXXX")"
+cat > "$OUT_TMP" <<'HEADER'
 #!/usr/bin/env bash
 # lwfa, self-extracting installer.
 #
@@ -205,13 +226,15 @@ cat > "$OUT" <<'HEADER'
 # Everything after the __PAYLOAD__ marker is a gzipped tar archive. Nothing is
 # run as root: the installer asks for privilege only for the one udev rule, and
 # only through pkexec, where you see the prompt.
-set -uo pipefail
+set -euo pipefail
 
 TARGET=""
 PASSTHROUGH=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --extract) TARGET="${2:-}"; shift 2 ;;
+    --extract)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "--extract requires a directory" >&2; exit 1; }
+      TARGET="$2"; shift 2 ;;
     --help|-h) sed -n '2,12p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) PASSTHROUGH+=("$1"); shift ;;
   esac
@@ -248,13 +271,20 @@ fi
 echo "Unpacked to $DIR"
 echo "The files are removed when this finishes; use --extract to keep them."
 echo ""
-exec "$DIR/install.sh" ${PASSTHROUGH+"${PASSTHROUGH[@]}"}
+"$DIR/install.sh" "${PASSTHROUGH[@]}"
+exit 0
 __PAYLOAD__
 HEADER
 
-cat "$PAYLOAD" >> "$OUT"
-chmod +x "$OUT"
-rm -f "$PAYLOAD"
+cat "$PAYLOAD" >> "$OUT_TMP"
+chmod 755 "$OUT_TMP"
+# The portable builder runs as root, but its artifact belongs to the caller.
+if [ -n "${LWFA_PACKAGE_OWNER:-}" ]; then
+  [[ "$LWFA_PACKAGE_OWNER" =~ ^[0-9]+:[0-9]+$ ]] || { echo "invalid package owner" >&2; exit 1; }
+  chown -- "$LWFA_PACKAGE_OWNER" "$OUT_TMP"
+fi
+mv -fT -- "$OUT_TMP" "$OUT"
+OUT_TMP=""
 
 say ""
 say "wrote $OUT ($(du -h "$OUT" | cut -f1))"
