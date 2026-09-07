@@ -20,7 +20,7 @@
  * it is wanted.
  */
 
-import { memo } from "react"
+import { memo, useState } from "react"
 import {
   Gamepad2,
   LogOut,
@@ -39,6 +39,10 @@ import { useStreamStats } from "@/lib/streamStats"
 import { AudioReadout } from "@/panels/AudioReadout"
 import { cn } from "@/lib/utils"
 import { SHELL_VERSION } from "@/generated/config"
+import { usePending } from "@/lib/pending"
+import { supportsRestart } from "@/lib/restart"
+import { useFocusReturn } from "@/lib/useFocusReturn"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 function SessionPanel() {
   const { status, statusDetail, output, windows, strip, endpoint, account, permissions, primary, peers, engineVersion } =
@@ -67,6 +71,11 @@ function SessionPanel() {
   // refresh. Now the page can notice by itself. Null means an engine that
   // predates saying so, which is not something to nag about.
   const stale = engineVersion !== null && engineVersion !== SHELL_VERSION
+  const [confirmRestart, setConfirmRestart] = useState(false)
+  const restartFocus = useFocusReturn()
+  const restarting = usePending("restartEngine")
+  const restartSupported = supportsRestart(engineVersion)
+  const canRestart = account === "owner" && restartSupported && status === "connected" && !restarting
 
   return (
     <div className="space-y-4">
@@ -213,6 +222,32 @@ function SessionPanel() {
         <LogOut className="size-3.5" aria-hidden />
         Sign out of this device
       </Button>
+      {account === "owner" ? (
+        <div className="space-y-2">
+          <Button variant="outline" size="sm" className="h-11 w-full gap-2" disabled={!canRestart} onClick={() => setConfirmRestart(true)}>
+            <RefreshCw className={cn("size-3.5", restarting && "animate-spin")} aria-hidden />
+            {restarting ? "Restarting lwfa…" : "Restart lwfa"}
+          </Button>
+          {!restartSupported ? <p className="text-xs text-muted-foreground">Requires engine 1.5.4 or newer.</p> : null}
+          <Dialog open={confirmRestart} onOpenChange={setConfirmRestart}>
+            <DialogContent onOpenAutoFocus={restartFocus.onOpenAutoFocus} onCloseAutoFocus={restartFocus.onCloseAutoFocus}>
+              <DialogHeader>
+                <DialogTitle>Restart lwfa?</DialogTitle>
+                <DialogDescription>
+                  Everyone will disconnect, and running apps and games may close. Save your work first. This page will reconnect automatically.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" className="h-11" onClick={() => setConfirmRestart(false)}>Cancel</Button>
+                <Button variant="destructive" className="h-11" disabled={!canRestart} onClick={() => {
+                  setConfirmRestart(false)
+                  actions.restartEngine()
+                }}>Restart lwfa</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -458,6 +458,23 @@ impl Lwfa {
     /// without a terminal around it produces a process that runs, prints into
     /// the void, and never appears.
     pub fn spawn(&mut self, command: &str, in_terminal: bool) {
+        self.autostart_pending = false;
+        if self.config.xwayland() {
+            // A browser sends its viewport before launching an app. Hold an
+            // early launch too, so no child can cache the host's monitor size
+            // or start without this session's DISPLAY.
+            if !self.x11_start_attempted {
+                if self.primary.is_some() && self.viewport_override.is_none() {
+                    self.pending_x11_spawns.push((command.to_owned(), in_terminal));
+                    return;
+                }
+                crate::init_xwayland(self);
+            }
+            if self.x11_start_pending {
+                self.pending_x11_spawns.push((command.to_owned(), in_terminal));
+                return;
+            }
+        }
         let argv = split_command_line(command);
         let Some((program, args)) = argv.split_first() else {
             tracing::warn!("refusing to spawn an empty command");
@@ -663,6 +680,13 @@ impl Lwfa {
     pub fn spawn_terminal(&mut self) {
         let terminal = self.config.terminal();
         self.spawn(&terminal, false);
+    }
+
+    pub(crate) fn finish_x11_start(&mut self) {
+        self.x11_start_pending = false;
+        for (command, terminal) in std::mem::take(&mut self.pending_x11_spawns) {
+            self.spawn(&command, terminal);
+        }
     }
 
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {

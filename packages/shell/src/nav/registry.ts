@@ -133,7 +133,7 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   workspaces: {
     id: "workspaces",
     label: "Windows",
-    hint: "Window layout and scaling",
+    hint: "Window layout",
     icon: AppWindow,
   },
 }

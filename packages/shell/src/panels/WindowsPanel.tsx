@@ -59,7 +59,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
-import { WindowScalingControls } from "@/panels/WindowScalingControls"
 
 /** Column width labels, derived so a new preset needs no edit here. */
 const widthLabel = (preset: number) => `${Math.round((WIDTH_PRESETS[preset] ?? 0) * 100)}%`
@@ -646,8 +645,6 @@ const WindowItem = memo(function WindowItem({
           </div>
 
           <SendTo id={id} />
-
-          {info ? <WindowScalingControls info={info} /> : null}
 
           {/* A solo column has no header row of its own, so its settings live
             * here, named, rather than looking like more window actions. */}

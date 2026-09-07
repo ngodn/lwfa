@@ -560,6 +560,7 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
             },
         ),
         ("take-control", ToEngine::TakeControl),
+        ("restart-engine", ToEngine::RestartEngine),
         (
             "crashed",
             ToEngine::Crashed {

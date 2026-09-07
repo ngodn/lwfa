@@ -202,7 +202,7 @@ pub struct Session {
     pub terminal: String,
     pub autostart_terminal: bool,
     pub xwayland: bool,
-    /// Fixed X11 display size. None uses the initial host window size.
+    /// Fixed X11 display size. None uses the first primary browser viewport.
     pub xwayland_resolution: Option<[u32; 2]>,
 }
 

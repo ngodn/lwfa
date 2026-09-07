@@ -316,7 +316,7 @@ export const WindowSurface = memo(function WindowSurface({
           ? "rounded-none ring-0 shadow-none"
           : cn(
               "rounded-xl shadow-lg ring-1 ring-white/10",
-              focused && "shadow-2xl ring-2 ring-primary",
+              focused && "shadow-xl ring-primary/70",
             ),
       )}
       style={{

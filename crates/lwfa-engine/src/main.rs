@@ -42,6 +42,7 @@ mod input;
 mod layout;
 mod scaling;
 mod remote_input;
+mod restart;
 mod shell;
 mod sink;
 mod state;
@@ -95,7 +96,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     winit::init_winit(&mut event_loop, &mut data)?;
     init_shell_link(&mut event_loop, &mut data)?;
     init_host_clipboard(&mut data, host_display);
-    init_xwayland(&mut event_loop, &mut data);
+    // A remote desktop gets its initial monitor from the primary browser.
+    // An explicit resolution also supports unattended/local X11 sessions.
+    if data.config.session.xwayland_resolution.is_some() || data.resize_output.is_none() {
+        init_xwayland(&mut data);
+    }
     init_portal(&mut event_loop, &mut data);
 
     // The focus guardian's tick: once a second, repair the X server's input
@@ -139,7 +144,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if data.config.terminal_available() && data.config.autostart_terminal() {
-        data.spawn_terminal();
+        if data.config.xwayland() && !data.x11_start_attempted {
+            data.autostart_pending = true;
+        } else {
+            data.spawn_terminal();
+        }
     }
     data.ensure_persistent_gamepad();
 
@@ -348,11 +357,14 @@ fn reap_children() {
 /// start, still gets a working compositor for native Wayland clients; it just
 /// cannot run Steam. `LWFA_NO_XWAYLAND` skips it deliberately.
 ///
-/// The server is started eagerly rather than on the first X11 connection.
-/// Lazy startup is what most compositors do and it does save ~30MB, but it
-/// means `DISPLAY` is unset when early clients are spawned, and a client that
-/// checks once at startup will already have decided X11 is unavailable.
-fn init_xwayland(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut CalloopData) {
+/// Start after the first valid primary viewport, before launching applications.
+/// The resulting monitor stays fixed for Wine mode-emulation compatibility.
+/// A deliberate local launch can start it at the host size without a browser.
+fn init_xwayland(data: &mut Lwfa) {
+    if data.x11_start_attempted {
+        return;
+    }
+    data.x11_start_attempted = true;
     if !data.config.xwayland() {
         tracing::info!("xwayland disabled; X11 clients will not run");
         return;
@@ -374,7 +386,8 @@ fn init_xwayland(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut Ca
         }
     };
 
-    let handle = event_loop.handle();
+    data.x11_start_pending = true;
+    let handle = data.loop_handle.clone();
     let ret = handle.insert_source(xwayland, move |event, _, data| match event {
         XWaylandEvent::Ready {
             x11_socket,
@@ -395,14 +408,35 @@ fn init_xwayland(event_loop: &mut EventLoop<'static, CalloopData>, data: &mut Ca
                     data.xdisplay = None;
                 }
             }
+            data.finish_x11_start();
         }
         XWaylandEvent::Error => {
             tracing::warn!("xwayland failed to start; X11 clients will not run");
             data.xdisplay = None;
+            data.finish_x11_start();
         }
     });
     if let Err(err) = ret {
         tracing::warn!("could not watch xwayland: {err}. X11 clients will not run.");
+        data.finish_x11_start();
+    }
+    // A hung server must not hold native Wayland launches indefinitely.
+    // Late readiness may still enable X11 for subsequent launches.
+    if data.x11_start_pending {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        if let Err(err) = handle.insert_source(
+            Timer::from_duration(std::time::Duration::from_secs(10)),
+            |_, _, data| {
+                if data.x11_start_pending {
+                    tracing::warn!("Xwayland startup timed out; continuing pending launches without X11");
+                    data.finish_x11_start();
+                }
+                TimeoutAction::Drop
+            },
+        ) {
+            tracing::warn!("could not bound Xwayland startup: {err}");
+            data.finish_x11_start();
+        }
     }
 }
 
@@ -830,9 +864,9 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // has nothing to draw until it is told the arrangement. Waiting for
             // the primary to move something would mean an empty desktop for as
             // long as nobody touches anything.
-            if state.primary != Some(session) {
-                state.send_layout_to(session);
-            }
+            // The primary uses this snapshot to validate its saved arrangement
+            // before a page refresh sends new geometry to existing windows.
+            state.send_layout_to(session);
             // The new arrival also has to reach everyone else's connections
             // list, and it may have just changed who is primary.
             state.announce_peers();
@@ -909,6 +943,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                     // needs the window list to build its own from.
                     let hello = state.hello(next);
                     state.send_to_session(next, hello);
+                    state.send_layout_to(next);
                 }
             }
 
@@ -923,6 +958,11 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // through, rather than at each handler. A permission checked in
             // nine places is a permission that will be missing from the tenth.
             if !permitted(state, session, &message) {
+                if matches!(message, ToEngine::RestartEngine) {
+                    state.send_to_session(session, ToShell::Error {
+                        request: "restartEngine".into(), message: "Only the owner can restart lwfa.".into(),
+                    });
+                }
                 tracing::debug!(
                     "dropped {} from session {session}, which may not do that",
                     kind_of(&message),
@@ -1040,7 +1080,8 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
         // Deciding who else is on your desktop is the owner's alone. Not
         // gated on interact: a named account with full interact rights still
         // must not be able to kick the owner off their own machine.
-        ToEngine::EndSession { .. } | ToEngine::SetSessionMode { .. } => who.account == "owner",
+        ToEngine::EndSession { .. } | ToEngine::SetSessionMode { .. }
+        | ToEngine::RestartEngine => who.account == "owner",
 
         // Administering accounts is the owner's alone, and is refused out loud
         // rather than dropped: the UI is waiting on a reply. See
@@ -1185,6 +1226,13 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                 // asked to be another shape.
                 None => tracing::debug!("backend cannot resize; ignoring the viewport"),
             }
+            init_xwayland(state);
+            if state.autostart_pending {
+                state.spawn_terminal();
+            }
+            if !state.x11_start_pending {
+                state.finish_x11_start();
+            }
         }
 
         ToEngine::Ping => {
@@ -1247,6 +1295,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             );
             state.send_to_shell(lwfa_proto::ToShell::AppIcons { icons });
         }
+        ToEngine::RestartEngine => restart::request(state, session),
         ToEngine::TakeControl => {
             if state.primary == Some(session) {
                 return; // already driving
@@ -1258,6 +1307,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             // list it needs to build one.
             let hello = state.hello(session);
             state.send_to_session(session, hello);
+            state.send_layout_to(session);
             // Whoever just lost the wheel has to start following, and needs the
             // arrangement to follow.
             if let Some(old) = previous {
@@ -1305,6 +1355,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
                 if let Some(next) = state.primary {
                     let hello = state.hello(next);
                     state.send_to_session(next, hello);
+                    state.send_layout_to(next);
                 }
             }
 
@@ -1322,9 +1373,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             // greys its controls from and it has to see the change.
             let hello = state.hello(target);
             state.send_to_session(target, hello);
-            if state.primary != Some(target) {
-                state.send_layout_to(target);
-            }
+            state.send_layout_to(target);
             state.announce_peers();
             tracing::info!("session {session} set session {target} to {mode:?}");
         }
@@ -1873,6 +1922,42 @@ mod tests {
     }
 
     #[test]
+    fn early_browser_launch_waits_for_a_valid_primary_viewport() {
+        let mut state = negotiation_state();
+        state.config.session.xwayland = true;
+        state.primary = Some(1);
+        state.spawn("lwfa-test-must-not-launch", false);
+        assert_eq!(state.pending_x11_spawns, vec![("lwfa-test-must-not-launch".into(), false)]);
+        assert!(!state.x11_start_attempted);
+        for (session, width) in [(2, 1324), (1, 0)] {
+            handle_shell_event(&mut state, ShellEvent::Message(session, ToEngine::SetViewport {
+                width, height: 838, scale: 2.0,
+            }));
+            assert!(!state.x11_start_attempted);
+            assert_eq!(state.viewport_override, None);
+        }
+    }
+
+    #[test]
+    fn completed_or_failed_x11_start_drains_the_launch_queue_once() {
+        for display in [Some(42), None] {
+            let mut state = negotiation_state();
+            state.config.session.xwayland = true;
+            state.x11_start_attempted = true;
+            state.x11_start_pending = true;
+            state.xdisplay = display;
+            // Empty commands exercise queue replay without creating children.
+            state.pending_x11_spawns = vec![(String::new(), false), (String::new(), true)];
+            state.finish_x11_start();
+            assert!(!state.x11_start_pending);
+            assert!(state.pending_x11_spawns.is_empty());
+            assert_eq!(state.xdisplay, display);
+            state.finish_x11_start();
+            assert!(state.pending_x11_spawns.is_empty());
+        }
+    }
+
+    #[test]
     fn a_follower_still_streams_and_still_types() {
         // A follower is not a spectator. Only *layout* is denied to it.
         let full = session(SessionMode::Interact);
@@ -1906,6 +1991,14 @@ mod tests {
         };
         assert!(!allowed(&guest, true, &demote));
         assert!(allowed(&owner, false, &demote));
+
+        assert!(!allowed(&guest, true, &ToEngine::RestartEngine));
+        assert!(!allowed(&guest, false, &ToEngine::RestartEngine));
+        assert!(allowed(&owner, false, &ToEngine::RestartEngine));
+        owner.permissions.mode = SessionMode::View;
+        assert!(allowed(&owner, false, &ToEngine::RestartEngine));
+        guest.permissions.mode = SessionMode::View;
+        assert!(!allowed(&guest, true, &ToEngine::RestartEngine));
     }
 
     /// A `Lwfa` is far too heavy to build in a unit test, so the format rule

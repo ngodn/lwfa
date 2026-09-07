@@ -151,6 +151,8 @@ export interface SessionActions {
    * would mean every panel's type knowing about it.
    */
   signOut: () => void
+  /** Restart the installed user service after the owner confirms. */
+  restartEngine: () => void
   /** Disconnect another session. The owner's alone. */
   endSession: (session: SessionId) => void
   /** Change what a live session may do, without touching its account. */

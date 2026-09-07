@@ -21,21 +21,16 @@ to JPEG if it fails. Reload the tab to retry its original capabilities.
 
 ## Display detail
 
-[Window scaling](shell.md#window-scaling) separates the browser tile's size
-from the app's workspace and captured pixel density. Sharper asks native
-Wayland apps to render more detail at the same logical size. More space asks
-for a larger workspace and fits it into the existing tile. Pointer and touch
-positions follow the app's actual size, including apps that round or refuse
-the requested dimensions.
+[Window scaling](shell.md#window-scaling) is temporarily disabled. Windows
+use the 1x baseline, with no automatic increase for browser display density.
+Pointer and touch positions follow the app's actual size, including apps
+that round or refuse the requested dimensions.
 
-Sharper can improve fine text and lines, but it cannot restore detail from an
-app that supplies only a low-resolution buffer. The browser also needs enough
-physical display pixels to show the added detail. Video compression and color
-subsampling can still soften small colored text; increasing pixel density does
-not make the stream lossless. The network's bitrate budget still applies.
+Video compression and color subsampling can soften small colored text.
+The network's bitrate budget still applies.
 
 Capture limits each frame to an 8192-pixel edge and 16,777,216 pixels in total.
-Large windows may therefore receive a lower factor than selected. Decoder and
+Large windows may therefore be downsampled to fit these limits. Decoder and
 encoder capabilities can impose further limits.
 
 ## Zero copy, when the driver allows it

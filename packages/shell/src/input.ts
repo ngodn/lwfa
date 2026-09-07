@@ -283,6 +283,11 @@ export function isTextEntry(target: EventTarget | null): boolean {
   return !["checkbox", "radio", "button", "submit", "reset", "range"].includes(type)
 }
 
+/** Dialog navigation and confirmation keys belong to the shell. */
+export function isDialogControl(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest('[role="dialog"], [role="alertdialog"]') !== null
+}
+
 /**
  * Should this keydown be forwarded?
  *
@@ -291,5 +296,5 @@ export function isTextEntry(target: EventTarget | null): boolean {
  * held key repeat two or three times over.
  */
 export function shouldForwardKeydown(event: KeyboardEvent): boolean {
-  return !isShellKey(event) && !event.repeat && !isTextEntry(event.target)
+  return !isShellKey(event) && !event.repeat && !isTextEntry(event.target) && !isDialogControl(event.target)
 }

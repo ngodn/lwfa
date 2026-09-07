@@ -3,6 +3,8 @@
 // LWFA_TEST_DISPLAY, PROTON_DIR, and ZIG (absolute binary path).
 // The caller starts and stops the isolated engine. No installed game or prefix
 // is used. Optional LWFA_TEST_BROWSER_RESIZE=1 adds a viewport resize case.
+// Scaling is expected to be disabled. LWFA_TEST_SCALING_ENABLED=1 tests older
+// engines where workspace scaling remains available.
 // Results and Wine child-process logs: LWFA_TEST_RESULTS_DIR, or target/proton-display.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -84,9 +86,18 @@ function screen() {
 }
 
 const assertion = output => /monitor_get_dpi[^\n]*Assertion|num \* dpi \/ d < 65536/.test(output);
+const scalingEnabled = process.env.LWFA_TEST_SCALING_ENABLED === '1';
 const results = [];
 try {
   run(process.env.CC || 'cc', ['-std=c11', '-Wall', '-Wextra', join(source, 'proton-display-window.c'), '-lX11', '-o', join(temporary, 'window')]);
+  await writeFile(join(temporary, 'geometry.c'), `#include <X11/Xlib.h>
+#include <stdio.h>
+#include <string.h>
+static int find(Display*d,Window w,int depth){char*n=NULL;XFetchName(d,w,&n);int match=n&&strcmp(n,"lwfa-dpi-window-fixture")==0;if(n)XFree(n);if(match){XWindowAttributes a;XGetWindowAttributes(d,w,&a);printf("{\\"x\\":%d,\\"y\\":%d,\\"width\\":%d,\\"height\\":%d}\\n",a.x,a.y,a.width,a.height);return 1;}Window root,parent,*kids=NULL;unsigned count=0;int found=0;if(depth<8&&XQueryTree(d,w,&root,&parent,&kids,&count)){for(unsigned i=0;i<count&&!found;i++)found=find(d,kids[i],depth+1);if(kids)XFree(kids);}return found;}
+int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,DefaultRootWindow(d),0);XCloseDisplay(d);return found?0:3;}
+`);
+  run(process.env.CC || 'cc', ['-std=c11', '-Wall', '-Wextra', join(temporary, 'geometry.c'), '-lX11', '-o', join(temporary, 'geometry')]);
+  const geometry = () => JSON.parse(run(join(temporary, 'geometry'), [], displayEnv, 5000));
   run(process.env.ZIG, ['cc', '-std=c11', '-target', 'x86_64-windows-gnu', join(source, 'proton-display-dpi.c'), '-o', join(temporary, 'dpi.exe'), '-luser32'], process.env, 180_000);
   const windows = new Map();
   const errors = [];
@@ -132,6 +143,7 @@ try {
       layout(1000);
       await delay(300);
       result.before = screen();
+      result.geometryBefore = geometry();
       probe = start(wine, [join(temporary, 'dpi.exe'), '20'], env);
       await waitUntil(() => {
         assert(!probe.error, probe.error?.message);
@@ -144,6 +156,7 @@ try {
       else setViewport(1324);
       await delay(500);
       result.after = screen();
+      result.geometryAfter = geometry();
       await waitUntil(() => {
         assert(!probe.error, probe.error?.message);
         return assertion(probe.output) || probe.output.includes('DPI_PROBE_OK') || probe.closed;
@@ -152,8 +165,17 @@ try {
       result.completed = probe.output.includes('DPI_PROBE_OK');
       assert(!result.assertion, 'Wine child process hit monitor_get_dpi assertion');
       assert(result.completed, 'Wine child process did not finish all DPI queries');
-      assert.equal(errors.length, 0, `Engine errors: ${JSON.stringify(errors)}`);
-      if (name !== 'browser-resize') assert.deepEqual(result.after, result.before, 'Individual window changes must preserve the shared display dimensions');
+      if (name === 'workspace-scaling' && !scalingEnabled) {
+        assert.equal(errors.length, 1, 'Disabled workspace scaling must return one error');
+        assert.equal(errors[0].request, 'setWindowScaling');
+        assert.match(errors[0].message, /scaling is temporarily disabled/i);
+        result.expectedRejection = errors[0];
+        assert.deepEqual(result.geometryAfter, result.geometryBefore, 'Rejected scaling preserves native window geometry');
+        assert.deepEqual(windows.get(id).scaling, { mode: 'sharp', scale: 1 }, 'Rejected scaling preserves baseline settings');
+      } else {
+        assert.equal(errors.length, 0, `Engine errors: ${JSON.stringify(errors)}`);
+      }
+      assert.deepEqual(result.after, result.before, 'Window operations and browser resize preserve the active shared display');
       result.passed = true;
     } catch (error) {
       result.passed = false;

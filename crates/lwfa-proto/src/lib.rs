@@ -1220,6 +1220,10 @@ pub enum ToEngine {
     #[serde(rename_all = "camelCase")]
     TakeControl,
 
+    /// Restart the installed lwfa user service. Owner only; no service argument.
+    #[serde(rename_all = "camelCase")]
+    RestartEngine,
+
     /// Disconnect another session. The owner's alone.
     ///
     /// Kicks the connection, not the account: whoever it was can log back in.

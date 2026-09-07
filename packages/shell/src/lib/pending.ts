@@ -55,7 +55,7 @@ function subscribe(listener: () => void): () => void {
 const snapshot = (): number => version
 
 /** Mark a key as awaited. Calling it again extends the deadline. */
-export function markPending(key: string, timeoutMs = DEFAULT_TIMEOUT_MS): void {
+export function markPending(key: string, timeoutMs = DEFAULT_TIMEOUT_MS, onTimeout?: () => void): void {
   clearTimeout(timers.get(key))
   pending.set(key, Date.now())
   timers.set(
@@ -64,6 +64,7 @@ export function markPending(key: string, timeoutMs = DEFAULT_TIMEOUT_MS): void {
       // Timed out rather than resolved. The button goes back to normal so it
       // can be pressed again, which is the only useful thing left to do.
       resolvePending(key)
+      onTimeout?.()
     }, timeoutMs),
   )
   emit()

@@ -328,6 +328,10 @@ pub struct Lwfa {
     /// The X display number, for putting `DISPLAY` in a spawned client's
     /// environment. See `Lwfa::spawn`.
     pub xdisplay: Option<u32>,
+    pub(crate) x11_start_attempted: bool,
+    pub(crate) x11_start_pending: bool,
+    pub(crate) pending_x11_spawns: Vec<(String, bool)>,
+    pub(crate) autostart_pending: bool,
 
     pub(crate) x11_outputs: crate::x11_output::X11Outputs,
     pub(crate) scaling: std::collections::HashMap<WindowId, lwfa_proto::WindowScaling>,
@@ -465,6 +469,10 @@ impl Lwfa {
             resize_output: None,
             xwm: None,
             xdisplay: None,
+            x11_start_attempted: false,
+            x11_start_pending: false,
+            pending_x11_spawns: Vec::new(),
+            autostart_pending: false,
             x11_outputs: Default::default(),
             scaling: Default::default(),
             fractional_scale_state: smithay::wayland::fractional_scale::FractionalScaleManagerState::new::<Self>(&dh),

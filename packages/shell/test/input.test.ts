@@ -17,12 +17,16 @@ class FakeElement {
   tagName: string
   type: string
   isContentEditable: boolean
+  inDialog: boolean
 
-  constructor(tagName: string, options: { type?: string; editable?: boolean } = {}) {
+  constructor(tagName: string, options: { type?: string; editable?: boolean; dialog?: boolean } = {}) {
     this.tagName = tagName
     this.type = options.type ?? "text"
     this.isContentEditable = options.editable ?? false
+    this.inDialog = options.dialog ?? false
   }
+
+  closest() { return this.inDialog ? this : null }
 }
 
 // `isTextEntry` narrows with `instanceof HTMLElement`, which does not exist in
@@ -68,6 +72,10 @@ describe("isTextEntry", () => {
 })
 
 describe("shouldForwardKeydown", () => {
+  it.each(["Tab", "Enter", "Escape"])("keeps %s inside dialogs while normal game input still forwards", code => {
+    expect(shouldForwardKeydown(key(new FakeElement("BUTTON", { dialog: true }), { code }))).toBe(false)
+    expect(shouldForwardKeydown(key(new FakeElement("DIV"), { code }))).toBe(true)
+  })
   it("forwards a press aimed at the desktop", () => {
     expect(shouldForwardKeydown(key(new FakeElement("DIV")))).toBe(true)
   })

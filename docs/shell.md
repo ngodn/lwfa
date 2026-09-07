@@ -32,32 +32,28 @@ the other's.
 
 ## Window scaling
 
-Open **Windows**, expand a window, and choose its display mode and scale.
-The browser tile keeps its size in both modes:
+Sharper and More space are temporarily disabled while display sizing and
+Proton compatibility are reworked. Windows use the 1x baseline. The engine
+also rejects scaling requests from older browser clients.
 
-| Mode at 2x | App inside a 1000x500 browser tile |
-| --- | --- |
-| **Sharper** | Keeps a 1000x500 logical workspace and requests 2000x1000 pixels, so text stays the same size with more detail |
-| **More space** | Requests a 2000x1000 workspace, so more content fits and text appears smaller |
+Xwayland starts after the primary browser reports its viewport, so games see
+that size as their initial desktop resolution. The monitor stays fixed during
+the session to avoid Wine's display-resize DPI failure. Reconnecting preserves
+the existing arrangement when it still matches the engine. Apps can enforce
+a minimum window size, and games can choose their own internal resolution.
 
-Both offer 0.5x, 0.75x, 1x, 1.25x, 1.5x, 1.75x, and 2x. Below 1x,
-Sharper trades detail for fewer pixels; More space makes the app's interface
-larger. The initial setting is **Sharper, 1x**. **Auto** in Sharper follows the
-controlling device's display density, up to 2x.
+An explicit `session.xwayland_resolution` overrides the initial display size
+and permits X11 startup without a browser. A local app launch before a browser
+connects uses the host size. Change the initial resolution by restarting the
+engine; rotating the browser does not change a running game's monitor.
 
-Sharper works with native Wayland apps that honor buffer scale. Xwayland apps,
-including many Proton games, can use More space; per-window Sharper above or
-below 1x is unavailable for them. Apps can enforce a minimum size or decline a
-resize, and games may have their own resolution setting.
+## Restarting the session
 
-Settings belong to the open window, survive browser reconnects, and are shared
-with viewers. Closing the app resets them. Only the controlling device with
-interaction permission can change them.
-
-At 2x there are four times as many pixels to render and stream. Start with 1x
-on a slow connection, or choose Auto on a dense display when text clarity
-matters. Very large windows are bounded to keep capture memory under control.
-See [streaming](streaming.md#display-detail) for the remaining quality limits.
+The session owner can restart the installed `lwfa.service` from **Session**,
+below **Sign out of this device**. A confirmation warns that all devices will
+disconnect and apps or games may close. Save work before confirming. The page
+reconnects automatically when the service returns. Standalone development
+engines cannot restart a different installed instance.
 
 ## Input
 

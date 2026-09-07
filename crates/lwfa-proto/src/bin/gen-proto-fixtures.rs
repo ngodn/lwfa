@@ -553,6 +553,7 @@ fn samples() -> (Vec<(&'static str, ToShell)>, Vec<(&'static str, ToEngine)>) {
         ),
     ];
     to_engine.push(("take-control", ToEngine::TakeControl));
+    to_engine.push(("restart-engine", ToEngine::RestartEngine));
     to_engine.push((
         "crashed",
         ToEngine::Crashed {

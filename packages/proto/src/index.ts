@@ -590,6 +590,8 @@ export type ToEngine =
    * when that device is a tablet on a table in another room.
    */
   | { type: "takeControl" }
+  /** Restart the installed lwfa user service. Owner only. */
+  | { type: "restartEngine" }
   /**
    * The shell hit an error it could not continue from and is reloading.
    *
@@ -1647,9 +1649,10 @@ export function decodeToEngine(text: string): ToEngine {
       noExtraKeys(o, ["type", "message"], where)
       return { type: "crashed", message: str(o, "message", where) }
     }
-    case "takeControl": {
-      noExtraKeys(o, ["type"], `${at}.takeControl`)
-      return { type: "takeControl" }
+    case "takeControl":
+    case "restartEngine": {
+      noExtraKeys(o, ["type"], `${at}.${t}`)
+      return { type: t }
     }
     case "setGamepad": {
       const where = `${at}.setGamepad`

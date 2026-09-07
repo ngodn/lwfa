@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loadArrangement, restoreArrangement, saveArrangement, type Arrangement } from "./lib/arrangement.js";
 import type {
   DecodedFrame,
   PeerInfo,
@@ -61,7 +62,7 @@ import { engineFor } from "@/lib/engineUrl"
 import { requestLeadership } from "@/lib/leader"
 import { log } from "@/lib/log"
 import { takeCrashToReport } from "@/lib/crashLoop"
-import { pendingKeys, resolvePending } from "@/lib/pending"
+import { markPending, pendingKeys, resolvePending } from "@/lib/pending"
 import { blocked, clearBlocked } from "@/lib/alreadyRunning"
 import {
   closed as fileDialogClosed,
@@ -95,7 +96,7 @@ import {
   type SessionState,
 } from "./session.js";
 import type { SurfaceInput } from "./WindowSurface.js";
-import { evdevFromCode, isShellKey, isTextEntry } from "./input.js";
+import { createKeyboardRouter } from "./lib/keyboardRouter.js";
 import {
   EMPTY,
   type StripConfig,
@@ -356,6 +357,9 @@ export function App(): React.ReactElement {
    * new one. See the `hello` handler.
    */
   const awaitingOutput = useRef(false);
+  const restoringLayout = useRef(false);
+  const pendingTransitions = useRef<Transition[]>([]);
+  const lastArrangement = useRef<Arrangement | null>(null);
   const decoderRef = useRef<FrameDecoder | null>(null);
   // Refs so the message handler, which is created once, always reads current
   // values instead of the ones captured when the socket opened.
@@ -467,11 +471,14 @@ export function App(): React.ReactElement {
 
   /** Push the current strip to the engine as a target plus a spring. */
   const push = useCallback((next: StripState, out: Output, animate = true) => {
+    if (restoringLayout.current) return;
     const windows = layout(next, out, configRef.current);
     // A follower's arrangement is not its own to declare. Sending it anyway
     // would be dropped by the engine, but it would also mean two devices
     // computing conflicting geometry and each briefly rendering its own.
     if (primaryRef.current) {
+      lastArrangement.current = { state: next, output: out };
+      saveArrangement(next, out);
       connection.current?.send({
         type: "setLayout",
         windows,
@@ -519,6 +526,10 @@ export function App(): React.ReactElement {
 
   const update = useCallback(
     (fn: Transition, animate = true) => {
+      if (restoringLayout.current) {
+        pendingTransitions.current.push(fn);
+        return;
+      }
       const out = outputRef.current;
       const next = fn(stripRef.current, out, configRef.current);
       stripRef.current = next;
@@ -571,9 +582,14 @@ export function App(): React.ReactElement {
     // Socket reconnects can miss windowClosed. Keep this set in the connection
     // lifetime so hello can retire missing resources before React renders.
     const knownWindows = new Set<WindowId>();
+    let pendingHello: ((snapshot: WindowLayout[] | null, snapshotOutput?: Output) => void) | null = null;
+    let helloTimer: ReturnType<typeof setTimeout> | undefined;
     const handleMessage = (message: ToShell) => {
       switch (message.type) {
         case "hello": {
+          resolvePending("restartEngine");
+          restoringLayout.current = message.primary;
+          pendingTransitions.current = [];
           // Report a crash from the previous page load, now that there is a
           // session to report it to. Here rather than on the socket opening,
           // because the engine has to have a session for this connection
@@ -611,70 +627,73 @@ export function App(): React.ReactElement {
           });
           setWindows(new Map(message.windows.map((w) => [w.id, w])));
 
-          // Rebuild the strip from the engine's view of the world rather than
-          // trusting whatever this page had before. A reconnecting shell must
-          // resync, not resurrect a stale layout.
-          let next = message.windows.reduce(
-            (state, w) => addWindow(state, w.id, out, configRef.current),
-            EMPTY,
-          );
-          if (message.focused !== null) {
-            next = focusWindow(next, message.focused, out, configRef.current);
-          }
-
-          // A socket flap must not yank a fullscreen game back to windowed.
-          //
-          // The engine's hello names windows and focus but not arrangement,
-          // because arrangement is this side's job, so the rebuilt strip
-          // starts with nothing fullscreen. Laying it out as-is tells the
-          // engine to un-fullscreen the game, the game immediately asks
-          // again, and the round trip costs an encoder rebuild and a visible
-          // flicker on every reconnect. The engine now says which windows
-          // fill the output (`WindowInfo.fullscreen`), so the fullscreen state
-          // is restored from the wire rather than from this page's own memory:
-          // that also covers a page that reloaded or a fresh device, where the
-          // old carry-over from local state knew nothing.
-          for (const w of message.windows) {
-            if (w.fullscreen) {
-              next = setFullscreen(next, w.id, true, out, configRef.current);
+          // The next layout message is the engine's snapshot. Validate the
+          // saved tab arrangement against it before sending any new geometry.
+          // Older engines send no primary snapshot, so retain a short fallback.
+          if (helloTimer !== undefined) clearTimeout(helloTimer);
+          pendingHello = (snapshot, snapshotOutput) => {
+            restoringLayout.current = false;
+            const currentOutput = outputRef.current;
+            const restoredOutput = snapshotOutput ?? currentOutput;
+            let next = restoreArrangement(message.windows, message.focused, restoredOutput,
+              configRef.current, lastArrangement.current ?? loadArrangement(), snapshot);
+            if (restoredOutput.width !== currentOutput.width || restoredOutput.height !== currentOutput.height) {
+              next = reflow(next, currentOutput, configRef.current);
             }
-          }
+            // Window and focus events may arrive while an older server's
+            // snapshot timeout is pending. Replay them onto the restored strip.
+            for (const transition of pendingTransitions.current) {
+              next = transition(next, currentOutput, configRef.current);
+            }
+            pendingTransitions.current = [];
 
-          stripRef.current = next;
-          setStrip(next);
+            stripRef.current = next;
+            setStrip(next);
 
-          // Do not lay windows out for an output that is about to change.
-          //
-          // The engine's output is whatever the last primary asked for, which
-          // on a fresh connection is rarely this device's shape. Laying out
-          // against it and *then* reporting the viewport resizes every window
-          // twice, and a resize is an H.264 `configure`: the session cannot
-          // change resolution mid-stream, so each one is torn down and rebuilt
-          // at 90-160ms. A single reconnect was rebuilding every streamed
-          // window two or three times over, which is most of what "the engine
-          // freezes when I refresh" was.
-          //
-          // So when the shape is already wrong, ask for the right one and let
-          // `outputChanged` drive the first layout.
-          const measured = lastViewport.current;
-          const mismatched =
-            primaryRef.current &&
-            measured !== null &&
-            (measured.width !== out.width || measured.height !== out.height);
+            // Do not lay windows out for an output that is about to change.
+            //
+            // The engine's output is whatever the last primary asked for, which
+            // on a fresh connection is rarely this device's shape. Laying out
+            // against it and *then* reporting the viewport resizes every window
+            // twice, and a resize is an H.264 `configure`: the session cannot
+            // change resolution mid-stream, so each one is torn down and rebuilt
+            // at 90-160ms. A single reconnect was rebuilding every streamed
+            // window two or three times over, which is most of what "the engine
+            // freezes when I refresh" was.
+            //
+            // So when the shape is already wrong, ask for the right one and let
+            // `outputChanged` drive the first layout.
+            const measured = lastViewport.current;
+            const mismatched =
+              primaryRef.current &&
+              measured !== null &&
+              (measured.width !== currentOutput.width || measured.height !== currentOutput.height);
 
-          if (mismatched) {
-            awaitingOutput.current = true;
-            connection.current?.send({ type: "setViewport", ...measured });
-            // A backend that cannot resize (the TTY one owns a real display)
-            // never answers, and the session must not sit there empty waiting.
-            window.setTimeout(() => {
-              if (!awaitingOutput.current) return;
-              awaitingOutput.current = false;
-              push(stripRef.current, outputRef.current, false);
-            }, 1500);
+            if (mismatched) {
+              awaitingOutput.current = true;
+              connection.current?.send({ type: "setViewport", ...measured });
+              // A backend that cannot resize (the TTY one owns a real display)
+              // never answers, and the session must not sit there empty waiting.
+              window.setTimeout(() => {
+                if (!awaitingOutput.current) return;
+                awaitingOutput.current = false;
+                push(stripRef.current, outputRef.current, false);
+              }, 1500);
+            } else {
+              // No animation on resync: windows should appear in place.
+              push(next, currentOutput, false);
+            }
+          };
+          if (message.primary) {
+            helloTimer = setTimeout(() => {
+              const restore = pendingHello;
+              pendingHello = null;
+              restore?.(null);
+            }, 500);
           } else {
-            // No animation on resync: windows should appear in place.
-            push(next, out, false);
+            const restore = pendingHello;
+            pendingHello = null;
+            restore(null);
           }
           break;
         }
@@ -686,6 +705,7 @@ export function App(): React.ReactElement {
           };
           outputRef.current = out;
           setOutput(out);
+          if (pendingHello) break;
           // Whether this is the answer we were waiting for or an ordinary
           // resize, the response is the same: lay out for the shape we now
           // have. Clearing the flag stops the safety timer firing a second
@@ -708,6 +728,13 @@ export function App(): React.ReactElement {
         }
 
         case "layout": {
+          if (pendingHello) {
+            const restore = pendingHello;
+            pendingHello = null;
+            clearTimeout(helloTimer);
+            restore(message.windows, message.output);
+            if (primaryRef.current) break;
+          }
           // Only meaningful while following. The primary computes its own, and
           // a stale broadcast arriving after a handover must not overwrite it.
           if (primaryRef.current) break;
@@ -892,6 +919,7 @@ export function App(): React.ReactElement {
           // Routing by the request name keeps this from becoming a global
           // error bus that every panel has to filter.
           log("error", `${message.request}: ${message.message}`);
+          if (message.request === "restartEngine") resolvePending("restartEngine");
           if (message.request.endsWith("Account") || message.request === "listAccounts") {
             setAccountError(message.message)
           }
@@ -1061,6 +1089,10 @@ export function App(): React.ReactElement {
     window.addEventListener("pagehide", onPageHide);
 
     return () => {
+      clearTimeout(helloTimer);
+      pendingHello = null;
+      restoringLayout.current = false;
+      pendingTransitions.current = [];
       window.removeEventListener("pagehide", onPageHide);
       // Released before closing, so a waiting tab is promoted the moment this
       // one lets go rather than after its socket has finished dying.
@@ -1090,33 +1122,19 @@ export function App(): React.ReactElement {
   useEffect(() => {
     if (status !== "connected") return;
 
-    const forward = (event: KeyboardEvent, pressed: boolean) => {
-      if (isShellKey(event)) return;
-      // Typing into the shell's own text fields is not input for the machine.
-      // Without this the capture-phase listener eats the keystroke before the
-      // browser can insert it, so the search box never fills and the letters
-      // arrive in whatever window has focus on the far end instead.
-      if (isTextEntry(event.target)) return;
-      // Drop browser autorepeat. Wayland tells clients the repeat rate and
-      // they generate their own repeats, and the compositor's keyboard handle
-      // repeats too. Forwarding the browser's as well means a held key repeats
-      // two or three times over, which shows up as duplicated characters.
-      if (pressed && event.repeat) return;
-      const key = evdevFromCode(event.code);
-      if (key === null) return;
-      // Stop the browser acting on it too. Without this Ctrl+W closes the tab
-      // instead of reaching the application, which is a very bad surprise.
-      event.preventDefault();
+    const router = createKeyboardRouter((key, pressed) => {
       connection.current?.send({ type: "key", key, pressed });
-    };
-
-    const down = (event: KeyboardEvent) => forward(event, true);
-    const up = (event: KeyboardEvent) => forward(event, false);
+    });
+    const down = (event: KeyboardEvent) => router.forward(event, true);
+    const up = (event: KeyboardEvent) => router.forward(event, false);
+    const focus = (event: FocusEvent) => router.focus(event.target);
     // Capture phase, so React's own handlers do not swallow anything first.
     window.addEventListener("keydown", down, { capture: true });
     window.addEventListener("keyup", up, { capture: true });
+    window.addEventListener("focusin", focus, { capture: true });
 
     const blur = () => {
+      router.releaseAll();
       // Held keys would otherwise stay down in the compositor forever, which
       // shows up as a key repeating until you alt-tab back and press it again.
       connection.current?.send({ type: "pointerLeave" });
@@ -1126,7 +1144,9 @@ export function App(): React.ReactElement {
     return () => {
       window.removeEventListener("keydown", down, { capture: true });
       window.removeEventListener("keyup", up, { capture: true });
+      window.removeEventListener("focusin", focus, { capture: true });
       window.removeEventListener("blur", blur);
+      router.releaseAll();
     };
   }, [status]);
 
@@ -1302,6 +1322,13 @@ export function App(): React.ReactElement {
       signOut: () => {
         clearPassword();
         setPassword(null);
+      },
+      restartEngine: () => {
+        markPending("restartEngine", 30_000, () => {
+          log("warn", "Restart was not confirmed. Check the lwfa service on the host.");
+        });
+        log("info", "Restart requested. Waiting to reconnect.");
+        send({ type: "restartEngine" });
       },
       endSession: (target) => send({ type: "endSession", session: target }),
       setSessionMode: (target, mode) =>

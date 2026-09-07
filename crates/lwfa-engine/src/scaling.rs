@@ -10,6 +10,14 @@ use smithay::wayland::compositor::{
 use smithay::wayland::fractional_scale::{FractionalScaleHandler, with_fractional_scale};
 use smithay::wayland::seat::WaylandFocus;
 
+// Keep the protocol compatible with existing clients while the display and
+// scaling interaction is being reworked. No client may opt back in yet.
+const WINDOW_SCALING_ENABLED: bool = false;
+
+fn scaling_request_available(scaling: WindowScaling) -> bool {
+    WINDOW_SCALING_ENABLED || scaling == WindowScaling::default()
+}
+
 /// Bound each capture before any texture or readback allocation. At most 64 MiB
 /// of RGBA per target, and no dimension beyond a common encoder limit.
 pub(crate) fn valid_capture_size(size: Size<i32, Physical>) -> bool {
@@ -60,6 +68,9 @@ fn auto_scale_refresh_needed(
 
 impl Lwfa {
     pub fn window_scaling(&self, id: WindowId) -> WindowScaling {
+        if !WINDOW_SCALING_ENABLED {
+            return WindowScaling::default();
+        }
         self.scaling.get(&id).copied().unwrap_or_default()
     }
     pub fn effective_scale(&self, id: WindowId) -> f64 {
@@ -102,6 +113,9 @@ impl Lwfa {
     ) -> Result<(), &'static str> {
         if !scaling.valid() {
             return Err("Choose a supported window scaling factor");
+        }
+        if !scaling_request_available(scaling) {
+            return Err("Window scaling is temporarily disabled. Only 1× is available.");
         }
         let Some(window) = self.layout.window(id) else {
             return Err("This window has closed");
@@ -251,6 +265,16 @@ smithay::delegate_viewporter!(Lwfa);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_scaling_accepts_only_the_one_x_baseline_including_older_clients() {
+        assert!(scaling_request_available(WindowScaling::default()));
+        for mode in [ScalingMode::Sharp, ScalingMode::Workspace] {
+            for scale in [None, Some(0.5), Some(1.25), Some(1.5), Some(1.75), Some(2.0)] {
+                assert!(!scaling_request_available(WindowScaling { mode, scale }));
+            }
+        }
+    }
 
     #[test]
     fn viewport_changes_rebuild_only_when_auto_capture_density_changes() {

@@ -71,7 +71,9 @@ impl GlobalDispatch<WlOutput, WlOutputData> for Lwfa {
         }
         let size = *state.x11_outputs.size.get_or_insert_with(|| {
             display_size(
-                state.layout.output_size(),
+                state.viewport_override
+                    .map(|(w, h, _)| (w, h).into())
+                    .unwrap_or_else(|| state.layout.output_size()),
                 state.config.session.xwayland_resolution,
             )
         });
