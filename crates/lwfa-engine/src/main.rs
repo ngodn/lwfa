@@ -1172,8 +1172,9 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             if state.viewport_override == Some((width, height, scale)) {
                 return;
             }
+            let previous_display_scale = state.viewport_override.map(|v| v.2).unwrap_or(1.0);
             state.viewport_override = Some((width, height, scale));
-            state.refresh_auto_scaling();
+            state.refresh_auto_scaling(previous_display_scale);
             match state.resize_output.clone() {
                 Some(resize) => {
                     tracing::debug!("session {session} set the viewport to {width}x{height}@{scale}");

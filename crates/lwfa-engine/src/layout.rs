@@ -197,6 +197,7 @@ pub struct Layout {
     tracked: HashMap<WindowId, Tracked>,
     mode: Mode,
     output_size: Size<i32, Logical>,
+    x11_output_size: Option<Size<i32, Logical>>,
 }
 
 /// A geometry the engine should send to a client as a `configure`.
@@ -216,11 +217,21 @@ impl Layout {
             tracked: HashMap::new(),
             mode: Mode::Safe,
             output_size,
+            x11_output_size: None,
         }
     }
 
-    pub fn configured_rect(&self, id: WindowId) -> Option<Rectangle<i32, Logical>> {
-        self.tracked.get(&id)?.sent
+    pub(crate) fn workspace_rect_for(
+        &self,
+        id: WindowId,
+        factor: f64,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let tracked = self.tracked.get(&id)?;
+        Some(client_rect(
+            workspace_rect(tracked.base_rect?, factor),
+            tracked.window.is_x11(),
+            self.x11_output_size,
+        ))
     }
 
     pub fn preview_rect(&self, id: WindowId) -> Option<Rectangle<i32, Logical>> {
@@ -233,7 +244,7 @@ impl Layout {
     pub fn set_workspace_scale(&mut self, id: WindowId, factor: f64, now: Instant) -> Option<PendingConfigure> {
         let tracked = self.tracked.get_mut(&id)?;
         tracked.workspace_scale = factor;
-        let rect = client_rect(workspace_rect(tracked.base_rect?, factor), tracked.window.is_x11());
+        let rect = client_rect(workspace_rect(tracked.base_rect?, factor), tracked.window.is_x11(), self.x11_output_size);
         if !tracked.needs_configure(rect) { return None; }
         tracked.configured(rect, now);
         Some(PendingConfigure { window: tracked.window.clone(), rect })
@@ -249,6 +260,11 @@ impl Layout {
 
     pub fn set_output_size(&mut self, size: Size<i32, Logical>) {
         self.output_size = size;
+    }
+
+    /// Set the X11 coordinate bounds chosen when Xwayland binds its output.
+    pub(crate) fn set_x11_output_size(&mut self, size: Size<i32, Logical>) {
+        self.x11_output_size = Some((size.w.clamp(1, 32767), size.h.clamp(1, 32767)).into());
     }
 
     pub fn output_size(&self) -> Size<i32, Logical> {
@@ -374,7 +390,7 @@ impl Layout {
                     .into(),
             );
             tracked.base_rect = Some(rect);
-            let rect = client_rect(workspace_rect(rect, tracked.workspace_scale), tracked.window.is_x11());
+            let rect = client_rect(workspace_rect(rect, tracked.workspace_scale), tracked.window.is_x11(), self.x11_output_size);
             if tracked.needs_configure(rect) {
                 tracked.configured(rect, now);
                 configures.push(PendingConfigure {
@@ -409,7 +425,7 @@ impl Layout {
             tracked.y.snap_to(0.0);
             let rect = Rectangle::new((0, 0).into(), size);
             tracked.base_rect = Some(rect);
-            let rect = client_rect(workspace_rect(rect, tracked.workspace_scale), tracked.window.is_x11());
+            let rect = client_rect(workspace_rect(rect, tracked.workspace_scale), tracked.window.is_x11(), self.x11_output_size);
             if tracked.needs_configure(rect) {
                 tracked.configured(rect, now);
                 configures.push(PendingConfigure {
@@ -700,10 +716,27 @@ fn workspace_rect(mut rect: Rectangle<i32, Logical>, factor: f64) -> Rectangle<i
 /// event names a specific window. A partly scrolled-out browser window can
 /// remain at a negative preview position, but its X11 workspace must stay in
 /// the root's positive coordinate space. Popup offsets use the X11 origin.
-fn client_rect(mut rect: Rectangle<i32, Logical>, x11: bool) -> Rectangle<i32, Logical> {
+fn client_rect(
+    mut rect: Rectangle<i32, Logical>,
+    x11: bool,
+    x11_output_size: Option<Size<i32, Logical>>,
+) -> Rectangle<i32, Logical> {
     if x11 {
         rect.loc.x = rect.loc.x.max(0);
         rect.loc.y = rect.loc.y.max(0);
+        if let Some(limit) = x11_output_size {
+            // Fit the whole workspace instead of leaving app pixels outside
+            // the root rectangle where X11 cannot deliver pointer input.
+            let fit = (f64::from(limit.w) / f64::from(rect.size.w))
+                .min(f64::from(limit.h) / f64::from(rect.size.h))
+                .min(1.0);
+            rect.size = (
+                (f64::from(rect.size.w) * fit).round().clamp(1.0, f64::from(limit.w)) as i32,
+                (f64::from(rect.size.h) * fit).round().clamp(1.0, f64::from(limit.h)) as i32,
+            ).into();
+            rect.loc.x = rect.loc.x.min(limit.w - rect.size.w);
+            rect.loc.y = rect.loc.y.min(limit.h - rect.size.h);
+        }
     }
     rect
 }
@@ -711,21 +744,81 @@ fn client_rect(mut rect: Rectangle<i32, Logical>, x11: bool) -> Rectangle<i32, L
 #[cfg(test)]
 mod scaling_tests {
     use super::*;
+
+    #[test]
+    fn oversized_x11_workspaces_fit_without_cropping_or_changing_preview_geometry() {
+        let limit = Size::from((1920, 1080));
+        for (requested, expected) in [
+            ((4000, 2000), (1920, 960)),
+            ((2000, 4000), (540, 1080)),
+            ((3840, 2160), (1920, 1080)),
+        ] {
+            let preview = Rectangle::new((-100, 200).into(), requested.into());
+            let app = client_rect(preview, true, Some(limit));
+            assert_eq!(app.size, Size::from(expected));
+            assert_eq!(app.loc.x, 0);
+            assert!(app.loc.y + app.size.h <= limit.h);
+            assert_eq!(client_rect(preview, false, Some(limit)), preview);
+            assert_eq!(preview.size, Size::from(requested));
+            assert_eq!(preview.loc, Point::from((-100, 200)));
+        }
+    }
+
+    #[test]
+    fn x11_origin_moves_inside_display_without_shrinking_a_workspace_that_fits() {
+        let limit = Size::from((1920, 1080));
+        let requested = Rectangle::new((i32::MAX, i32::MAX).into(), (1000, 600).into());
+        let app = client_rect(requested, true, Some(limit));
+        assert_eq!(app, Rectangle::new((920, 480).into(), requested.size));
+        let visible = Rectangle::new((100, 200).into(), requested.size);
+        assert_eq!(client_rect(visible, true, Some(limit)), visible);
+    }
+
+    #[test]
+    fn every_scaled_x11_workspace_keeps_its_far_corner_reachable() {
+        let limit = Size::from((1319, 839));
+        for position in [(-1000, -200), (0, 0), (1000, 700)] {
+            let preview = Rectangle::new(position.into(), (1000, 600).into());
+            for factor in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
+                let requested = workspace_rect(preview, factor);
+                let app = client_rect(requested, true, Some(limit));
+                assert!(app.loc.x >= 0 && app.loc.y >= 0);
+                assert!(app.loc.x + app.size.w <= limit.w);
+                assert!(app.loc.y + app.size.h <= limit.h);
+                assert!(app.size.w > 0 && app.size.h > 0);
+                // Integer rounding may change either dimension by half a pixel.
+                let cross_error = (i64::from(app.size.w) * i64::from(requested.size.h)
+                    - i64::from(app.size.h) * i64::from(requested.size.w)).abs();
+                assert!(cross_error <= i64::from(requested.size.w + requested.size.h) / 2);
+            }
+        }
+    }
+
+    #[test]
+    fn x11_bounds_are_separate_from_browser_output_changes() {
+        let mut layout = Layout::new((1000, 600).into());
+        assert_eq!(layout.x11_output_size, None);
+        layout.set_x11_output_size((1920, 1080).into());
+        layout.set_output_size((800, 1200).into());
+        assert_eq!(layout.x11_output_size, Some(Size::from((1920, 1080))));
+        assert_eq!(layout.output_size(), Size::from((800, 1200)));
+    }
+
     #[test]
     fn scrolled_x11_workspaces_remain_addressable_at_reduced_scale() {
         let browser = Rectangle::new((-1000, -200).into(), (2000, 1000).into());
         for factor in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
-            let app = client_rect(workspace_rect(browser, factor), true);
+            let app = client_rect(workspace_rect(browser, factor), true, None);
             assert_eq!(app.loc, Point::from((0, 0)));
             // The visible browser origin falls halfway across the window.
             let pointer_root_x = f64::from(app.loc.x) + 0.5 * f64::from(app.size.w);
             assert!(pointer_root_x >= 0.0 && pointer_root_x < f64::from(app.size.w));
-            let native = client_rect(workspace_rect(browser, factor), false);
+            let native = client_rect(workspace_rect(browser, factor), false, None);
             assert_eq!(native.loc, browser.loc, "Wayland geometry is unchanged");
         }
         assert_eq!(browser.loc, Point::from((-1000, -200)));
         let visible = Rectangle::new((100, 200).into(), (1000, 500).into());
-        assert_eq!(client_rect(visible, true), visible);
+        assert_eq!(client_rect(visible, true, None), visible);
     }
 
     #[test]

@@ -12,6 +12,8 @@ export function WindowScalingControls({ info }: { info: WindowInfo }) {
   const sharp = scaling.mode === "sharp"
   const unavailable = info.scaling === undefined
   const legacySharp = info.xwayland === true && sharp
+  const limited = !sharp && scaling.scale !== null && info.effectiveScale !== undefined
+    && info.effectiveScale + 0.01 < scaling.scale
   const change = (next: WindowScaling) => {
     if (next.mode === scaling.mode && next.scale === scaling.scale) return
     actions.send({ type: "setWindowScaling", id: info.id, scaling: next })
@@ -80,6 +82,11 @@ export function WindowScalingControls({ info }: { info: WindowInfo }) {
         ))}
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>
+      {info.xwayland && !sharp ? (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {limited ? "Limited by the session’s fixed X11 display size." : "Workspace size is limited by the session’s fixed X11 display."}
+        </p>
+      ) : null}
       {!unavailable && info.effectiveScale !== undefined ? (
         <p className="text-xs text-muted-foreground tabular-nums">
           {sharp ? "Capture density" : "Workspace request"}: {Number(info.effectiveScale.toFixed(2))}×.

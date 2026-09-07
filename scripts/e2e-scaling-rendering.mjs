@@ -1,6 +1,9 @@
 // Native Chromium -> isolated compositor -> encoded stream -> browser pixels.
 // Never discovers or connects to a production engine. The caller owns the dev
 // engine lifetime and supplies its URL, password and both display sockets.
+// Optional LWFA_TEST_X11_LIMIT=1400x1000 describes a fixed Xwayland display.
+// LWFA_TEST_AUTO_VIEWPORT=1 isolates Auto Sharp viewport resizing at fixed DPR,
+// followed by a real DPR change. Phase timestamps can be matched to engine logs.
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,12 +17,25 @@ for (const name of ['AUTH_PASS', 'LWFA_TEST_URL', 'LWFA_TEST_WAYLAND', 'LWFA_TES
 const origin = process.env.LWFA_TEST_URL;
 const codecs = ['h264', 'hevc'].includes(process.env.LWFA_TEST_CODEC) ? [process.env.LWFA_TEST_CODEC] : [];
 const factors = process.env.LWFA_TEST_FACTORS?.split(',').map(Number) || [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
-const platforms = process.env.LWFA_TEST_PLATFORM ? [process.env.LWFA_TEST_PLATFORM] : ['wayland', 'x11'];
+const autoViewport = process.env.LWFA_TEST_AUTO_VIEWPORT === '1';
+const platforms = process.env.LWFA_TEST_PLATFORM ? [process.env.LWFA_TEST_PLATFORM] : autoViewport ? ['wayland'] : ['wayland', 'x11'];
 const width = Number(process.env.LWFA_TEST_WIDTH || 1000), height = Number(process.env.LWFA_TEST_HEIGHT || 640);
+if (autoViewport) {
+  assert.deepEqual(platforms, ['wayland'], 'Auto viewport regression uses a native Wayland application');
+  assert(!process.env.LWFA_TEST_MULTI_ONLY, 'Auto viewport and multiwindow modes are separate');
+}
+const x11Limit = process.env.LWFA_TEST_X11_LIMIT?.match(/^(\d+)x(\d+)$/);
+assert(!process.env.LWFA_TEST_X11_LIMIT || (x11Limit && Number(x11Limit[1]) > 0 && Number(x11Limit[2]) > 0), 'LWFA_TEST_X11_LIMIT must be positive dimensions, for example 1400x1000');
+function expectedSize(platform, width, height) {
+  if (platform !== 'x11' || !x11Limit) return { width, height };
+  const fit = Math.min(1, Number(x11Limit[1]) / width, Number(x11Limit[2]) / height);
+  return { width: Math.round(width * fit), height: Math.round(height * fit) };
+}
 const profile = await mkdtemp(join(tmpdir(), 'lwfa-scaling-'));
 const fixture = join(profile, 'pattern.html');
 const resultPath = resolve(process.env.LWFA_TEST_RESULTS || 'docs/research/fixtures/window-scaling-measurements.json');
 const results = { date: new Date().toISOString(), origin, codec: codecs[0] || 'jpeg', cases: [], failures: [], limitations: [] };
+if (x11Limit) results.x11Limit = { width: Number(x11Limit[1]), height: Number(x11Limit[2]) };
 results.decoder = process.env.LWFA_TEST_DECODER_SOURCE || 'packages/shell/src/decode.ts FrameDecoder';
 try {
   const prior = JSON.parse(await readFile(resultPath, 'utf8'));
@@ -32,10 +48,11 @@ await writeFile(fixture, `<!doctype html><title>lwfa-scaling-probe</title>
 <style>html,body{margin:0;width:100%;height:100%;background:#be48ef}body{box-sizing:border-box;border:16px solid #3edbc8}
 #grating{position:absolute;left:100px;top:100px;width:128px;height:48px;background:repeating-linear-gradient(to right,#000 0px,#000 .5px,#fff .5px,#fff 1px)}
 #target{position:absolute;left:55%;top:65%;width:90px;height:50px;background:#fddd39;touch-action:none}
+#edge{position:absolute;right:18px;bottom:18px;width:18px;height:18px;padding:0;border:0;background:#ff8040;touch-action:none}
 #menu{position:absolute;left:40px;top:190px;width:200px;font:20px sans-serif}
 i{position:absolute;left:40%;top:30%;width:20px;height:20px;background:white;animation:pulse .5s infinite alternate}@keyframes pulse{to{background:#777}}
-</style><div id=grating></div><button id=target>Hit</button><select id=menu><option style="background:#f00">Alpha</option><option style="background:#0f0">Beta</option><option style="background:#00f">Gamma</option></select><i></i>
-<script>window.events=[];window.allEvents=[];for(const kind of ['pointerdown','pointerup','touchstart','touchend']){document.addEventListener(kind,e=>window.allEvents.push({kind,x:e.clientX,y:e.clientY,pointerType:e.pointerType,target:e.target.id}),true);target.addEventListener(kind,e=>{window.events.push({kind,x:e.clientX,y:e.clientY,pointerType:e.pointerType});if(kind==='touchstart')e.preventDefault()},{passive:false});}</script>`);
+</style><div id=grating></div><button id=target>Hit</button><button id=edge aria-label="Edge target"></button><select id=menu><option style="background:#f00">Alpha</option><option style="background:#0f0">Beta</option><option style="background:#00f">Gamma</option></select><i></i>
+<script>window.events=[];window.allEvents=[];for(const kind of ['pointerdown','pointerup','touchstart','touchend']){document.addEventListener(kind,e=>window.allEvents.push({kind,x:e.clientX,y:e.clientY,pointerType:e.pointerType,target:e.target.id}),true);for(const button of [target,edge])button.addEventListener(kind,e=>{window.events.push({kind,x:e.clientX,y:e.clientY,pointerType:e.pointerType,target:e.target.id});if(kind==='touchstart')e.preventDefault()},{passive:false});}</script>`);
 const require = createRequire(resolve('packages/shell/package.json'));
 const { build } = await import(require.resolve('vite'));
 const bundled = await build({
@@ -65,7 +82,7 @@ try {
   await viewer.evaluate(async ({ origin, token }) => {
     const url = new URL(origin); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.searchParams.set('token', token);
     const ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
-    const p = window.probe = { ws, windows: [], frames: {}, errors: [], serial: 0, supportChecks: [], parameterSets: [], formats: {}, wireFrames: [], wireFormatCounts: {} };
+    const p = window.probe = { ws, windows: [], frames: {}, decodedCounts: {}, errors: [], serial: 0, supportChecks: [], parameterSets: [], formats: {}, wireFrames: [], wireFormatCounts: {} };
     const { FrameDecoder, decodeFrame, codecFromAnnexB } = window.LWFA_TEST_DECODER;
     const check = VideoDecoder.isConfigSupported.bind(VideoDecoder);
     VideoDecoder.isConfigSupported = async config => {
@@ -78,6 +95,7 @@ try {
       const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
       canvas.getContext('2d').drawImage(bitmap, 0, 0); bitmap.close();
       p.frames[id] = { canvas, width: canvas.width, height: canvas.height, format, serial };
+      p.decodedCounts[id] = (p.decodedCounts[id] || 0) + 1;
     }
     const decoder = new FrameDecoder((id, bitmap) => deliver(id, bitmap, p.formats[id], p.serial), codec => p.errors.push({ unsupportedCodec: codec }));
     ws.onmessage = async ({ data }) => {
@@ -119,20 +137,28 @@ try {
     await viewer.waitForFunction(() => window.probe.windows.some(w => w.title?.includes('lwfa-scaling-probe')));
     const id = await viewer.evaluate(() => window.probe.windows.find(w => w.title?.includes('lwfa-scaling-probe')).id);
     await send([{ type: 'setLayout', windows: [{ id, z: 0, rect: { x: 0, y: 0, width, height } }], animate: null }, { type: 'setStreams', windows: [id], codecs }]);
-    const cases = process.env.LWFA_TEST_MULTI_ONLY ? [] : [...(platform === 'wayland' ? factors.map(scale => ({ mode: 'sharp', scale })) : []), ...(process.env.LWFA_TEST_MODES === 'sharp' ? [] : factors.map(scale => ({ mode: 'workspace', scale }))), { mode: 'sharp', scale: 1, reset: true }, ...(platform === 'wayland' ? [{ mode: 'sharp', scale: null, displayScale: 2 }] : [])];
+    const cases = autoViewport ? [
+      { mode: 'sharp', scale: null, displayScale: 2, phase: 'auto-dpr2-initial', configureScaling: true, viewportWidth: width, viewportHeight: height },
+      ...Array.from({ length: 10 }, (_, index) => ({ mode: 'sharp', scale: null, displayScale: 2, phase: `viewport-only-${index + 1}`, viewportWidth: width + (index + 1) * 37, viewportHeight: height + (index + 1) * 23 })),
+      { mode: 'sharp', scale: null, displayScale: 1, phase: 'auto-dpr1-change', viewportWidth: width + 370, viewportHeight: height + 230 },
+    ] : process.env.LWFA_TEST_MULTI_ONLY ? [] : [...(platform === 'wayland' ? factors.map(scale => ({ mode: 'sharp', scale })) : []), ...(process.env.LWFA_TEST_MODES === 'sharp' ? [] : factors.map(scale => ({ mode: 'workspace', scale }))), { mode: 'sharp', scale: 1, reset: true }, ...(platform === 'wayland' ? [{ mode: 'sharp', scale: null, displayScale: 2 }] : [])];
     for (const test of cases) {
-      const entry = { platform, ...test };
+      const entry = { platform, ...test, window: id, startedAt: new Date().toISOString() };
       try {
-        if (test.displayScale) await send([{ type: 'setViewport', width, height, scale: test.displayScale }]);
         const start = await viewer.evaluate(() => window.probe.serial);
-        await send([{ type: 'setWindowScaling', id, scaling: { mode: test.mode, scale: test.scale } }]);
+        const decodedStart = await viewer.evaluate(id => window.probe.decodedCounts[id] || 0, id);
+        if (test.displayScale) await send([{ type: 'setViewport', width: test.viewportWidth ?? width, height: test.viewportHeight ?? height, scale: test.displayScale }]);
+        if (!autoViewport || test.configureScaling) await send([{ type: 'setWindowScaling', id, scaling: { mode: test.mode, scale: test.scale } }]);
         const factor = test.scale ?? test.displayScale;
-        const frameWidth = width * factor, frameHeight = height * factor;
-        await viewer.waitForFunction(({ id, frameWidth, frameHeight, start }) => {
+        const expected = expectedSize(platform, width * factor, height * factor);
+        const frameWidth = expected.width, frameHeight = expected.height;
+        entry.expectedFrame = expected;
+        await viewer.waitForFunction(({ id, frameWidth, frameHeight, start, decodedStart }) => {
           const frame = window.probe.frames[id];
-          return frame?.width === frameWidth && frame.height === frameHeight && frame.serial > start + 2;
-        }, { id, frameWidth, frameHeight, start }, { timeout: 18000 });
-        await viewer.waitForTimeout(500);
+          return frame?.width === frameWidth && frame.height === frameHeight && frame.serial > start + 2 && window.probe.decodedCounts[id] >= decodedStart + 3;
+        }, { id, frameWidth, frameHeight, start, decodedStart }, { timeout: 18000 });
+        if (!autoViewport) await viewer.waitForTimeout(500);
+        if (autoViewport) await app.waitForFunction(({ width, height, dpr }) => outerWidth === width && outerHeight === height && devicePixelRatio === dpr, { width, height, dpr: test.displayScale });
         entry.client = await app.evaluate(() => {
           const r = document.querySelector('#target').getBoundingClientRect();
           return { innerWidth, innerHeight, outerWidth, outerHeight, dpr: devicePixelRatio, target: { x: r.x + r.width / 2, y: r.y + r.height / 2 } };
@@ -160,8 +186,9 @@ try {
         assert.equal(entry.sample.bottom, 0, 'no black bottom strip');
         assert.equal(entry.sample.format, codecs[0] === 'hevc' ? 2 : codecs.length ? 1 : 0, 'wire codec');
         const logicalFactor = test.mode === 'workspace' ? factor : 1;
-        assert.equal(entry.client.outerWidth, width * logicalFactor, 'application logical width');
-        assert.equal(entry.client.outerHeight, height * logicalFactor, 'application logical height');
+        const logicalSize = expectedSize(platform, width * logicalFactor, height * logicalFactor);
+        assert.equal(entry.client.outerWidth, logicalSize.width, 'application logical width');
+        assert.equal(entry.client.outerHeight, logicalSize.height, 'application logical height');
         assert.equal(entry.client.dpr, test.mode === 'sharp' ? factor : 1, 'native app rendering density');
 
         await app.evaluate(() => { window.events = []; window.allEvents = []; });
@@ -175,6 +202,15 @@ try {
         await send([{ type: 'touchDown', window: id, id: 7, x, y, normalized: true }, { type: 'touchUp', id: 7 }]);
         await app.waitForFunction(() => window.events.some(e => e.kind === 'touchstart'), null, { timeout: 3000 });
         entry.input = await app.evaluate(() => window.events);
+        entry.stage = 'edge-input';
+        const edgePoint = await app.evaluate(() => {
+          window.events = []; window.allEvents = [];
+          const r = document.querySelector('#edge').getBoundingClientRect();
+          return { x: (r.x + r.width / 2 + (outerWidth - innerWidth) / 2) / outerWidth, y: (r.y + r.height / 2 + outerHeight - innerHeight) / outerHeight };
+        });
+        await send([{ type: 'pointerMotion', window: id, ...edgePoint, normalized: true }, { type: 'pointerButton', button: 272, pressed: true }, { type: 'pointerButton', button: 272, pressed: false }, { type: 'touchDown', window: id, id: 7, ...edgePoint, normalized: true }, { type: 'touchUp', id: 7 }]);
+        await app.waitForFunction(() => window.events.some(e => e.target === 'edge' && e.kind === 'pointerdown' && e.pointerType === 'mouse') && window.events.some(e => e.target === 'edge' && e.kind === 'touchstart'), null, { timeout: 3000 });
+        entry.edgeInput = { point: edgePoint, events: await app.evaluate(() => window.events) };
         if (test.reset || test.scale === 2) {
           entry.stage = 'popup';
           const menu = await app.evaluate(() => { document.querySelector('#menu').selectedIndex = 0; const r = document.querySelector('#menu').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
@@ -207,6 +243,9 @@ try {
           entry.popup = { selected: 'Beta', ...option };
         }
         entry.wireFormats = await viewer.evaluate(({ id, start }) => [...new Set(window.probe.wireFrames.filter(frame => frame.window === id && frame.serial > start).map(frame => frame.format))], { id, start });
+        if (autoViewport) {
+          entry.frameCounts = await viewer.evaluate(({ id, start, decodedStart }) => ({ decoded: window.probe.decodedCounts[id] - decodedStart, received: window.probe.wireFrames.filter(frame => frame.window === id && frame.serial > start).length, keyframes: window.probe.wireFrames.filter(frame => frame.window === id && frame.serial > start && frame.keyframe).length }), { id, start, decodedStart });
+        }
         assert.deepEqual(entry.wireFormats, [codecs[0] === 'hevc' ? 2 : codecs.length ? 1 : 0], 'no transient codec fallback during scaling');
         entry.stage = 'complete';
         entry.pass = true;
@@ -218,11 +257,51 @@ try {
         entry.lastFrame = await viewer.evaluate(id => { const f = window.probe.frames[id]; return f && { width: f.width, height: f.height, format: f.format, serial: f.serial }; }, id);
         results.failures.push({ platform, ...test, error: entry.error });
       }
+      entry.endedAt = new Date().toISOString();
       results.cases.push(entry);
       console.log(JSON.stringify(entry));
       await writeFile(resultPath, JSON.stringify(results, null, 2) + '\n');
     }
     if (platform === 'x11' && process.env.LWFA_TEST_MULTI_ONLY) {
+      // Native dimensions can update ahead of Chromium's DOM, including on
+      // its first layout. The fixture's cyan border tells us which content
+      // bounds were actually painted, without assuming decoration dimensions.
+      const initialSize = expectedSize('x11', width, height);
+      let painted;
+      try {
+        const border = await viewer.waitForFunction(({ id, expected }) => {
+          const frame = window.probe.frames[id];
+          if (frame?.width !== expected.width || frame.height !== expected.height) return false;
+          const { width: w, height: h } = frame;
+          const p = frame.canvas.getContext('2d').getImageData(0, 0, w, h).data;
+          const cyan = (x, y) => { const i = (y * w + x) * 4; return Math.abs(p[i] - 62) < 25 && Math.abs(p[i + 1] - 219) < 25 && Math.abs(p[i + 2] - 200) < 25; };
+          const middleX = Math.floor(w / 2);
+          if (!cyan(middleX, h - 2)) return false;
+          let top = 0;
+          while (top < h && !cyan(middleX, top)) top++;
+          const middleY = Math.floor((top + h) / 2);
+          let left = 0, right = w - 1;
+          while (left < w && !cyan(left, middleY)) left++;
+          while (right >= 0 && !cyan(right, middleY)) right--;
+          if (left >= right || !cyan(left, h - 2) || !cyan(right, h - 2)) return false;
+          return { width: right - left + 1, height: h - top, left, top, frameWidth: w, frameHeight: h };
+        }, { id, expected: initialSize }, { timeout: 10000 });
+        painted = await border.jsonValue();
+        await border.dispose();
+        // Compression can shift the first reliably cyan pixel within the
+        // border. Require that pixel to land inside the DOM's actual border,
+        // rather than interpreting a codec color transition as its exact edge.
+        await app.waitForFunction(({ expected, painted }) => {
+          const border = parseFloat(getComputedStyle(document.body).borderTopWidth);
+          return outerWidth === expected.width && outerHeight === expected.height && innerWidth === painted.width && innerHeight >= painted.height && innerHeight - painted.height < border;
+        }, { expected: initialSize, painted }, { timeout: 10000 });
+      } catch (error) {
+        results.initialMultiwindowReadiness = { painted, expected: initialSize, client: await app.evaluate(() => ({ outerWidth, outerHeight, innerWidth, innerHeight })), error: String(error) };
+        throw error;
+      }
+      const decorations = await app.evaluate(() => ({ width: outerWidth - innerWidth, height: outerHeight - innerHeight }));
+      results.initialMultiwindowReadiness = { painted, expected: initialSize, decorations };
+      assert(decorations.width >= 0 && decorations.height >= 0, 'painted application viewport must fit its outer window');
       peer = await chromium.launchPersistentContext(join(profile, 'x11-peer'), {
         executablePath: '/usr/bin/chromium', headless: false, viewport: null,
         env: { ...process.env, WAYLAND_DISPLAY: process.env.LWFA_TEST_WAYLAND, DISPLAY: process.env.LWFA_TEST_DISPLAY },
@@ -236,30 +315,44 @@ try {
       for (const scenario of [{ name: 'overlapping-native-geometries', x: 0, width: 1000, a: 2, b: 0.75 }, { name: 'negative-left-reduced-workspace', x: -1000, width: 2000, a: 0.5, b: 1 }, { name: 'negative-left-expanded-workspace', x: -1000, width: 2000, a: 2, b: 0.75 }]) {
         const entry = { ...scenario, checks: [] };
         try {
+          const expectedA = expectedSize('x11', scenario.width * scenario.a, 640 * scenario.a);
+          const expectedB = expectedSize('x11', 1000 * scenario.b, 640 * scenario.b);
+          entry.expectedFrames = { first: expectedA, second: expectedB };
           await send([{ type: 'setViewport', width: 2000, height: 640, scale: 1 }, { type: 'setLayout', windows: [{ id, z: 0, rect: { x: scenario.x, y: 0, width: scenario.width, height: 640 } }, { id: peerId, z: 1, rect: { x: 1000, y: 0, width: 1000, height: 640 } }], animate: null }, { type: 'setWindowScaling', id, scaling: { mode: 'workspace', scale: scenario.a } }, { type: 'setWindowScaling', id: peerId, scaling: { mode: 'workspace', scale: scenario.b } }, { type: 'setStreams', windows: [id, peerId], codecs }]);
-          await viewer.waitForFunction(({ id, peerId, scenario }) => {
+          await viewer.waitForFunction(({ id, peerId, expectedA, expectedB }) => {
             const a = window.probe.frames[id], b = window.probe.frames[peerId];
-            return a?.width === scenario.width * scenario.a && a.height === 640 * scenario.a && b?.width === 1000 * scenario.b && b.height === 640 * scenario.b;
-          }, { id, peerId, scenario }, { timeout: 18000 });
-          for (const target of [{ name: 'first', page: app, other: peerApp, id }, { name: 'second', page: peerApp, other: app, id: peerId }, { name: 'first-again', page: app, other: peerApp, id }]) {
-            await app.evaluate(() => { window.events = []; window.allEvents = []; });
-            await peerApp.evaluate(() => { window.events = []; window.allEvents = []; });
-            const point = await target.page.evaluate(() => {
-              const r = document.querySelector('#target').getBoundingClientRect();
-              return { x: (r.x + r.width / 2 + (outerWidth - innerWidth) / 2) / outerWidth, y: (r.y + r.height / 2 + outerHeight - innerHeight) / outerHeight, outerWidth, outerHeight };
-            });
-            await send([{ type: 'focusWindow', id: target.id }, { type: 'pointerMotion', window: target.id, x: point.x, y: point.y, normalized: true }, { type: 'pointerButton', button: 272, pressed: true }, { type: 'pointerButton', button: 272, pressed: false }, { type: 'touchDown', window: target.id, id: 7, x: point.x, y: point.y, normalized: true }, { type: 'touchUp', id: 7 }]);
-            await target.page.waitForFunction(() => window.events.some(e => e.kind === 'pointerdown' && e.pointerType === 'mouse') && window.events.some(e => e.kind === 'touchstart'), null, { timeout: 3000 });
-            const input = await target.page.evaluate(() => window.events);
-            const otherInput = await target.other.evaluate(() => window.allEvents);
-            assert.equal(otherInput.length, 0, 'other window must not receive this input');
-            entry.checks.push({ target: target.name, point, input, otherInput });
+            return a?.width === expectedA.width && a.height === expectedA.height && b?.width === expectedB.width && b.height === expectedB.height;
+          }, { id, peerId, expectedA, expectedB }, { timeout: 18000 });
+          for (const target of [{ name: 'first', page: app, other: peerApp, id, expected: expectedA }, { name: 'second', page: peerApp, other: app, id: peerId, expected: expectedB }, { name: 'first-again', page: app, other: peerApp, id, expected: expectedA }]) {
+            for (const selector of ['#target', '#edge']) {
+              // Chromium can report the new outer size while its background
+              // renderer still uses the old viewport. Wait for the DOM resize
+              // before deriving coordinates, keeping focus and input batched.
+              await target.page.waitForFunction(({ expected, decorations }) => outerWidth === expected.width && outerHeight === expected.height && innerWidth === expected.width - decorations.width && innerHeight === expected.height - decorations.height, { expected: target.expected, decorations }, { timeout: 5000 });
+              await app.evaluate(() => { window.events = []; window.allEvents = []; });
+              await peerApp.evaluate(() => { window.events = []; window.allEvents = []; });
+              const point = await target.page.evaluate(selector => {
+                const r = document.querySelector(selector).getBoundingClientRect();
+                return { x: (r.x + r.width / 2 + (outerWidth - innerWidth) / 2) / outerWidth, y: (r.y + r.height / 2 + outerHeight - innerHeight) / outerHeight, outerWidth, outerHeight, innerWidth, innerHeight };
+              }, selector);
+              assert.equal(point.outerWidth, target.expected.width, 'multiwindow application logical width');
+              assert.equal(point.outerHeight, target.expected.height, 'multiwindow application logical height');
+              await send([{ type: 'focusWindow', id: target.id }, { type: 'pointerMotion', window: target.id, x: point.x, y: point.y, normalized: true }, { type: 'pointerButton', button: 272, pressed: true }, { type: 'pointerButton', button: 272, pressed: false }, { type: 'touchDown', window: target.id, id: 7, x: point.x, y: point.y, normalized: true }, { type: 'touchUp', id: 7 }]);
+              await target.page.waitForFunction(button => window.events.some(e => e.target === button && e.kind === 'pointerdown' && e.pointerType === 'mouse') && window.events.some(e => e.target === button && e.kind === 'touchstart'), selector.slice(1), { timeout: 3000 });
+              const input = await target.page.evaluate(() => window.events);
+              const otherInput = await target.other.evaluate(() => window.allEvents);
+              assert.equal(otherInput.length, 0, 'other window must not receive this input');
+              entry.checks.push({ target: target.name, selector, point, input, otherInput });
+            }
           }
           entry.pass = true;
         } catch (error) {
           entry.pass = false; entry.error = String(error);
           entry.input = await app.evaluate(() => window.allEvents);
           entry.peerInput = await peerApp.evaluate(() => window.allEvents);
+          entry.clientMetrics = await app.evaluate(() => ({ outerWidth, outerHeight, innerWidth, innerHeight }));
+          entry.peerMetrics = await peerApp.evaluate(() => ({ outerWidth, outerHeight, innerWidth, innerHeight }));
+          entry.decorations = decorations;
           results.failures.push({ scenario: scenario.name, error: entry.error });
         }
         results.multipleWindows.push(entry);
@@ -274,7 +367,7 @@ try {
   }
   const one = results.cases.find(c => c.platform === 'wayland' && c.mode === 'sharp' && c.scale === 1)?.sample?.grating;
   const two = results.cases.find(c => c.platform === 'wayland' && c.mode === 'sharp' && c.scale === 2)?.sample?.grating;
-  if (platforms.includes('wayland') && factors.includes(1) && factors.includes(2)) {
+  if (!autoViewport && platforms.includes('wayland') && factors.includes(1) && factors.includes(2)) {
     results.detail = { one, two, pass: !!one && !!two && two.contrast > one.contrast + 30 && two.transitions > one.transitions + 80 };
     if (!results.detail.pass) results.failures.push({ error: 'Native 2x did not resolve substantially more half-CSS-pixel grating detail than 1x.' });
   }

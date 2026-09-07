@@ -1559,7 +1559,6 @@ impl Lwfa {
 
     /// Recompute placements and push them into the scene.
     pub fn apply_layout(&mut self) {
-        self.refresh_x11_outputs(false);
         for (window, location) in self.layout.placements() {
             self.space.map_element(window, location, false);
         }

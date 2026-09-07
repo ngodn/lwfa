@@ -318,7 +318,6 @@ pub fn init_winit(
             });
             let logical = size.to_logical(1);
             state.layout.set_output_size(logical);
-            state.refresh_x11_outputs(true);
             state.send_to_shell(lwfa_proto::ToShell::OutputChanged {
                 output: lwfa_proto::Output {
                     width: logical.w,

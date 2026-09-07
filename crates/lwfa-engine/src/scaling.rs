@@ -43,6 +43,21 @@ pub(crate) fn resolved_scale(scaling: WindowScaling, x11: bool, display: f64) ->
     })
 }
 
+fn auto_scale_refresh_needed(
+    scaling: WindowScaling,
+    x11: bool,
+    size: Size<i32, Logical>,
+    previous_display_scale: f64,
+    display_scale: f64,
+) -> bool {
+    if scaling.mode != ScalingMode::Sharp || scaling.scale.is_some() {
+        return false;
+    }
+    let before = bounded_density(size, resolved_scale(scaling, x11, previous_display_scale));
+    let after = bounded_density(size, resolved_scale(scaling, x11, display_scale));
+    before != after
+}
+
 impl Lwfa {
     pub fn window_scaling(&self, id: WindowId) -> WindowScaling {
         self.scaling.get(&id).copied().unwrap_or_default()
@@ -58,6 +73,13 @@ impl Lwfa {
         } else {
             self.layout.window(id).map(|window| window.geometry().size)
         };
+        if self.layout.window(id).is_some_and(|w| w.is_x11())
+            && self.window_scaling(id).mode == ScalingMode::Workspace
+            && let (Some(base), Some(configured)) = (size, self.layout.workspace_rect_for(id, requested))
+        {
+            return (f64::from(configured.size.w) / f64::from(base.w.max(1)))
+                .min(f64::from(configured.size.h) / f64::from(base.h.max(1)));
+        }
         size.map(|size| bounded_density(size, requested))
             .unwrap_or(requested)
     }
@@ -104,19 +126,27 @@ impl Lwfa {
         let pending = self
             .layout
             .set_workspace_scale(id, factor, std::time::Instant::now());
-        self.refresh_x11_outputs(false);
         self.send_configures(pending.into_iter().collect());
         self.apply_window_density(id);
         self.reset_scaled_capture(id);
         self.report_window_changes(id);
         Ok(())
     }
-    pub fn refresh_auto_scaling(&mut self) {
+    pub fn refresh_auto_scaling(&mut self, previous_display_scale: f64) {
+        let display_scale = self.viewport_override.map(|v| v.2).unwrap_or(1.0);
+        // A viewport resize need not change any window's capture density.
+        // Actual window resizes already invalidate capture targets and encoder
+        // sessions when their dimensions change.
         let ids: Vec<_> = self
             .scaling
             .iter()
-            .filter(|(_, s)| s.mode == ScalingMode::Sharp && s.scale.is_none())
-            .map(|(id, _)| *id)
+            .filter_map(|(id, scaling)| {
+                let window = self.layout.window(*id)?;
+                auto_scale_refresh_needed(
+                    *scaling, window.is_x11(), window.geometry().size,
+                    previous_display_scale, display_scale,
+                ).then_some(*id)
+            })
             .collect();
         for id in ids {
             self.apply_window_density(id);
@@ -221,6 +251,35 @@ smithay::delegate_viewporter!(Lwfa);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewport_changes_rebuild_only_when_auto_capture_density_changes() {
+        let auto = WindowScaling { mode: ScalingMode::Sharp, scale: None };
+        let size = (1000, 640).into();
+        // Repeated viewport resizes at the same DPR should keep the stream
+        // alive. Moving to a denser display must still rebuild it once.
+        let display_scales = [1.0, 1.0, 1.0, 1.5, 1.5, 2.0, 3.0, 2.0];
+        let resets: Vec<_> = display_scales.windows(2)
+            .filter(|pair| auto_scale_refresh_needed(auto, false, size, pair[0], pair[1]))
+            .map(|pair| (pair[0], pair[1]))
+            .collect();
+        assert_eq!(resets, vec![(1.0, 1.5), (1.5, 2.0)]);
+    }
+
+    #[test]
+    fn auto_density_caps_do_not_restart_unchanged_streams() {
+        let auto = WindowScaling { mode: ScalingMode::Sharp, scale: None };
+        assert!(!auto_scale_refresh_needed(auto, true, (1000, 640).into(), 1.0, 2.0));
+        assert!(!auto_scale_refresh_needed(auto, false, (8000, 4000).into(), 1.0, 2.0));
+        assert!(auto_scale_refresh_needed(auto, false, (1000, 640).into(), 2.0, 1.0));
+        for scaling in [
+            WindowScaling { mode: ScalingMode::Sharp, scale: Some(1.5) },
+            WindowScaling { mode: ScalingMode::Workspace, scale: None },
+        ] {
+            assert!(!auto_scale_refresh_needed(scaling, false, (1000, 640).into(), 1.0, 2.0));
+        }
+    }
+
     #[test]
     fn exact_factors_and_auto_do_not_change_the_xwayland_client_scale() {
         for factor in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {

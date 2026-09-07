@@ -202,6 +202,8 @@ pub struct Session {
     pub terminal: String,
     pub autostart_terminal: bool,
     pub xwayland: bool,
+    /// Fixed X11 display size. None uses the initial host window size.
+    pub xwayland_resolution: Option<[u32; 2]>,
 }
 
 impl Default for Session {
@@ -210,6 +212,7 @@ impl Default for Session {
             terminal: "alacritty".to_string(),
             autostart_terminal: true,
             xwayland: true,
+            xwayland_resolution: None,
         }
     }
 }

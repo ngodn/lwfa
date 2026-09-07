@@ -104,6 +104,8 @@ try {
   assert.equal(await page.getByText("Applied:", {exact:false}).count(), 0, "a workspace request does not claim the app accepted that size")
 
   await page.evaluate(() => updateInfo({xwayland:true}))
+  await page.getByText("Limited by the session’s fixed X11 display size.", {exact:true}).waitFor()
+  assert.equal(await factor(2).getAttribute("aria-pressed"), "true", "limited X11 request keeps its selected factor")
   await mode("Sharper").click()
   assert.equal(await factor(1).getAttribute("aria-pressed"), "true")
   assert(await factor(2).isDisabled())

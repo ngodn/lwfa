@@ -1,14 +1,17 @@
-//! Xwayland needs a root coordinate space large enough for its app workspaces.
-//! Its output view is independent of native Wayland's logical display size.
+//! Stable Xwayland display, independent of streamed window workspaces.
 use crate::state::Lwfa;
-use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::xdg_output::zv1::server::{
     zxdg_output_manager_v1::{self, ZxdgOutputManagerV1},
     zxdg_output_v1::ZxdgOutputV1,
 };
-use smithay::reexports::wayland_server::protocol::wl_output::{self, WlOutput};
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, Resource};
-use smithay::utils::{Logical, Rectangle, Size};
+use smithay::reexports::wayland_server::protocol::{
+    wl_output::{self, WlOutput},
+    wl_surface::WlSurface,
+};
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
+};
+use smithay::utils::{Logical, Size};
 use smithay::wayland::output::{
     OutputHandler, OutputManagerState, OutputUserData, WlOutputData, XdgOutputUserData,
 };
@@ -16,74 +19,112 @@ use smithay::xwayland::XWaylandClientData;
 
 #[derive(Default)]
 pub(crate) struct X11Outputs {
+    size: Option<Size<i32, Logical>>,
     outputs: Vec<WlOutput>,
-    xdg_outputs: Vec<(ZxdgOutputV1, WlOutput)>,
-    last_size: Option<Size<i32, Logical>>,
+    surfaces: Vec<WlSurface>,
 }
+pub(crate) struct X11Output;
 pub(crate) struct X11XdgOutput;
 
-impl Lwfa {
-    fn x11_root_size(&self) -> Size<i32, Logical> {
-        let mut size = self.layout.output_size();
-        for (id, window, _) in self.layout.placements_with_ids() {
-            let Some(x11) = window.x11_surface() else {
-                continue;
-            };
-            let actual = x11.geometry();
-            let requested = self.layout.configured_rect(id).unwrap_or(actual);
-            for rect in [actual, requested] {
-                size = include_workspace(size, rect);
-            }
-        }
-        (size.w.clamp(1, 32767), size.h.clamp(1, 32767)).into()
-    }
-    pub(crate) fn refresh_x11_outputs(&mut self, force: bool) {
-        let size = self.x11_root_size();
-        if !force && self.x11_outputs.last_size == Some(size) {
+impl X11Outputs {
+    pub fn enter(&mut self, surface: &WlSurface) {
+        if !surface
+            .client()
+            .is_some_and(|c| c.get_data::<XWaylandClientData>().is_some())
+        {
             return;
         }
-        self.x11_outputs.last_size = Some(size);
-        self.x11_outputs.outputs.retain(Resource::is_alive);
-        self.x11_outputs
-            .xdg_outputs
-            .retain(|(xdg, output)| xdg.is_alive() && output.is_alive());
-        // xdg-output v3 is committed by wl_output.done, so send it first.
-        for (xdg, _) in &self.x11_outputs.xdg_outputs {
-            xdg.logical_position(0, 0);
-            xdg.logical_size(size.w, size.h);
-            if xdg.version() < 3 {
-                xdg.done();
+        self.outputs.retain(Resource::is_alive);
+        self.surfaces.retain(Resource::is_alive);
+        for output in &self.outputs {
+            if output.client() == surface.client() {
+                surface.enter(output);
             }
         }
-        for output in &self.x11_outputs.outputs {
-            output.mode(
-                wl_output::Mode::Current | wl_output::Mode::Preferred,
-                size.w,
-                size.h,
-                60_000,
+        self.surfaces.push(surface.clone());
+    }
+}
+
+impl OutputHandler for Lwfa {}
+
+// Own Xwayland's wl_output resources from bind time. Registering them with
+// Smithay first would leak native viewport mode changes before an override.
+impl GlobalDispatch<WlOutput, WlOutputData> for Lwfa {
+    fn bind(
+        state: &mut Self,
+        dh: &DisplayHandle,
+        client: &Client,
+        resource: New<WlOutput>,
+        global_data: &WlOutputData,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if client.get_data::<XWaylandClientData>().is_none() {
+            <OutputManagerState as GlobalDispatch<WlOutput, WlOutputData, Self>>::bind(
+                state,
+                dh,
+                client,
+                resource,
+                global_data,
+                init,
             );
-            if output.version() >= 2 {
-                output.scale(1);
-                output.done();
+            return;
+        }
+        let size = *state.x11_outputs.size.get_or_insert_with(|| {
+            display_size(
+                state.layout.output_size(),
+                state.config.session.xwayland_resolution,
+            )
+        });
+        state.layout.set_x11_output_size(size);
+        let output = init.init(resource, X11Output);
+        output.geometry(
+            0,
+            0,
+            0,
+            0,
+            wl_output::Subpixel::Unknown,
+            "lwfa".into(),
+            "Xwayland".into(),
+            wl_output::Transform::Normal,
+        );
+        output.mode(
+            wl_output::Mode::Current | wl_output::Mode::Preferred,
+            size.w,
+            size.h,
+            60_000,
+        );
+        if output.version() >= 4 {
+            output.name("lwfa-nested".into());
+            output.description("lwfa Xwayland display".into());
+        }
+        if output.version() >= 2 {
+            output.scale(1);
+            output.done();
+        }
+        state.x11_outputs.surfaces.retain(Resource::is_alive);
+        for surface in &state.x11_outputs.surfaces {
+            if surface.client().as_ref() == Some(client) {
+                surface.enter(&output);
             }
         }
+        state.x11_outputs.outputs.retain(Resource::is_alive);
+        state.x11_outputs.outputs.push(output);
     }
 }
 
-impl OutputHandler for Lwfa {
-    fn output_bound(&mut self, _output: Output, resource: WlOutput) {
-        if resource
-            .client()
-            .is_some_and(|client| client.get_data::<XWaylandClientData>().is_some())
-        {
-            self.x11_outputs.outputs.push(resource);
-            self.refresh_x11_outputs(true);
-        }
+impl Dispatch<WlOutput, X11Output> for Lwfa {
+    fn request(
+        _state: &mut Self,
+        _client: &Client,
+        _resource: &WlOutput,
+        _request: wl_output::Request,
+        _data: &X11Output,
+        _dh: &DisplayHandle,
+        _init: &mut DataInit<'_, Self>,
+    ) {
     }
 }
 
-// Keep Smithay's normal output resources. Only Xwayland's logical output
-// object is compositor-owned, so Smithay cannot overwrite it during resize.
 impl Dispatch<ZxdgOutputManagerV1, ()> for Lwfa {
     fn request(
         state: &mut Self,
@@ -94,20 +135,30 @@ impl Dispatch<ZxdgOutputManagerV1, ()> for Lwfa {
         dh: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if client.get_data::<XWaylandClientData>().is_some() {
-            if let zxdg_output_manager_v1::Request::GetXdgOutput { id, output } = request {
-                let xdg = init.init(id, X11XdgOutput);
-                if xdg.version() >= 2 {
-                    xdg.name("lwfa-nested".into());
-                    xdg.description("lwfa Xwayland workspace".into());
-                }
-                state.x11_outputs.xdg_outputs.push((xdg, output));
-                state.refresh_x11_outputs(true);
-            }
-        } else {
+        if client.get_data::<XWaylandClientData>().is_none() {
             <OutputManagerState as Dispatch<ZxdgOutputManagerV1, (), Self>>::request(
                 state, client, resource, request, data, dh, init,
             );
+            return;
+        }
+        if let zxdg_output_manager_v1::Request::GetXdgOutput { id, output } = request {
+            let xdg = init.init(id, X11XdgOutput);
+            let size = state
+                .x11_outputs
+                .size
+                .expect("wl_output was bound before xdg-output");
+            if xdg.version() >= 2 {
+                xdg.name("lwfa-nested".into());
+                xdg.description("lwfa Xwayland display".into());
+            }
+            xdg.logical_position(0, 0);
+            xdg.logical_size(size.w, size.h);
+            if xdg.version() < 3 {
+                xdg.done();
+            }
+            if output.version() >= 2 {
+                output.done();
+            }
         }
     }
 }
@@ -123,41 +174,34 @@ impl Dispatch<ZxdgOutputV1, X11XdgOutput> for Lwfa {
     ) {
     }
 }
-smithay::reexports::wayland_server::delegate_global_dispatch!(Lwfa: [WlOutput: WlOutputData] => OutputManagerState);
 smithay::reexports::wayland_server::delegate_global_dispatch!(Lwfa: [ZxdgOutputManagerV1: ()] => OutputManagerState);
 smithay::reexports::wayland_server::delegate_dispatch!(Lwfa: [WlOutput: OutputUserData] => OutputManagerState);
 smithay::reexports::wayland_server::delegate_dispatch!(Lwfa: [ZxdgOutputV1: XdgOutputUserData] => OutputManagerState);
 
-fn include_workspace(
-    mut size: Size<i32, Logical>,
-    rect: Rectangle<i32, Logical>,
-) -> Size<i32, Logical> {
-    size.w = size
-        .w
-        .max(rect.loc.x.saturating_add(rect.size.w))
-        .clamp(1, 32767);
-    size.h = size
-        .h
-        .max(rect.loc.y.saturating_add(rect.size.h))
-        .clamp(1, 32767);
-    size
+fn display_size(fallback: Size<i32, Logical>, configured: Option<[u32; 2]>) -> Size<i32, Logical> {
+    if let Some([w, h]) = configured {
+        if (1..=8192).contains(&w) && (1..=8192).contains(&h) {
+            return (w as i32, h as i32).into();
+        }
+        tracing::warn!(
+            "session.xwayland_resolution requires two dimensions between 1 and 8192; using startup display size"
+        );
+    }
+    (fallback.w.clamp(1, 8192), fallback.h.clamp(1, 8192)).into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn x11_root_includes_scaled_apps_and_positions_without_resizing_native_output() {
-        let native = Size::from((1000, 640));
-        let first = include_workspace(native, Rectangle::from_size((2000, 1280).into()));
-        assert_eq!(first, Size::from((2000, 1280)));
-        let second = include_workspace(first, Rectangle::new((900, 0).into(), (1500, 960).into()));
-        assert_eq!(second, Size::from((2400, 1280)));
-        assert_eq!(native, Size::from((1000, 640)));
-        let limit = include_workspace(
-            native,
-            Rectangle::new((i32::MAX, 0).into(), (2000, 1280).into()),
+    fn display_resolution_defaults_to_startup_and_accepts_an_explicit_reserve() {
+        let initial = (1319, 839).into();
+        assert_eq!(display_size(initial, None), initial);
+        assert_eq!(
+            display_size(initial, Some([3840, 2160])),
+            (3840, 2160).into()
         );
-        assert_eq!(limit.w, 32767);
+        assert_eq!(display_size(initial, Some([0, 2160])), initial);
+        assert_eq!(display_size(initial, Some([8193, 2160])), initial);
     }
 }
