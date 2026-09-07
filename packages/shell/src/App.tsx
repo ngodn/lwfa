@@ -41,7 +41,7 @@ import {
 import { FrameDecoder } from "./decode.js";
 import { decodable, decodesOpus } from "@/lib/codecs";
 import { OpusStream } from "@/lib/opus";
-import { AudioFormat } from "@lwfa/proto";
+import { AudioFormat, FrameFormat } from "@lwfa/proto";
 import type { Codec } from "@lwfa/proto";
 import { clearFrames, dropFrame, publishFrame } from "@/lib/frames"
 import { clearFormat } from "@/lib/streamFormat"
@@ -299,11 +299,16 @@ export function App(): React.ReactElement {
    * missing, which is any plain-HTTP origin. The engine reads that as JPEG.
    */
   const [decodes, setDecodes] = useState<Codec[]>([]);
+  const [keyframeRequest, setKeyframeRequest] = useState(0);
+  const availableCodecs = useRef<Codec[]>([]);
   const failedCodecs = useRef(new Set<Codec>());
   useEffect(() => {
     let live = true;
     void decodable().then((codecs) => {
-      if (live) setDecodes(codecs.filter((codec) => !failedCodecs.current.has(codec)));
+      if (live) {
+        availableCodecs.current = codecs;
+        setDecodes(codecs.filter((codec) => !failedCodecs.current.has(codec)));
+      }
     });
     return () => {
       live = false;
@@ -364,6 +369,21 @@ export function App(): React.ReactElement {
   const wantsAudio = streamPrefs.audio;
   const codecsRef = useRef(wantCodecs);
   codecsRef.current = wantCodecs;
+  const previousCodec = useRef(streamPrefs.codec);
+  useEffect(() => {
+    if (previousCodec.current === streamPrefs.codec) return;
+    previousCodec.current = streamPrefs.codec;
+    // An explicit format change retries capabilities rejected by an earlier
+    // stream configuration. Persistent failures still negotiate a fallback.
+    decoderRef.current?.retryFailedCodecs();
+    failedCodecs.current.clear();
+    setDecodes(availableCodecs.current);
+  }, [streamPrefs.codec]);
+  const restoreCodecs = useCallback((retry: readonly Codec[]) => {
+    if (!retry.length) return;
+    for (const codec of retry) failedCodecs.current.delete(codec);
+    setDecodes(availableCodecs.current.filter((codec) => !failedCodecs.current.has(codec)));
+  }, []);
 
   /**
    * Whether this browser can decode Opus: `null` until the probe answers.
@@ -543,7 +563,7 @@ export function App(): React.ReactElement {
         : [],
       codecs: codecsRef.current,
     });
-  }, [pauseInactive, wantCodecs]);
+  }, [pauseInactive, wantCodecs, keyframeRequest]);
 
   useEffect(() => {
     if (!password) return;
@@ -580,7 +600,7 @@ export function App(): React.ReactElement {
           const liveIds = new Set(message.windows.map((w) => w.id));
           for (const id of knownWindows) {
             if (liveIds.has(id)) continue;
-            decoderRef.current?.forget(id);
+            restoreCodecs(decoderRef.current?.forget(id) ?? []);
             dropFrame(id);
           }
           knownWindows.clear();
@@ -770,7 +790,7 @@ export function App(): React.ReactElement {
             return next;
           });
           dropFrame(message.id);
-          decoderRef.current?.forget(message.id);
+          restoreCodecs(decoderRef.current?.forget(message.id) ?? []);
           update((state, out) =>
             removeWindow(state, message.id, out, configRef.current),
           );
@@ -933,15 +953,24 @@ export function App(): React.ReactElement {
 
     // Straight into the frame store: no React state, so an arriving frame
     // re-renders exactly the one surface showing it. See lib/frames.ts.
-    const decoder = new FrameDecoder(publishFrame, (codec) => {
+    const decoder = new FrameDecoder(publishFrame, (codec, detail) => {
       if (decoderRef.current !== decoder || failedCodecs.current.has(codec)) return;
       failedCodecs.current.add(codec);
-      log("warn", `${codec.toUpperCase()} decoding failed; switching to a supported stream format`);
+      log("warn", `${codec.toUpperCase()} decoding failed. ${detail}`);
       setDecodes((current) => current.filter((candidate) => candidate !== codec));
+    }, () => {
+      if (decoderRef.current !== decoder) return;
+      // Repeating SetStreams requests a fresh capture and IDR, including for
+      // an idle window that would otherwise never send another keyframe.
+      setKeyframeRequest((current) => current + 1);
     });
     decoderRef.current = decoder;
 
     const handleFrame = (frame: DecodedFrame) => {
+      if (frame.header.format === FrameFormat.Jpeg) {
+        const { window: id, width, height } = frame.header;
+        restoreCodecs(decoder.retryResizedWindow(id, width, height));
+      }
       void decoder.handle(frame);
     };
 
@@ -1053,7 +1082,7 @@ export function App(): React.ReactElement {
       connection.current = null;
       decoderRef.current = null;
     };
-  }, [password, push, update]);
+  }, [password, push, update, restoreCodecs]);
 
   // Keyboard input is captured on the document rather than per element,
   // because keyboard focus lives in the compositor and there is nothing

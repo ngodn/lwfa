@@ -20,7 +20,7 @@ const profile = await mkdtemp(join(tmpdir(), 'lwfa-scaling-'));
 const fixture = join(profile, 'pattern.html');
 const resultPath = resolve(process.env.LWFA_TEST_RESULTS || 'docs/research/fixtures/window-scaling-measurements.json');
 const results = { date: new Date().toISOString(), origin, codec: codecs[0] || 'jpeg', cases: [], failures: [], limitations: [] };
-results.decoder = 'packages/shell/src/decode.ts FrameDecoder';
+results.decoder = process.env.LWFA_TEST_DECODER_SOURCE || 'packages/shell/src/decode.ts FrameDecoder';
 try {
   const prior = JSON.parse(await readFile(resultPath, 'utf8'));
   const diagnostic = prior.x11InputDiagnostic || prior.preFixX11InputDiagnostic;
@@ -41,7 +41,7 @@ const { build } = await import(require.resolve('vite'));
 const bundled = await build({
   configFile: false, root: resolve('packages/shell'), logLevel: 'error',
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-  resolve: { alias: { '@': resolve('packages/shell/src') } },
+  resolve: { alias: [...(process.env.LWFA_TEST_DECODER_SOURCE ? [{ find: '@/decode', replacement: resolve(process.env.LWFA_TEST_DECODER_SOURCE) }] : []), { find: '@lwfa/proto', replacement: resolve('packages/proto/src/index.ts') }, { find: '@', replacement: resolve('packages/shell/src') }] },
   plugins: [{ name: 'scaling-decoder-fixture', resolveId(id) { if (id.endsWith('virtual:scaling-decoder')) return '\0scaling-decoder'; }, load(id) { if (id === '\0scaling-decoder') return 'import { FrameDecoder } from "@/decode"; import { decodeFrame } from "@lwfa/proto"; import { decodable, codecFromAnnexB } from "@/lib/codecs"; globalThis.LWFA_TEST_DECODER = { FrameDecoder, decodeFrame, decodable, codecFromAnnexB };'; } }],
   build: { write: false, minify: false, lib: { entry: 'virtual:scaling-decoder', name: 'LWFA_TEST_DECODER', formats: ['iife'] } },
 });
@@ -65,7 +65,7 @@ try {
   await viewer.evaluate(async ({ origin, token }) => {
     const url = new URL(origin); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.searchParams.set('token', token);
     const ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
-    const p = window.probe = { ws, windows: [], frames: {}, errors: [], serial: 0, supportChecks: [], parameterSets: [], formats: {} };
+    const p = window.probe = { ws, windows: [], frames: {}, errors: [], serial: 0, supportChecks: [], parameterSets: [], formats: {}, wireFrames: [], wireFormatCounts: {} };
     const { FrameDecoder, decodeFrame, codecFromAnnexB } = window.LWFA_TEST_DECODER;
     const check = VideoDecoder.isConfigSupported.bind(VideoDecoder);
     VideoDecoder.isConfigSupported = async config => {
@@ -95,6 +95,9 @@ try {
       ++p.serial;
       const { window: id, format, keyframe } = frame.header;
       p.formats[id] = format;
+      p.wireFormatCounts[format] = (p.wireFormatCounts[format] || 0) + 1;
+      p.wireFrames.push({ serial: p.serial, ...frame.header });
+      if (p.wireFrames.length > 2000) p.wireFrames.shift();
       try {
         if (keyframe && format !== 0) p.parameterSets.push({ ...frame.header, codec: codecFromAnnexB(frame.payload, format === 2 ? 'hevc' : 'h264') });
         await decoder.handle(frame);
@@ -203,6 +206,8 @@ try {
           await app.waitForFunction(() => document.querySelector('#menu').selectedIndex === 1, null, { timeout: 3000 });
           entry.popup = { selected: 'Beta', ...option };
         }
+        entry.wireFormats = await viewer.evaluate(({ id, start }) => [...new Set(window.probe.wireFrames.filter(frame => frame.window === id && frame.serial > start).map(frame => frame.format))], { id, start });
+        assert.deepEqual(entry.wireFormats, [codecs[0] === 'hevc' ? 2 : codecs.length ? 1 : 0], 'no transient codec fallback during scaling');
         entry.stage = 'complete';
         entry.pass = true;
       } catch (error) {
@@ -210,7 +215,7 @@ try {
         entry.input = await app.evaluate(() => window.events);
         entry.allInput = await app.evaluate(() => window.allEvents);
         entry.engineErrors = await viewer.evaluate(() => window.probe.errors);
-        entry.lastFrame = await viewer.evaluate(id => { const f = window.probe.frames[id]; return f && { width: f.width, height: f.height, serial: f.serial }; }, id);
+        entry.lastFrame = await viewer.evaluate(id => { const f = window.probe.frames[id]; return f && { width: f.width, height: f.height, format: f.format, serial: f.serial }; }, id);
         results.failures.push({ platform, ...test, error: entry.error });
       }
       results.cases.push(entry);
@@ -275,6 +280,9 @@ try {
   }
   results.decoderSupportChecks = await viewer.evaluate(() => window.probe.supportChecks);
   results.streamParameterSets = await viewer.evaluate(() => window.probe.parameterSets);
+  results.wireFormatCounts = await viewer.evaluate(() => window.probe.wireFormatCounts);
+  results.decoderErrors = await viewer.evaluate(() => window.probe.errors);
+  if (results.decoderErrors.length) results.failures.push({ error: 'Decoder or engine errors occurred', details: results.decoderErrors });
   }
 } finally {
   await peer?.close(); await native?.close(); await browser.close(); await rm(profile, { recursive: true, force: true });

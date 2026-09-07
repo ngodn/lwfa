@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Real App and FrameDecoder over an intercepted socket. No production engine.
 import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 
@@ -12,6 +14,8 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {App} from '/src/App.tsx';
 import {useFrame} from '/src/lib/frames.ts';
+import {patchPrefs} from '/src/lib/prefs.ts';
+window.patchStream = changes => patchPrefs('stream',changes);
 function ObserveFrames() {
   const one=useFrame(1),two=useFrame(2);
   React.useEffect(() => { window.observedFrames={one,two}; },[one,two]);
@@ -57,7 +61,7 @@ let browser
 try {
   await server.listen()
   browser = await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE ? {executablePath:process.env.CHROMIUM_EXECUTABLE} : {})})
-  for (const scenario of ["auto", "pinned-hevc", "late-probe", "configure", "async-error", "resync"]) {
+  for (const scenario of ["auto", "pinned-hevc", "late-probe", "configure", "async-error", "resync", "preference-retry", "resize-retry", "close-retry", "delta-recovery", ...(process.env.LWFA_CODEC_PROBE_DIR ? ["real-resize"] : [])]) {
     const page = await browser.newPage({viewport:{width:1000,height:700}})
     const errors = []
     page.on('pageerror',error => errors.push(error.message))
@@ -88,16 +92,17 @@ try {
         for (const check of watchers) check()
         if (message.type === 'ping') ws.send(JSON.stringify({type:'pong'}))
       })
-      const ids = scenario === 'resync' ? (++connections > 1 ? [2] : [1,2]) : [1]
+      const ids = scenario === 'resync' ? (++connections > 1 ? [2] : [1,2]) : scenario === 'close-retry' ? [1,2] : [1]
       ws.send(JSON.stringify(hello(ids)))
       ws.send(JSON.stringify({type:'layout',output:{width:1000,height:700,scale:1},
         windows:ids.map((id,z) => ({id,z,rect:{x:z*450,y:0,width:450,height:600}}))}))
     })
     await page.addInitScript(scenario => {
-      localStorage.setItem('lwfa.prefs',JSON.stringify({stream:{audio:false,codec:scenario === 'pinned-hevc' ? 'hevc' : 'auto'}}))
+      localStorage.setItem('lwfa.prefs',JSON.stringify({stream:{audio:false,codec:scenario === 'pinned-hevc' ? 'hevc' : scenario === 'real-resize' ? 'h264' : 'auto'}}))
       Object.defineProperty(navigator,'getGamepads',{value:()=>[]})
       window.probes = []
       window.decoderConfigs = []
+      window.decodedChunks = []
       window.initialProbes = []
       window.decoders = []
       window.pendingConversions = []
@@ -114,6 +119,7 @@ try {
         decoders[index].init.output(video)
         return video
       }
+      if (scenario === 'real-resize') return
       window.VideoDecoder = class {
         state = 'unconfigured'
         constructor(init) { this.init = init; window.decoders.push(this) }
@@ -123,7 +129,7 @@ try {
             if (scenario === 'late-probe') await new Promise(resolve => window.initialProbes.push(resolve))
             return {supported:true,config}
           }
-          return {supported:scenario === 'configure' || scenario === 'async-error' || scenario === 'resync',config}
+          return {supported:window.allowReal || scenario === 'configure' || scenario === 'async-error' || scenario === 'resync' || scenario === 'delta-recovery',config}
         }
         configure(config) {
           window.decoderConfigs.push(config)
@@ -131,12 +137,28 @@ try {
           this.state = 'configured'
           if (scenario === 'async-error') queueMicrotask(() => this.init.error(new DOMException('fixture decode failure','EncodingError')))
         }
-        decode() {}
+        decode(chunk) { window.decodedChunks.push(chunk.type) }
         close() { this.state = 'closed' }
       }
     },scenario)
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__codec?token=isolated-test`)
     await page.waitForFunction(() => document.querySelector('[role="application"]'))
+    if (scenario === 'real-resize') {
+      await waitForCodecs(['h264'])
+      const stages=[[1000,640],[4000,3000],[1000,640],[1192,860],[1490,1075],[1788,1290],[2384,1720],[1001,641],[1192,860]]
+      const start=wire.length
+      for (const [stage,[width,height]] of stages.entries()) {
+        const payload=await readFile(path.join(process.env.LWFA_CODEC_PROBE_DIR,`h264-${stage}-0.h264`))
+        peer.send(packet(1,width,height,payload))
+        await page.waitForFunction(({width,height}) => observedFrames.one?.width === width && observedFrames.one?.height === height,{width,height})
+      }
+      assert(!wire.slice(start).some(message=>message.type==='setStreams' && !message.codecs.includes('h264')),
+        'actual scaled H264 streams preserve the selected codec through App negotiation')
+      assert.deepEqual(errors,[])
+      console.log('PASS real-resize: native browser decoder and actual App retain selected H264 through nine NVENC sizes')
+      await page.close()
+      continue
+    }
     if (scenario === 'late-probe') {
       await page.waitForFunction(() => initialProbes.length === 2)
     } else await waitForCodecs(scenario === 'pinned-hevc' ? ['hevc'] : ['hevc','h264'])
@@ -172,6 +194,31 @@ try {
       await page.close()
       continue
     }
+    if (scenario === 'delta-recovery') {
+      peer.send(video(2))
+      await page.waitForFunction(() => decodedChunks.length === 1)
+      await page.evaluate(() => emitFrame(0,16667))
+      await page.waitForFunction(() => observedFrames.one)
+      const delta=video(2);delta[6]=0
+      peer.send(delta)
+      await page.waitForFunction(() => decodedChunks.at(-1) === 'delta')
+      const beforeRecovery=wire.length
+      await page.evaluate(() => {
+        window.beforeRecovered=observedFrames.one
+        decoders[0].init.error(new DOMException('transient decode failure','EncodingError'))
+      })
+      // This idle engine supplies nothing until the client requests a new IDR.
+      await waitForCodecs(['hevc','h264'],beforeRecovery)
+      assert(!wire.slice(beforeRecovery).some(message=>message.type==='setStreams' && message.codecs.length<2))
+      peer.send(video(2))
+      await page.waitForFunction(() => decoders.length === 2)
+      await page.evaluate(() => emitFrame(1,16667))
+      await page.waitForFunction(() => observedFrames.one && observedFrames.one !== beforeRecovered)
+      assert.deepEqual(errors,[])
+      console.log('PASS delta-recovery: idle video requests a fresh keyframe and recovers without JPEG')
+      await page.close()
+      continue
+    }
     const beforeFailure = wire.length
     peer.send(video(2))
     await page.waitForFunction(() => decoderConfigs.some(config => config.codec === 'hvc1.1.6.L180.B0' && config.codedWidth === 4000 && config.codedHeight === 3000))
@@ -194,6 +241,41 @@ try {
       const blob=await new Promise(resolve => canvas.toBlob(resolve,'image/jpeg'))
       return [...new Uint8Array(await blob.arrayBuffer())]
     })
+    if (['preference-retry','resize-retry','close-retry'].includes(scenario)) {
+      const beforeRetry = wire.length
+      // A stable fallback must not repeatedly reopen a rejected decoder.
+      peer.send(packet(0,4000,3000,jpeg))
+      await page.waitForTimeout(100)
+      assert(!wire.slice(beforeRetry).some(message => message.type === 'setStreams' && message.codecs.length),
+        'same-size JPEG does not retry a rejected video configuration')
+      await page.evaluate(() => { window.allowReal = true })
+      if (scenario === 'preference-retry') {
+        await page.evaluate(() => patchStream({codec:'hevc'}))
+        await waitForCodecs(['hevc'],beforeRetry)
+      } else if (scenario === 'close-retry') {
+        peer.send(JSON.stringify({type:'windowClosed',id:1}))
+        await waitForCodecs(['hevc','h264'],beforeRetry)
+      } else {
+        peer.send(packet(0,2000,1500,jpeg))
+        await waitForCodecs(['hevc','h264'],beforeRetry)
+      }
+      const payload = [...video(2).subarray(24)]
+      const beforeVideo = await page.evaluate(() => decoderConfigs.length)
+      peer.send(packet(2,2000,1500,payload,scenario === 'close-retry' ? 2 : 1))
+      await page.waitForFunction(before => decoderConfigs.length > before, beforeVideo)
+      await page.evaluate(scenario => {
+        window.beforeRecovered = observedFrames[scenario === 'close-retry' ? 'two' : 'one']
+        emitFrame(decoders.length-1,16667)
+      },scenario)
+      await page.waitForFunction(scenario => {
+        const recovered=observedFrames[scenario === 'close-retry' ? 'two' : 'one']
+        return recovered?.width === 320 && recovered !== beforeRecovered
+      },scenario)
+      assert.deepEqual(errors,[])
+      console.log(`PASS ${scenario}: selected codec is retried and video reaches the surface without reload`)
+      await page.close()
+      continue
+    }
     peer.send(packet(0,320,180,jpeg))
     await page.waitForFunction(() => [...document.querySelectorAll('canvas')].some(canvas => canvas.width === 320 && canvas.height === 180))
     assert.deepEqual(errors,[])

@@ -36,12 +36,15 @@ class FakeVideoDecoder {
   static isConfigSupported = vi.fn(async (config: VideoDecoderConfig) => ({ supported: true, config }))
 
   static outputs: VideoFrameOutputCallback[] = []
+  static decoded: { instance: number; chunk: EncodedVideoChunk }[] = []
+  static decodeFailures = 0
+  instance: number
 
   constructor(init: VideoDecoderInit) {
     if (FakeVideoDecoder.refuseConstruction) throw new DOMException("no decoder", "NotSupportedError")
     FakeVideoDecoder.outputs.push(init.output)
     FakeVideoDecoder.errors.push(init.error)
-    stats.constructed++
+    this.instance = ++stats.constructed
   }
   configure(config: VideoDecoderConfig): void {
     if (FakeVideoDecoder.refuseConfigure) throw new DOMException("unsupported size", "NotSupportedError")
@@ -52,7 +55,13 @@ class FakeVideoDecoder {
     stats.configured++
     this.state = "configured"
   }
-  decode(_chunk: unknown): void {}
+  decode(chunk: EncodedVideoChunk): void {
+    FakeVideoDecoder.decoded.push({ instance: this.instance, chunk })
+    if (FakeVideoDecoder.decodeFailures > 0) {
+      FakeVideoDecoder.decodeFailures--
+      throw new DOMException("temporary decoder failure", "EncodingError")
+    }
+  }
   close(): void {
     stats.closed++
     this.state = "closed"
@@ -83,13 +92,17 @@ describe("the frame decoder", () => {
     stats.closed = 0
     FakeVideoDecoder.refuseReconfigure = false
     FakeVideoDecoder.outputs = []
+    FakeVideoDecoder.decoded = []
+    FakeVideoDecoder.decodeFailures = 0
     FakeVideoDecoder.errors = []
     FakeVideoDecoder.configs = []
     FakeVideoDecoder.refuseConfigure = false
     FakeVideoDecoder.refuseConstruction = false
     FakeVideoDecoder.isConfigSupported.mockReset().mockImplementation(async (config) => ({ supported: true, config }))
     vi.stubGlobal("VideoDecoder", FakeVideoDecoder)
-    vi.stubGlobal("EncodedVideoChunk", class {})
+    vi.stubGlobal("EncodedVideoChunk", class {
+      constructor(init: EncodedVideoChunkInit) { Object.assign(this, init) }
+    })
   })
 
   it("builds one decoder for a window's first keyframe", () => {
@@ -162,13 +175,17 @@ describe("asynchronous frame delivery", () => {
   beforeEach(() => {
     FakeVideoDecoder.refuseReconfigure = false
     FakeVideoDecoder.outputs = []
+    FakeVideoDecoder.decoded = []
+    FakeVideoDecoder.decodeFailures = 0
     FakeVideoDecoder.errors = []
     FakeVideoDecoder.configs = []
     FakeVideoDecoder.refuseConfigure = false
     FakeVideoDecoder.refuseConstruction = false
     FakeVideoDecoder.isConfigSupported.mockReset().mockImplementation(async (config) => ({ supported: true, config }))
     vi.stubGlobal("VideoDecoder", FakeVideoDecoder)
-    vi.stubGlobal("EncodedVideoChunk", class {})
+    vi.stubGlobal("EncodedVideoChunk", class {
+      constructor(init: EncodedVideoChunkInit) { Object.assign(this, init) }
+    })
   })
 
   for (const format of [FrameFormat.Jpeg, FrameFormat.H264]) {
@@ -262,6 +279,8 @@ describe("actual stream capability and fallback", () => {
   beforeEach(() => {
     stats.constructed = stats.configured = stats.closed = 0
     FakeVideoDecoder.outputs = []
+    FakeVideoDecoder.decoded = []
+    FakeVideoDecoder.decodeFailures = 0
     FakeVideoDecoder.errors = []
     FakeVideoDecoder.configs = []
     FakeVideoDecoder.refuseConfigure = false
@@ -269,7 +288,9 @@ describe("actual stream capability and fallback", () => {
     FakeVideoDecoder.refuseConstruction = false
     FakeVideoDecoder.isConfigSupported.mockReset().mockImplementation(async config => ({ supported: true, config }))
     vi.stubGlobal("VideoDecoder", FakeVideoDecoder)
-    vi.stubGlobal("EncodedVideoChunk", class {})
+    vi.stubGlobal("EncodedVideoChunk", class {
+      constructor(init: EncodedVideoChunkInit) { Object.assign(this, init) }
+    })
   })
 
   it("configures and probes the real HEVC level and coded dimensions", async () => {
@@ -287,7 +308,7 @@ describe("actual stream capability and fallback", () => {
     FakeVideoDecoder.isConfigSupported.mockImplementation(async config => ({ supported: !config.codec.startsWith("hvc1"), config }))
     const decoder = new FrameDecoder(() => {}, fallback)
     await decoder.handle(hevc())
-    expect(fallback).toHaveBeenCalledExactlyOnceWith("hevc")
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("hevc", "Window 1 4000×3000: stream configuration is unsupported")
     await decoder.handle(hevc())
     expect(stats.constructed).toBe(1)
     await decoder.handle(frame(800,600))
@@ -301,7 +322,7 @@ describe("actual stream capability and fallback", () => {
       FakeVideoDecoder[failure] = true
       const decoder = new FrameDecoder(() => {}, fallback)
       await expect(decoder.handle(hevc())).resolves.toBeUndefined()
-      expect(fallback).toHaveBeenCalledExactlyOnceWith("hevc")
+      expect(fallback).toHaveBeenCalledExactlyOnceWith("hevc", expect.any(String))
     })
   }
 
@@ -312,7 +333,155 @@ describe("actual stream capability and fallback", () => {
     await decoder.handle(frame(800,600))
     expect(stats.constructed).toBe(1)
     FakeVideoDecoder.errors[0]!(new DOMException("decode failed", "EncodingError"))
-    expect(fallback).toHaveBeenCalledExactlyOnceWith("h264")
+    expect(fallback).not.toHaveBeenCalled()
+    expect(stats.constructed).toBe(2)
+    FakeVideoDecoder.errors[1]!(new DOMException("decode failed again", "EncodingError"))
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("h264", expect.any(String))
+  })
+
+  it("replays the scaled keyframe once after an asynchronous EncodingError without needing another packet", async () => {
+    const fallback = vi.fn()
+    const decoder = new FrameDecoder(() => {}, fallback)
+    await decoder.handle(frame(800, 600))
+    await decoder.handle(frame(1600, 1200))
+    FakeVideoDecoder.errors[0]!(new DOMException("resize failed", "EncodingError"))
+    expect(fallback).not.toHaveBeenCalled()
+    expect(stats.constructed).toBe(2)
+    expect(stats.closed).toBe(1)
+    expect(FakeVideoDecoder.configs.at(-1)).toMatchObject({ codedWidth: 1600, codedHeight: 1200 })
+    expect(FakeVideoDecoder.decoded).toHaveLength(3)
+    expect(FakeVideoDecoder.decoded.at(-1)).toMatchObject({ instance: 2, chunk: { type: "key" } })
+    // Late callbacks from the replaced decoder cannot consume the retry.
+    FakeVideoDecoder.errors[0]!(new DOMException("late resize failure", "EncodingError"))
+    expect(fallback).not.toHaveBeenCalled()
+    expect(stats.constructed).toBe(2)
+  })
+
+  it("retries a synchronous decode failure once, then stops on repeated failure", async () => {
+    const fallback = vi.fn()
+    const decoder = new FrameDecoder(() => {}, fallback)
+    FakeVideoDecoder.decodeFailures = 2
+    await decoder.handle(frame(1600, 1200))
+    expect(stats.constructed).toBe(2)
+    expect(FakeVideoDecoder.decoded).toHaveLength(2)
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("h264", expect.any(String))
+    await decoder.handle(frame(1600, 1200))
+    expect(stats.constructed).toBe(2)
+  })
+
+  it("requests one fresh keyframe after a delta error so an idle window can recover", async () => {
+    const fallback = vi.fn()
+    const requestKeyframe = vi.fn()
+    const decoder = new FrameDecoder(() => {}, fallback, requestKeyframe)
+    await decoder.handle(frame(800, 600))
+    await decoder.handle(frame(800, 600, false))
+    FakeVideoDecoder.errors[0]!(new DOMException("delta failed", "EncodingError"))
+    expect(fallback).not.toHaveBeenCalled()
+    expect(stats.closed).toBe(1)
+    expect(stats.constructed).toBe(1)
+    expect(requestKeyframe).toHaveBeenCalledExactlyOnceWith(W)
+    // Neither an old callback nor queued deltas should issue another request.
+    FakeVideoDecoder.errors[0]!(new DOMException("late delta error", "EncodingError"))
+    await decoder.handle(frame(800, 600, false))
+    expect(FakeVideoDecoder.decoded).toHaveLength(2)
+    expect(requestKeyframe).toHaveBeenCalledOnce()
+    await decoder.handle(frame(800, 600))
+    expect(stats.constructed).toBe(2)
+    expect(FakeVideoDecoder.decoded.at(-1)).toMatchObject({ instance: 2, chunk: { type: "key" } })
+    FakeVideoDecoder.errors[1]!(new DOMException("keyframe also failed", "EncodingError"))
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("h264", expect.any(String))
+    expect(requestKeyframe).toHaveBeenCalledOnce()
+  })
+
+  it("does not retry a confirmed NotSupportedError", async () => {
+    const fallback = vi.fn()
+    const decoder = new FrameDecoder(() => {}, fallback)
+    await decoder.handle(frame(800, 600))
+    FakeVideoDecoder.errors[0]!(new DOMException("unsupported profile", "NotSupportedError"))
+    expect(stats.constructed).toBe(1)
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("h264", expect.any(String))
+  })
+
+  it("allows one new recovery when the stream configuration changes", async () => {
+    const fallback = vi.fn()
+    const decoder = new FrameDecoder(() => {}, fallback)
+    await decoder.handle(frame(800, 600))
+    FakeVideoDecoder.errors[0]!(new DOMException("first size failed", "EncodingError"))
+    await decoder.handle(frame(1600, 1200))
+    FakeVideoDecoder.errors[1]!(new DOMException("new size failed", "EncodingError"))
+    expect(stats.constructed).toBe(3)
+    expect(fallback).not.toHaveBeenCalled()
+    FakeVideoDecoder.errors[2]!(new DOMException("new size failed again", "EncodingError"))
+    expect(stats.constructed).toBe(3)
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("h264", expect.any(String))
+  })
+
+  it("keeps recovery bounded after successful output and discards retired decoder output", async () => {
+    const fallback = vi.fn()
+    const sink = vi.fn()
+    const bitmap = { close: vi.fn() } as unknown as ImageBitmap
+    const convert = vi.fn(async () => bitmap)
+    vi.stubGlobal("createImageBitmap", convert)
+    const decoder = new FrameDecoder(sink, fallback)
+    await decoder.handle(frame(1600, 1200))
+    FakeVideoDecoder.errors[0]!(new DOMException("first failure", "EncodingError"))
+    const oldOutput = { timestamp: 16_667, close: vi.fn() } as unknown as VideoFrame
+    FakeVideoDecoder.outputs[0]!(oldOutput)
+    expect(oldOutput.close).toHaveBeenCalledOnce()
+    expect(convert).not.toHaveBeenCalled()
+    FakeVideoDecoder.outputs[1]!({ timestamp: 16_667, close: vi.fn() } as unknown as VideoFrame)
+    await Promise.resolve()
+    expect(sink).toHaveBeenCalledWith(W, bitmap)
+    FakeVideoDecoder.errors[1]!(new DOMException("later failure at same size", "EncodingError"))
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("h264", expect.any(String))
+    expect(stats.constructed).toBe(2)
+  })
+
+  it("ignores the retired support probe after replaying a keyframe", async () => {
+    let finish!: (value: { supported: boolean; config: VideoDecoderConfig }) => void
+    FakeVideoDecoder.isConfigSupported.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const fallback = vi.fn()
+    const decoder = new FrameDecoder(() => {}, fallback)
+    await decoder.handle(frame(1600, 1200))
+    FakeVideoDecoder.errors[0]!(new DOMException("first failure", "EncodingError"))
+    finish({ supported: false, config: FakeVideoDecoder.configs[0]! })
+    await Promise.resolve()
+    expect(stats.constructed).toBe(2)
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
+  it("retries a failed family only when that window's dimensions change", async () => {
+    const fallback = vi.fn()
+    FakeVideoDecoder.isConfigSupported.mockImplementationOnce(async config => ({ supported: false, config }))
+    const decoder = new FrameDecoder(() => {}, fallback)
+    await decoder.handle(hevc(4000, 3000))
+    expect(decoder.retryResizedWindow(W, 4000, 3000)).toEqual([])
+    expect(decoder.retryResizedWindow(2 as WindowId, 2000, 1500)).toEqual([])
+    expect(decoder.retryResizedWindow(W, 2000, 1500)).toEqual(["hevc"])
+    expect(decoder.retryResizedWindow(W, 2000, 1500)).toEqual([])
+    await decoder.handle(hevc(2000, 1500))
+    expect(stats.constructed).toBe(2)
+    expect(fallback).toHaveBeenCalledTimes(1)
+  })
+
+  it("explicit retry clears failed codecs and invalidates old support checks", async () => {
+    const fallback = vi.fn()
+    FakeVideoDecoder.refuseConfigure = true
+    const decoder = new FrameDecoder(() => {}, fallback)
+    await decoder.handle(hevc())
+    FakeVideoDecoder.refuseConfigure = false
+    let finish!: (value: { supported: boolean; config: VideoDecoderConfig }) => void
+    FakeVideoDecoder.isConfigSupported.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await decoder.handle(frame(800, 600))
+    decoder.retryFailedCodecs()
+    expect(decoder.retryResizedWindow(W, 2000, 1500)).toEqual([])
+    finish({ supported: false, config: FakeVideoDecoder.configs.at(-1)! })
+    await Promise.resolve()
+    await decoder.handle(hevc())
+    expect(stats.constructed).toBe(3)
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("hevc", expect.any(String))
+    FakeVideoDecoder.errors[0]!(new DOMException("old failed decoder", "EncodingError"))
+    expect(fallback).toHaveBeenCalledTimes(1)
   })
 
   for (const transition of ["resize", "forget", "close", "jpeg"] as const) {

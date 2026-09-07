@@ -68,6 +68,8 @@ pub struct Session {
     /// switching format tears down every NVENC session. A page refresh
     /// therefore rebuilt all of them, at 90-160ms each.
     pub codecs: Option<Vec<lwfa_proto::Codec>>,
+    /// Whether the latest SetStreams requests at least one window.
+    pub video: bool,
     /// Whether this client has asked to hear the machine.
     pub audio: bool,
     /// Whether this client can decode Opus. See `AudioFormat::Opus`.
@@ -1066,6 +1068,7 @@ impl Lwfa {
         let answered: Vec<&[lwfa_proto::Codec]> = self
             .sessions
             .values()
+            .filter(|s| s.video)
             .filter_map(|s| s.codecs.as_deref())
             .collect();
         lwfa_proto::Codec::best_for_all(answered)

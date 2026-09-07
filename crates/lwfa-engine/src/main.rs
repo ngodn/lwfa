@@ -659,6 +659,25 @@ fn announce(bound: std::net::SocketAddr, token: &str) {
     }
 }
 
+/// Negotiate only for viewers receiving video, including after a viewer leaves.
+fn sync_stream_codec(state: &mut Lwfa, previous: Option<lwfa_proto::Codec>) {
+    if !state.sessions.values().any(|session| session.video && session.codecs.is_some()) {
+        // Keep cached sessions through pauses and the reconnect grace period.
+        return;
+    }
+    let codec = state.codec_for_all();
+    if let Some(worker) = state.encoders.as_ref() {
+        worker.set_codec(codec);
+    }
+    if codec != previous {
+        // Idle windows also need a self-contained frame in the new format.
+        state.capture.invalidate_all();
+        if let Some(worker) = state.encoders.as_ref() {
+            worker.request_keyframes();
+        }
+    }
+}
+
 fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
     // Every shell event, at debug. Cheap, off by default, and the one thing
     // that turns "a client connected but nothing happened" from a guess into a
@@ -673,6 +692,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             device,
             client,
         } => {
+            let previous_codec = state.codec_for_all();
             let interactive = permissions.may_interact();
 
             // Whatever the grace was holding the world together for, it is
@@ -749,6 +769,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 session,
                 new_session(permissions, account, device, client.clone()),
             );
+            sync_stream_codec(state, previous_codec);
             // Hand the controller back before the client has to ask. The shell
             // does ask, but only while its pad is on screen, so a page that
             // came back with the dock closed left the pad parked and the game
@@ -824,6 +845,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
         }
 
         ShellEvent::Disconnected(session) => {
+            let previous_codec = state.codec_for_all();
             // Read before the session is removed: it is what identifies the
             // browser, and `park_gamepad` needs it to give the controller back
             // when that browser returns.
@@ -833,6 +855,7 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
                 .map(|s| s.client.clone())
                 .unwrap_or_default();
             state.sessions.remove(&session);
+            sync_stream_codec(state, previous_codec);
             // Anything it was holding is let go first. A held key outlives its
             // socket otherwise, because the seat never hears that a connection
             // died. See `Lwfa::release_keys_for`.
@@ -945,6 +968,7 @@ fn new_session(
         // Unknown until the client says so in `SetStreams`. Not `false`:
         // see `codec_for_all`.
         codecs: None,
+        video: false,
         // Silent until asked. Capturing costs a process and 1.5 Mbit/s per
         // listener, and a device that connects should not start broadcasting
         // the room because it happened to open a page.
@@ -1401,6 +1425,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
         }
 
         ToEngine::SetStreams { windows, codecs } => {
+            let previous_codec = state.codec_for_all();
             // Per connection, not global: a phone and a tablet are looking at
             // different parts of the same strip, so what each can see is its
             // own answer. The engine captures the union.
@@ -1422,13 +1447,13 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             }
             if let Some(who) = state.sessions.get_mut(&session) {
                 who.codecs = Some(codecs);
+                who.video = !next.is_empty();
             }
             // One encode is shared by everyone watching a window, so the format
             // is decided by the least capable client rather than by whoever
             // spoke last. See `codec_for_all`.
-            let codec_for_all = state.codec_for_all();
+            sync_stream_codec(state, previous_codec);
             if let Some(worker) = state.encoders.as_ref() {
-                worker.set_codec(codec_for_all);
                 worker.request_keyframes();
             }
             if let Some(shell) = state.shell.as_ref() {
@@ -1631,10 +1656,91 @@ mod tests {
             since: std::time::Instant::now(),
             client: "test-client".into(),
             codecs: Some(vec![lwfa_proto::Codec::H264]),
+            video: false,
             audio: false,
             opus: false,
             audio_quality: lwfa_proto::AudioQuality::default(),
         }
+    }
+
+    fn negotiation_state() -> Lwfa {
+        let mut event_loop = smithay::reexports::calloop::EventLoop::try_new().unwrap();
+        let display = smithay::reexports::wayland_server::Display::new().unwrap();
+        let mut state = Lwfa::without_listener(&mut event_loop, display);
+        state.encoders = Some(encode::EncodeWorker::without_thread());
+        state.sessions.insert(1, session(SessionMode::Interact));
+        state.sessions.insert(2, session(SessionMode::View));
+        state
+    }
+
+    fn announce_video(state: &mut Lwfa, session: lwfa_proto::SessionId, watching: bool, codecs: Vec<lwfa_proto::Codec>) {
+        handle_shell_message(state, session, ToEngine::SetStreams {
+            windows: if watching { vec![WindowId(1)] } else { vec![] },
+            codecs,
+        });
+    }
+
+    #[test]
+    fn inactive_video_client_does_not_force_jpeg() {
+        let mut state = negotiation_state();
+        announce_video(&mut state, 1, true, vec![lwfa_proto::Codec::Hevc]);
+        announce_video(&mut state, 2, false, vec![]);
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), Some(lwfa_proto::Codec::Hevc));
+    }
+
+    #[test]
+    fn pausing_restrictive_video_client_restores_hardware_codec() {
+        let mut state = negotiation_state();
+        announce_video(&mut state, 1, true, vec![lwfa_proto::Codec::Hevc]);
+        announce_video(&mut state, 2, true, vec![]);
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), None);
+        announce_video(&mut state, 2, false, vec![]);
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), Some(lwfa_proto::Codec::Hevc));
+    }
+
+    #[test]
+    fn departing_restrictive_video_client_restores_hardware_codec() {
+        let mut state = negotiation_state();
+        announce_video(&mut state, 1, true, vec![lwfa_proto::Codec::Hevc]);
+        announce_video(&mut state, 2, true, vec![]);
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), None);
+        handle_shell_event(&mut state, ShellEvent::Disconnected(2));
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), Some(lwfa_proto::Codec::Hevc));
+    }
+
+    #[test]
+    fn replacing_restrictive_video_client_restores_hardware_codec() {
+        let mut state = negotiation_state();
+        state.sessions.get_mut(&1).unwrap().client = "remaining".into();
+        announce_video(&mut state, 1, true, vec![lwfa_proto::Codec::Hevc]);
+        announce_video(&mut state, 2, true, vec![]);
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), None);
+        handle_shell_event(&mut state, ShellEvent::Connected {
+            session: 3,
+            permissions: Permissions { mode: SessionMode::View, allowed_apps: None },
+            account: "someone".into(),
+            device: "iPad".into(),
+            client: "test-client".into(),
+        });
+        assert!(!state.sessions.contains_key(&2));
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), Some(lwfa_proto::Codec::Hevc));
+    }
+
+    #[test]
+    fn last_video_client_leaving_preserves_cached_codec_during_grace() {
+        let mut state = negotiation_state();
+        state.sessions.remove(&2);
+        announce_video(&mut state, 1, true, vec![lwfa_proto::Codec::Hevc]);
+        handle_shell_event(&mut state, ShellEvent::Disconnected(1));
+        assert!(state.sessions.is_empty());
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), Some(lwfa_proto::Codec::Hevc));
+    }
+
+    #[test]
+    fn first_jpeg_video_client_overrides_worker_default() {
+        let mut state = negotiation_state();
+        announce_video(&mut state, 1, true, vec![]);
+        assert_eq!(state.encoders.as_ref().unwrap().negotiated_codec(), None);
     }
 
     fn key() -> ToEngine {

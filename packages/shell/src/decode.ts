@@ -48,8 +48,17 @@ export type FrameSink = (window: WindowId, bitmap: ImageBitmap) => void
  */
 export class FrameDecoder {
   #sink: FrameSink
-  #onUnsupported: (codec: Codec) => void
+  #onUnsupported: (codec: Codec, detail: string) => void
+  #onKeyframeNeeded: (window: WindowId) => void
   #failed = new Set<Codec>()
+  #rejectedConfigs = new Map<WindowId, Map<Codec, { width: number; height: number }>>()
+  #recovery = new Map<WindowId, {
+    config: string
+    width: number
+    height: number
+    retried: boolean
+    keyframe: DecodedFrame | null
+  }>()
   #supportChecks = new Map<WindowId, object>()
   #families = new Map<WindowId, Codec>()
   #decoders = new Map<WindowId, VideoDecoder>()
@@ -65,9 +74,14 @@ export class FrameDecoder {
   // pixels when createImageBitmap promises finish out of order.
   #delivery = new Map<WindowId, { issued: number; published: number }>()
 
-  constructor(sink: FrameSink, onUnsupported: (codec: Codec) => void = () => {}) {
+  constructor(
+    sink: FrameSink,
+    onUnsupported: (codec: Codec, detail: string) => void = () => {},
+    onKeyframeNeeded: (window: WindowId) => void = () => {},
+  ) {
     this.#sink = sink
     this.#onUnsupported = onUnsupported
+    this.#onKeyframeNeeded = onKeyframeNeeded
   }
 
   async handle(frame: DecodedFrame): Promise<void> {
@@ -94,7 +108,7 @@ export class FrameDecoder {
 
   async #handleJpeg(frame: DecodedFrame): Promise<void> {
     const id = frame.header.window
-    if (this.#decoders.has(id)) this.#reset(id)
+    if (this.#decoders.has(id) || this.#recovery.has(id)) this.#reset(id)
     const deliver = this.#deliveryFor(id)
     const blob = new Blob([frame.payload as BlobPart], { type: "image/jpeg" })
     try {
@@ -142,6 +156,14 @@ export class FrameDecoder {
       return
     }
 
+    if (wanted !== null && this.#recovery.get(id)?.config !== wanted) {
+      this.#recovery.set(id, { config: wanted, width, height, retried: false, keyframe: null })
+    }
+    const recovery = this.#recovery.get(id)
+    // Only replay a keyframe while it is the newest packet. Once deltas have
+    // followed it, restarting from that keyframe would omit their references.
+    if (recovery) recovery.keyframe = keyframe ? frame : null
+
     if (config !== null && wanted !== null && this.#configured.get(id) !== wanted) {
       // Resolution or profile changed, so the old configuration is useless and
       // its reference frames with it.
@@ -170,14 +192,11 @@ export class FrameDecoder {
           // decoder, and handing that decoder a sequence that jumps backwards
           // is a thing to avoid for no gain.
         } catch (err) {
-          // A decoder that will not take the new configuration is no worse off
-          // for being replaced, which is what this did unconditionally before.
-          console.warn(`could not reconfigure the decoder for w${id}:`, err)
-          this.#reset(id)
-          decoder = undefined
+          this.#recoverDecoder(id, family, err)
+          return
         }
       } else {
-        this.#reset(id)
+        this.#reset(id, true)
         decoder = undefined
       }
     }
@@ -210,11 +229,11 @@ export class FrameDecoder {
           },
           error: (err) => {
             if (this.#decoders.get(id) !== decoder) return
-            this.#rejectCodec(id, this.#families.get(id) ?? family, err)
+            this.#recoverDecoder(id, this.#families.get(id) ?? family, err)
           },
         })
       } catch (err) {
-        this.#rejectCodec(id, family, err)
+        this.#recoverDecoder(id, family, err)
         return
       }
       this.#decoders.set(id, decoder)
@@ -222,7 +241,7 @@ export class FrameDecoder {
       try {
         decoder.configure(config)
       } catch (err) {
-        this.#rejectCodec(id, family, err)
+        this.#recoverDecoder(id, family, err)
         return
       }
       changed = true
@@ -253,7 +272,7 @@ export class FrameDecoder {
         }),
       )
     } catch (err) {
-      this.#rejectCodec(id, family, err)
+      this.#recoverDecoder(id, family, err)
     }
   }
 
@@ -269,17 +288,52 @@ export class FrameDecoder {
         if (this.#supportChecks.get(id) !== lifetime) return
         if (!support.supported) this.#rejectCodec(id, family, "stream configuration is unsupported")
       } catch (err) {
-        if (this.#supportChecks.get(id) === lifetime) this.#rejectCodec(id, family, err)
+        if (this.#supportChecks.get(id) === lifetime) this.#recoverDecoder(id, family, err)
       }
     })()
   }
 
+  #recoverDecoder(id: WindowId, family: Codec, reason: unknown): void {
+    const recovery = this.#recovery.get(id)
+    if (
+      (reason instanceof DOMException && reason.name === "NotSupportedError") ||
+      !recovery || recovery.retried
+    ) {
+      this.#rejectCodec(id, family, reason)
+      return
+    }
+    recovery.retried = true
+    const keyframe = recovery.keyframe
+    this.#reset(id, true)
+    // An idle app may never send another packet after a resize. Replaying its
+    // current keyframe gives the replacement decoder a chance immediately.
+    if (keyframe) {
+      this.#handleVideo(keyframe)
+    } else {
+      // Deltas cannot establish a fresh reference chain. Ask for a new
+      // keyframe even when the app is idle and damage tracking sends nothing.
+      // The retry was consumed above, so repeated errors cannot loop requests.
+      this.#onKeyframeNeeded(id)
+    }
+  }
+
   #rejectCodec(id: WindowId, family: Codec, reason: unknown): void {
+    const config = this.#recovery.get(id)
+    if (config) {
+      let rejected = this.#rejectedConfigs.get(id)
+      if (!rejected) {
+        rejected = new Map()
+        this.#rejectedConfigs.set(id, rejected)
+      }
+      rejected.set(family, { width: config.width, height: config.height })
+    }
     this.#reset(id)
     if (this.#failed.has(family)) return
     this.#failed.add(family)
     console.warn(`w${id}: ${family} failed; requesting another stream format:`, reason)
-    this.#onUnsupported(family)
+    const message = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason)
+    const size = config ? ` ${config.width}×${config.height}` : ""
+    this.#onUnsupported(family, `Window ${id}${size}: ${message}`)
   }
 
   #deliveryFor(id: WindowId): (bitmap: ImageBitmap) => void {
@@ -307,7 +361,8 @@ export class FrameDecoder {
     console.warn(`w${id}: ${message}`)
   }
 
-  #reset(id: WindowId): void {
+  #reset(id: WindowId, preserveRecovery = false): void {
+    if (!preserveRecovery) this.#recovery.delete(id)
     this.#supportChecks.delete(id)
     this.#families.delete(id)
     this.#delivery.delete(id)
@@ -325,11 +380,35 @@ export class FrameDecoder {
     this.#awaitingKeyframe.delete(id)
   }
 
-  /** Release a window's decoder. Call when the window closes. */
-  forget(id: WindowId): void {
+  /** A smaller or otherwise changed window may fit a previously failed decoder. */
+  retryResizedWindow(id: WindowId, width: number, height: number): Codec[] {
+    const rejected = this.#rejectedConfigs.get(id)
+    if (!rejected) return []
+    const retry: Codec[] = []
+    for (const [family, config] of rejected) {
+      if (config.width === width && config.height === height) continue
+      rejected.delete(family)
+      this.#failed.delete(family)
+      retry.push(family)
+    }
+    if (rejected.size === 0) this.#rejectedConfigs.delete(id)
+    return retry
+  }
+
+  /** Explicit stream selection starts a new attempt, including capability probes. */
+  retryFailedCodecs(): void {
+    this.close()
+  }
+
+  /** Release a window and return codecs whose failed configuration went with it. */
+  forget(id: WindowId): Codec[] {
+    const retry = [...(this.#rejectedConfigs.get(id)?.keys() ?? [])]
+    for (const family of retry) this.#failed.delete(family)
     this.#reset(id)
     this.#warned.delete(id)
     this.#timestamps.delete(id)
+    this.#rejectedConfigs.delete(id)
+    return retry
   }
 
   /** Release everything. Call on disconnect. */
@@ -338,5 +417,8 @@ export class FrameDecoder {
     this.#delivery.clear()
     this.#timestamps.clear()
     this.#warned.clear()
+    this.#recovery.clear()
+    this.#rejectedConfigs.clear()
+    this.#failed.clear()
   }
 }

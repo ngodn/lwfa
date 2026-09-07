@@ -660,8 +660,12 @@ mod tests {
             assert!(encoders.available, "this diagnostic requires NVENC");
             encoders.set_codec(Some(codec));
             encoders.set_rates(HashMap::new(), 20_000_000);
-            // Reuse the same window/session owner through both resizes.
-            for (stage, (width, height)) in [(1000_u32, 640_u32), (4000, 3000), (1000, 640)]
+            // Include fractional sizes and return to the initial size.
+            for (stage, (width, height)) in [
+                (1000_u32, 640_u32), (4000, 3000), (1000, 640),
+                (1192, 860), (1490, 1075), (1788, 1290), (2384, 1720),
+                (1001, 641), (1192, 860),
+            ]
                 .into_iter().enumerate()
             {
                 let rgba: Vec<u8> = (0..width as usize * height as usize)
@@ -694,8 +698,11 @@ mod tests {
                     assert!(probe.status.success(), "{}", String::from_utf8_lossy(&probe.stderr));
                     let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
                     let stream = &metadata["streams"][0];
-                    assert_eq!(stream["width"], width);
-                    assert_eq!(stream["height"], height);
+                    // NVENC's 4:2:0 bitstream rounds odd source dimensions up.
+                    let coded_width = width + (width & 1);
+                    let coded_height = height + (height & 1);
+                    assert_eq!(stream["width"], coded_width);
+                    assert_eq!(stream["height"], coded_height);
                     assert_eq!(stream["codec_name"], extension);
                     if codec == lwfa_proto::Codec::Hevc && width == 4000 {
                         assert!(stream["level"].as_u64().unwrap() > 153,
@@ -707,7 +714,7 @@ mod tests {
                         "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
                     ]).output().unwrap();
                     assert!(decoded.status.success(), "{}", String::from_utf8_lossy(&decoded.stderr));
-                    assert_eq!(decoded.stdout.len(), width as usize * height as usize * 3);
+                    assert_eq!(decoded.stdout.len(), coded_width as usize * coded_height as usize * 3);
                     let mut max_error = 0_u8;
                     // Include all four edges, so stale dimensions, pitch errors, and black strips fail.
                     for y in [2, height / 4, height * 3 / 4, height - 3] {
@@ -715,7 +722,7 @@ mod tests {
                             let expected = [40_u8, 100, 160, 220][
                                 usize::from(x >= width / 2) + 2 * usize::from(y >= height / 2)
                             ];
-                            let offset = (y as usize * width as usize + x as usize) * 3;
+                            let offset = (y as usize * coded_width as usize + x as usize) * 3;
                             for &channel in &decoded.stdout[offset..offset + 3] {
                                 max_error = max_error.max(channel.abs_diff(expected));
                             }
@@ -724,6 +731,7 @@ mod tests {
                     assert!(max_error <= 10, "decoded quadrants/edges differ by {max_error}");
                     results.push(serde_json::json!({
                         "codec": extension, "stage": stage, "recovery": tick == 2,
+                        "sourceWidth": width, "sourceHeight": height,
                         "stream": stream, "bytes": encoded.bytes.len(), "maxChannelError": max_error,
                     }));
                 }
@@ -1378,6 +1386,20 @@ impl EncodeWorker {
 
 impl Drop for EncodeWorker {
     fn drop(&mut self) { self.work.close(); }
+}
+
+#[cfg(test)]
+impl EncodeWorker {
+    pub(crate) fn without_thread() -> Self {
+        Self {
+            work: Arc::new(WorkQueue::new(1)),
+            admission: Arc::new(Mutex::new(CaptureAdmission::default())),
+        }
+    }
+
+    pub(crate) fn negotiated_codec(&self) -> Option<lwfa_proto::Codec> {
+        self.admission.lock().unwrap().codec
+    }
 }
 
 #[cfg(test)]
