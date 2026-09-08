@@ -264,3 +264,31 @@ dependency hashes. Its required GLIBC floor is 2.38. A private build library
 folder was supplied with `--lib32-dir`; this does not install those libraries
 or change the host environment. Steam/Protontricks must still provide the normal
 GE runtime dependencies when launching the tool.
+
+
+## SDK release build
+
+The distribution build uses the exact SDK named in GE-Proton11-6's
+[Makefile](https://github.com/GloriousEggroll/proton-ge-custom/blob/7e88cefffc122ea1584c2156b8d7bae6cf69b2a7/Makefile.in):
+`registry.gitlab.steamos.cloud/proton/steamrt4/sdk/x86_64:4.0.20260714.251823-0`,
+pinned to digest `sha256:6c1789cad862fd8ed9d46d71bbf8752bb7cb2336ab5e9680c0f0e3e7c88d77f1`.
+The clean SDK build completed for both architectures, with XInput2 and XRender,
+matching Unix export sets and GLIBC 2.38 requirements, equal to the original GE
+components. Its compiler is GCC 14.2.0 and its runtime is Steam Runtime 4.
+
+The first SDK attempt stopped at the source hash gate. Wine staging's `git apply`
+had silently skipped patches during earlier host preparation because the source
+was below lwfa's Git checkout. Isolating Git discovery makes host and container
+preparation agree. The corrected baseline includes upstream staging changes in
+font conversion, parent visibility, tablet support and Unix socket handling.
+The seven canvas patches are unchanged. A second host preparation and the SDK
+build both passed the corrected source hashes. Runtime tests must use this SDK
+payload before release; earlier host results alone do not validate it.
+
+`build-sdk.py` mounts the original GE runtime read-only and runs Docker as the
+invoking user. It records the immutable SDK image, compiler and configuration.
+`export-source.py` produces the prepared Wine tree and matching recipe, with
+normalized archive ownership/timestamps and a complete file hash index. The
+artifact records the source archive hash and the contents-index hash for release
+verification. The final release build must execute these recipes from the tagged
+tree, then validate and publish the installer and matching source archive.

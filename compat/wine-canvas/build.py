@@ -86,6 +86,7 @@ def main():
     parser.add_argument('--cache', type=Path, help='Optional directory containing pinned input archives')
     parser.add_argument('--jobs', type=int, default=4)
     parser.add_argument('--lib32-dir', type=Path, help='Optional private 32-bit development library directory')
+    parser.add_argument('--sdk-provenance', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--prepare-only', action='store_true', help='Verify source preparation without compiling')
     args = parser.parse_args()
     if sys.version_info < (3, 12):
@@ -126,6 +127,16 @@ def main():
     if args.prepare_only:
         print(f'Prepared source verified: {wine}')
         return
+    sdk = None
+    if args.sdk_provenance:
+        sdk = json.loads(args.sdk_provenance.read_text())
+        pinned = json.loads((HERE / 'sdk.json').read_text())
+        if any(sdk.get(key) != value for key, value in pinned.items()):
+            raise RuntimeError('SDK provenance does not match the pinned SDK')
+        if not Path('/.dockerenv').exists() or os.environ.get('LWFA_SDK_CONTAINER') != pinned['digest']:
+            raise RuntimeError('SDK artifacts must be compiled through build-sdk.py')
+        sdk['osRelease'] = Path('/etc/os-release').read_text()
+        sdk['compiler'] = subprocess.check_output(['cc', '--version'], text=True).splitlines()[0]
     products = {}
     configure_features = ['--with-xinput', '--with-xinput2', '--with-xrender']
     build64 = work / 'build64'
@@ -169,17 +180,23 @@ def main():
             'schemaVersion': 1,
             'base': manifest['base'],
             'patched': {'files': {relative: digest(product) for relative, product in products.items()}},
-            'build': {'kind': 'host', 'portable': False, 'architectures': ['x86_64', 'i386'],
+            'build': {'kind': 'steam-runtime-sdk' if sdk else 'host', 'portable': bool(sdk), 'architectures': ['x86_64', 'i386'],
                       'glibcFloor': glibc_floor(products.values()),
                       'sourceManifestSha256': digest(HERE / 'manifest.json'),
                       'requiredFeatures': {arch: ['xinput2', 'xrender'] for arch in ['x86_64', 'i386']}},
             'source': {'tag': source['tag'], 'geCommit': source['geCommit'],
                        'wineRevision': source['wineRevision'], 'stagingRevision': source['stagingRevision']},
         }
+        if sdk:
+            result['build']['sdk'] = sdk
+            original_floor = glibc_floor(base / relative for relative in products)
+            if tuple(map(int, result['build']['glibcFloor'].split('.'))) > tuple(map(int, original_floor.split('.'))):
+                raise RuntimeError('SDK payload requires newer GLIBC than the original GE components')
+            result['build']['baseGlibcFloor'] = original_floor
         (staging / 'manifest.json').write_text(json.dumps(result, indent=2) + '\n')
         recipe = staging / 'source-recipe'
         recipe.mkdir()
-        for name in ['manifest.json', 'build.py', 'prepare.sh', 'README.md']:
+        for name in ['manifest.json', 'build.py', 'build-sdk.py', 'export-source.py', 'sdk.json', 'prepare.sh', 'README.md']:
             shutil.copy2(HERE / name, recipe / name)
         shutil.copytree(HERE / 'patches', recipe / 'patches')
         shutil.copy2(wine / 'COPYING.LIB', staging / 'COPYING.Wine.LIB')
@@ -200,10 +217,11 @@ def main():
         (features / 'README.txt').write_text(
             'These files record detected optional libraries and configure arguments.\n'
             'Matching Unix export names does not establish feature parity with upstream GE.\n'
-            'This artifact was built on the current host, outside the Steam Runtime SDK.\n')
+            + ('This artifact was compiled in the pinned Steam Runtime SDK.\n' if sdk else
+             'This artifact was built on the current host, outside the Steam Runtime SDK.\n'))
         staging.rename(output)
     verify(base, manifest['base']['files'])
-    print(f'Built host-specific artifact: {output}\nNo installed runtime or Wine prefix was modified.')
+    print(f'Built {"SDK" if sdk else "host-specific"} artifact: {output}\nNo installed runtime or Wine prefix was modified.')
 
 
 if __name__ == '__main__':

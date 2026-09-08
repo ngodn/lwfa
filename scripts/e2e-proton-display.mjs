@@ -183,8 +183,14 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
       // Only this fresh prefix's server is addressed. Never use killall or a
       // wineserver command without the temporary WINEPREFIX.
       const cleanup = spawnSync(wineserver, ['-k'], { env, encoding: 'utf8', timeout: 5000 });
-      if (cleanup.error || cleanup.status !== 0) {
-        result.cleanupError = cleanup.error?.message || cleanup.stderr;
+      // Wine returns 1 when the server already exited after the last probe.
+      // Confirm the prefix has no remaining server before accepting that case.
+      const alreadyExited = !cleanup.error && cleanup.status === 1 && !cleanup.stderr.trim();
+      const waited = !cleanup.error && (cleanup.status === 0 || alreadyExited)
+        ? spawnSync(wineserver, ['-w'], { env, encoding: 'utf8', timeout: 5000 }) : null;
+      if (!waited || waited.error || waited.status !== 0) {
+        result.cleanupError = cleanup.error?.message || waited?.error?.message ||
+          cleanup.stderr || waited?.stderr || `wineserver cleanup exited ${cleanup.status}`;
         result.passed = false;
         process.exitCode = 1;
       }

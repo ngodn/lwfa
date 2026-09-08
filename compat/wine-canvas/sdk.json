@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "image": "registry.gitlab.steamos.cloud/proton/steamrt4/sdk/x86_64",
+  "tag": "4.0.20260714.251823-0",
+  "digest": "sha256:6c1789cad862fd8ed9d46d71bbf8752bb7cb2336ab5e9680c0f0e3e7c88d77f1",
+  "platform": "linux/amd64",
+  "upstream": "https://github.com/GloriousEggroll/proton-ge-custom/blob/7e88cefffc122ea1584c2156b8d7bae6cf69b2a7/Makefile.in"
+}

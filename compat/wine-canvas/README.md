@@ -57,11 +57,49 @@ The sanitized preparer records those exact paths and rejects any other failure.
 No rejected hunk affects the replacement components or server protocol. The
 prepared source hashes provide an additional check before our patches apply.
 
-This recipe builds for the current host. Its manifest says `kind: host` and
-`portable: false`; it is not a portable release binary. In particular, configure
-can detect a different optional-library feature set from GE's upstream build.
-A portable artifact needs a pinned Steam Runtime SDK build, matching dependency
-coverage and the same runtime tests before its metadata can say otherwise.
+The direct `build.py` recipe builds for the current host. Its manifest says
+`kind: host` and `portable: false`; that artifact is for local packaging.
+
+## Build for distribution
+
+Use the SDK wrapper for release artifacts:
+
+```sh
+python3 compat/wine-canvas/build-sdk.py \
+  --base "$HOME/.local/share/Steam/compatibilitytools.d/GE-Proton11-6-x86_64" \
+  --work target/wine-canvas-sdk-build \
+  --output target/wine-canvas-sdk-artifact
+```
+
+Docker downloads the exact Steam Runtime 4 SDK pinned by GE-Proton11-6. The
+immutable image digest is recorded in `sdk.json`; the initial compressed download
+is about 2.34 GB. This build uses the SDK's matching 32-bit and 64-bit development
+libraries, and does not install packages on the host. The original GE directory
+is mounted read-only, and build files are owned by the invoking user.
+
+Only a build executed inside that pinned SDK produces `kind: steam-runtime-sdk`
+and `portable: true`. The artifact records the image digest, image ID, SDK release,
+compiler version and configure inventories, and rejects a GLIBC requirement above
+the original GE components. It targets GE's Steam Runtime environment, not an
+arbitrary standalone Wine environment. Run the same rendering, input, mode and
+host-routing tests on the resulting payload before publishing it.
+
+Publish the matching prepared Wine source archive beside the installer:
+
+```sh
+python3 compat/wine-canvas/export-source.py \
+  --work target/wine-canvas-sdk-build \
+  --artifact target/wine-canvas-sdk-artifact \
+  --output releases/lwfa-1.5.5-wine-source.tar.gz
+```
+
+The archive includes the prepared source, recipe, patches and license. Its file
+index hashes every regular file and records symlinks; `source-archive.json` in
+the artifact records both the archive hash and that index hash.
+
+Staging's Git patch application is isolated from the surrounding checkout. Without
+that isolation, building below another Git repository can silently skip staging
+patches. Prepared source hashes catch the difference before compilation.
 
 ## Package and register
 

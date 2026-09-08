@@ -64,7 +64,7 @@
       "dlls/win32u/dibdrv/primitives.c": "68528dac692d2aeccde99cc364dcd886a0334305b4c0c251e4963dfb244e650b",
       "dlls/win32u/driver.c": "7a55307ca277052ee843ba327f1c4708e39dcffca69fcddb10a5952e1b0d2fab",
       "dlls/win32u/emfdrv.c": "38ba81bfac2c2590c764250abb03b3543bfa5846054ca83ec3444a45a8cdeef9",
-      "dlls/win32u/font.c": "03a2096d1e70cd7d10b8b8d2bf44751b69a57eb3fe184fb171ae686afa5034ec",
+      "dlls/win32u/font.c": "773b2ee6f93a5c8a93e02eb74fb90b432e728f2d375b5490dc190654da4cb54e",
       "dlls/win32u/freetype.c": "5f335aba5efbf8dfa0b4045d6503d09119d5de4445a7da0cfa1b00344f8deb7a",
       "dlls/win32u/fsr_spv.h": "0824470b38a47478fbacaec760a6c4ba660b8802398e50bf06bb6fe8331564b0",
       "dlls/win32u/gdiobj.c": "5a31ef52122ada4a235eccdffa6fb88e658867f842fe9c2b1aefcb784483ed15",
@@ -101,7 +101,7 @@
       "dlls/win32u/win32syscalls.h": "a9fca9eac9a2ab9d00ed58e29a506c2d6e8258119614b7ef26f9f176b2d1314c",
       "dlls/win32u/win32u.spec": "65027260bc7a637fa0d62ebf152609c48133871ea33a99cdbf1ae063e8e90696",
       "dlls/win32u/win32u_private.h": "49eec513930bc2c9aa4f42d56e01988a9c30bd1ac55652de7d61cf0c30f6f435",
-      "dlls/win32u/window.c": "c362cb9fec3df89cb955d9f9855c68db5ac40d2205e692677aeb2d1ef5170b45",
+      "dlls/win32u/window.c": "a17e2d9ff01fade98357c10da5d29943cf1314b122e4b5d626af1e67ee0b7646",
       "dlls/win32u/winstation.c": "1ccb289f77ead38f386a51353dab4d243013ed0ece9c2c3c94bdd8e0b5774f0f",
       "dlls/winex11.drv/Makefile.in": "8f563a6b31cd2c5f95c972d0908a2e277fec3117c7b41a2e1782deb7a7bcbe68",
       "dlls/winex11.drv/bitblt.c": "aaabb474f68858ff0a94b4dda40344796f875771c29dbef06e18f40d3ba0558a",
@@ -121,7 +121,7 @@
       "dlls/winex11.drv/pen.c": "1af122cdb16fb700446b9c525b9d622d076d391106f910dc353b50a739aa8f13",
       "dlls/winex11.drv/vulkan.c": "0d956bf7578169510ce8cb7bcee8dae00c877cbc069583ce5d8b74b901f0b002",
       "dlls/winex11.drv/window.c": "5dff4c6a057dbeb510c1e8aa025881010514e225de7c2d673a70b82533bcb046",
-      "dlls/winex11.drv/wintab.c": "5ab71d33c1057456a7eab8f8907d3d51a2e161fe35eadc1fa7036a3cdb1699e1",
+      "dlls/winex11.drv/wintab.c": "af79b9fd7f870320f11493ba5c06ea956f26aec5cd855931c5a74a10fe401ab5",
       "dlls/winex11.drv/x11drv.h": "8fddd8816aacfd48230e0afa8d22c98aeb58cf3e237335ae57c861479b7ec397",
       "dlls/winex11.drv/x11drv_main.c": "58f1197afa956cff1bffd653c6faf4895dad913c8625ae2be347eab07654742e",
       "dlls/winex11.drv/xcomposite.h": "f29e50bd76f106f2f2501df843938e65b50486057dcfc60e47318ee535432ce9",
@@ -148,7 +148,7 @@
       "server/device.c": "2cd45e3f5645bd0491344b039b2c37dc77fbc240438818aaa00cccf503bba35a",
       "server/directory.c": "232a24038a205127a968d55c47ee3b5dcb25c0acb275a7352a8a124a6128538a",
       "server/event.c": "59c838a9308d152c638c335a5ba6fc66e466f8f465030ef7ea6e462d91a45033",
-      "server/fd.c": "82fea4125613c673019d25aa46b5d00c1d4a327f96d33868a51490a531dfab07",
+      "server/fd.c": "493abffea56a66522a5aa840ed4c8e1ddd398b8362c3d23a6502c10c675451b3",
       "server/file.c": "a88738c2a980103d2728e7df152c023675d13fe444dd7a1b4413143ff7df586a",
       "server/file.h": "e03b8cf494b7a5d5031e00374441cdb32614a0b02d567a458f4fccf52e26e6d7",
       "server/fsync.c": "ed0d5bd4a937d5a236efc8a469670c12672a3999d045e3bcd21a8fbd255f790b",
@@ -181,7 +181,7 @@
       "server/semaphore.c": "7042deaa72e3e36de71b6bcabb12fcc4b62b5893e52bf921259023818135eb45",
       "server/serial.c": "4a298e4d66c1ebab1e12004ab5c9fdeb654be46f7f982aa583be8e4c765686c6",
       "server/signal.c": "9b3d24f12ddc3a2db86debd0fe52eb9f27246ccfe510e42bd82b965a8ce76829",
-      "server/sock.c": "d7e1fa59a6e2fc181cb3970deaf656ee0643dfd675b0a32b452899189522c7aa",
+      "server/sock.c": "cca829e3624afe56d928fc3ad0ea909e617b9f27e1cd6f1316f199f6988ea8a3",
       "server/symlink.c": "d4c7435314f4c9054fb7cf1266ed77fb32cc44a7f719c3674b251562eed5dd20",
       "server/thread.c": "79b1305cf10c4e824c49cb7feafc75b96b8480392b8db089f8968b106cf7086f",
       "server/thread.h": "0ce960e2c2be51328e72f1c72d9c287074ed94e9138469da488414fa3ac77cdf",
@@ -224,5 +224,5 @@
     "patches/06-server-winstation.patch": "e567919d3e501d421ed934bc53bee3aea7e6e6b105edb93c6c6c20351a10de87",
     "patches/07-win32u-input.patch": "9dcf005c2ea63a02967f0b9086f6bb77f705b27571752be8ea9114c3d6612d78"
   },
-  "preparerSha256": "818ea0d2d089b1120eefdf0b6e3ee88ef0a1ae5c0732f56798743cb45447b0e8"
+  "preparerSha256": "ac4aa8d7d66e9220cf20e66910cce8aa97380a912ca839f8475593eb44571ce7"
 }

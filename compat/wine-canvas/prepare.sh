@@ -2,6 +2,10 @@
 set -euo pipefail
 source_root=$(realpath "${1:?Usage: prepare.sh GE_SOURCE_ROOT CONFIGURE_REMOVAL_PATCH}")
 configure_patch=$(realpath "${2:?Configure restoration patch required}")
+# Staging uses git apply. Do not let an enclosing checkout make Git skip
+# source paths relative to a different repository root.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+export GIT_CEILING_DIRECTORIES="$source_root"
 cd "$source_root"
 record="$source_root/patch-rejects.tsv"
 : > "$record"
