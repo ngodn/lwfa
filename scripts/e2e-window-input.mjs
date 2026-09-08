@@ -25,7 +25,7 @@ window.paint=async function(width,height) {
 };
 createRoot(document.getElementById('root')).render(React.createElement(WindowSurface,{
  id:1,rect:{x:0,y:0,width:1000,height:500},z:0,filling:false,focused:true,
- label:'Scaling target',streamed:true,blank:false,onFocus:()=>{},onInput:(id,event)=>sent.push(event)
+ label:'Window input target',streamed:true,blank:false,onFocus:()=>{},onInput:(id,event)=>sent.push(event)
 }));
 `
 const server = await createServer({
@@ -35,13 +35,13 @@ const server = await createServer({
   oxc: { jsx: { runtime: "automatic" } },
   server: { host: "127.0.0.1", port: 0, hmr: false },
   plugins: [tailwindcss(), {
-    name: "scaling-input-test",
-    resolveId(id) { if (id === "/__scaling.js") return id },
-    load(id) { if (id === "/__scaling.js") return entry },
+    name: "window-input-test",
+    resolveId(id) { if (id === "/__window-input.js") return id },
+    load(id) { if (id === "/__window-input.js") return entry },
     configureServer(server) { server.middlewares.use((req, res, next) => {
-      if (req.url !== "/__scaling") return next()
+      if (req.url !== "/__window-input") return next()
       res.setHeader("Content-Type", "text/html")
-      res.end('<!doctype html><div id="root"></div><script type="module" src="/__scaling.js"></script>')
+      res.end('<!doctype html><div id="root"></div><script type="module" src="/__window-input.js"></script>')
     }) },
   }],
 })
@@ -55,30 +55,50 @@ try {
     const errors = []
     page.on("pageerror", error => errors.push(error.message))
     await page.addInitScript(() => { window.WebSocket = class { constructor() { throw new Error("Input fixture must not connect to an engine") } } })
-    await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__scaling`)
-    const surface = page.getByLabel("Scaling target", { exact: true })
+    await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__window-input`)
+    const surface = page.getByLabel("Window input target", { exact: true })
     await surface.waitFor()
-    for (const scale of [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]) {
-      await page.evaluate(async scale => { await paint(1000 * scale, 500 * scale) }, scale)
-      await page.waitForFunction(scale => document.querySelector('canvas')?.width === 1000 * scale, scale)
+    // Different frame sizes can arrive during a resize or from HiDPI clients.
+    for (const [width, height] of [[1000, 500], [2000, 1000], [1324, 970], [2560, 1440]]) {
+      await page.evaluate(async ({ width, height }) => { await paint(width, height) }, { width, height })
+      await page.waitForFunction(({ width, height }) => {
+        const canvas = document.querySelector('canvas')
+        return canvas?.width === width && canvas?.height === height
+      }, { width, height })
+      assert.equal(await surface.locator('canvas').evaluate(canvas => getComputedStyle(canvas).objectFit), 'fill')
       const box = await surface.boundingBox()
       assert.equal(box.width, 1000)
       assert.equal(box.height, 500)
-      for (const [x, y] of [[0.1, 0.1], [0.5, 0.5], [0.9, 0.9]]) {
+      // Sample the browser's composed pixels, not just the backing canvas.
+      // A contained old-aspect frame would leave dark margins at these points.
+      const screenshot = await surface.screenshot()
+      const corners = await page.evaluate(async encoded => {
+        const blob = await (await fetch('data:image/png;base64,' + encoded)).blob()
+        const bitmap = await createImageBitmap(blob)
+        const canvas = document.createElement('canvas')
+        canvas.width = bitmap.width; canvas.height = bitmap.height
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(bitmap, 0, 0)
+        bitmap.close()
+        return [[0.01, 0.01], [0.99, 0.01], [0.01, 0.99], [0.99, 0.99]].map(([x, y]) =>
+          Array.from(ctx.getImageData(Math.floor(canvas.width * x), Math.floor(canvas.height * y), 1, 1).data))
+      }, screenshot.toString('base64'))
+      for (const pixel of corners) assert(pixel.slice(0, 3).every(value => value >= 240), `canvas margin at ${width}x${height} DPR${dpr}: ${pixel}`)
+      for (const [x, y] of [[0.01, 0.01], [0.5, 0.5], [0.99, 0.99]]) {
         await page.evaluate(() => sent.length = 0)
         await page.mouse.click(box.x + box.width * x, box.y + box.height * y)
         const point = await page.evaluate(() => sent.find(event => event.kind === 'motion'))
-        assert(Math.abs(point.x - x) < 0.001 && Math.abs(point.y - y) < 0.001, `pointer at ${scale}x DPR${dpr}`)
+        assert(Math.abs(point.x - x) < 0.001 && Math.abs(point.y - y) < 0.001, `pointer at ${width}x${height} DPR${dpr}`)
         await page.evaluate(() => sent.length = 0)
         await page.touchscreen.tap(box.x + box.width * x, box.y + box.height * y)
         const touch = await page.evaluate(() => sent.find(event => event.kind === 'touchDown'))
-        assert(Math.abs(touch.x - x) < 0.001 && Math.abs(touch.y - y) < 0.001, `touch at ${scale}x DPR${dpr}`)
+        assert(Math.abs(touch.x - x) < 0.001 && Math.abs(touch.y - y) < 0.001, `touch at ${width}x${height} DPR${dpr}`)
       }
     }
     assert.deepEqual(errors, [])
     await context.close()
   }
-  console.log("PASS: pointer/touch alignment and 1000x500 CSS layout at all seven frame scales on DPR1 and DPR2")
+  console.log("PASS: full 1000x500 canvas and pointer/touch alignment across four frame sizes on DPR1 and DPR2")
 } finally {
   await browser?.close()
   await server.close()

@@ -1,0 +1,6518 @@
+{
+  "date": "2026-09-09",
+  "runtime": "GE-Proton11-6-lwfa-candidate-v3",
+  "artifactManifestSha256": "225211353f3d2356720988969d803b53972ad99d3507e3bbf174c800bf965794",
+  "artifactBuild": {
+    "kind": "host",
+    "portable": false,
+    "architectures": [
+      "x86_64",
+      "i386"
+    ],
+    "glibcFloor": "2.38",
+    "sourceManifestSha256": "1a2afd04777e5e041649cc95eac36099420ef512f11e2a7e8ec9d3f9a8d917ba",
+    "requiredFeatures": {
+      "x86_64": [
+        "xinput2",
+        "xrender"
+      ],
+      "i386": [
+        "xinput2",
+        "xrender"
+      ]
+    }
+  },
+  "tests": {
+    "responsive64-1": {
+      "evidence": "target/canvas-baseline/ge11-6-v3-responsive-1/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 23,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 23,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1490,
+            "height": 910,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 23,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 838,
+            "height": 1324,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 23,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 640,
+            "height": 480,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 23,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 23,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "responsive64-2": {
+      "evidence": "target/canvas-baseline/ge11-6-v3-responsive-2/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 24,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 24,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1490,
+            "height": 910,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 24,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 838,
+            "height": 1324,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 24,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 640,
+            "height": 480,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 24,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 24,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "responsive64-3": {
+      "evidence": "target/canvas-baseline/ge11-6-v3-responsive-3/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 25,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 25,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1490,
+            "height": 910,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 25,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 838,
+            "height": 1324,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 25,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 640,
+            "height": 480,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 25,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 25,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "responsive64-4": {
+      "evidence": "target/canvas-baseline/ge11-6-v3-responsive-4/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 26,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 26,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1490,
+            "height": 910,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 26,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 838,
+            "height": 1324,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 26,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 640,
+            "height": 480,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 26,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 26,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "responsive64-5": {
+      "evidence": "target/canvas-baseline/ge11-6-v3-responsive-5/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 27,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 27,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1490,
+            "height": 910,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 27,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 838,
+            "height": 1324,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 27,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 640,
+            "height": 480,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 27,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 27,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "retained64": {
+      "evidence": "target/canvas-baseline/ge11-6-v3-retained/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 28,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 28,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 28,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 28,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 28,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 28,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "lower64": {
+      "evidence": "target/canvas-baseline/ge11-6-v3-lower/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1280,
+            "clientHeight": 720,
+            "left": 0,
+            "top": 0,
+            "width": 1280,
+            "height": 720,
+            "monitorWidth": 1280,
+            "monitorHeight": 720
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1280,
+            "bottom": 720
+          },
+          "frame": {
+            "window": 29,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1280,
+            "height": 720,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 46.625,
+            "width": 1324,
+            "height": 744.75
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1254,
+            "y": 705
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": false
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1280,
+            "clientHeight": 720,
+            "left": 0,
+            "top": 0,
+            "width": 1280,
+            "height": 720,
+            "monitorWidth": 1280,
+            "monitorHeight": 720
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1280,
+            "bottom": 720
+          },
+          "frame": {
+            "window": 29,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1280,
+            "height": 720,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 35.9375,
+            "width": 1490,
+            "height": 838.125
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1254,
+            "y": 705
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": false
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1280,
+            "clientHeight": 720,
+            "left": 0,
+            "top": 0,
+            "width": 1280,
+            "height": 720,
+            "monitorWidth": 1280,
+            "monitorHeight": 720
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1280,
+            "bottom": 720
+          },
+          "frame": {
+            "window": 29,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1280,
+            "height": 720,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 426.3125,
+            "width": 838,
+            "height": 471.375
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1254,
+            "y": 705
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": false
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1280,
+            "clientHeight": 720,
+            "left": 0,
+            "top": 0,
+            "width": 1280,
+            "height": 720,
+            "monitorWidth": 1280,
+            "monitorHeight": 720
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1280,
+            "bottom": 720
+          },
+          "frame": {
+            "window": 29,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1280,
+            "height": 720,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 60,
+            "width": 640,
+            "height": 360
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1254,
+            "y": 704
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": false
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1280,
+            "clientHeight": 720,
+            "left": 0,
+            "top": 0,
+            "width": 1280,
+            "height": 720,
+            "monitorWidth": 1280,
+            "monitorHeight": 720
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1280,
+            "bottom": 720
+          },
+          "frame": {
+            "window": 29,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1280,
+            "height": 720,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 46.625,
+            "width": 1324,
+            "height": 744.75
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1254,
+            "y": 705
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": false
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 29,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "gdi32": {
+      "evidence": "target/proton-final-gdi32/gpu-modes/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 1,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 1,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 1,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "responsive32": {
+      "evidence": "target/proton-final-dxvk32-responsive/gpu-modes/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 1,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1490,
+            "height": 910,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 1,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 838,
+            "height": 1324,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 1,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 640,
+            "height": 480,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "retained32": {
+      "evidence": "target/proton-final-dxvk32-retained/gpu-modes/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 1,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 1,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 1,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 1,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    },
+    "registeredArtifact64": {
+      "evidence": "target/router-real-integration/run-vfllwgud/matrix/results.json",
+      "passed": true,
+      "phases": [
+        {
+          "phase": "browser-layout",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 3,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1490x910",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1490,
+            "clientHeight": 910,
+            "left": 0,
+            "top": 0,
+            "width": 1490,
+            "height": 910,
+            "monitorWidth": 1490,
+            "monitorHeight": 910
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1490,
+            "bottom": 910
+          },
+          "frame": {
+            "window": 3,
+            "width": 1490,
+            "height": 910,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1490,
+            "height": 910,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1490,
+            "height": 910
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1460,
+            "y": 891
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-838x1324",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 838,
+            "clientHeight": 1324,
+            "left": 0,
+            "top": 0,
+            "width": 838,
+            "height": 1324,
+            "monitorWidth": 838,
+            "monitorHeight": 1324
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 838,
+            "bottom": 1324
+          },
+          "frame": {
+            "window": 3,
+            "width": 838,
+            "height": 1324,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 838,
+            "height": 1324,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 838,
+            "height": 1324
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 821,
+            "y": 1297
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-640x480",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 640,
+            "clientHeight": 480,
+            "left": 0,
+            "top": 0,
+            "width": 640,
+            "height": 480,
+            "monitorWidth": 640,
+            "monitorHeight": 480
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 640,
+            "bottom": 480
+          },
+          "frame": {
+            "window": 3,
+            "width": 640,
+            "height": 480,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 640,
+            "height": 480,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 627,
+            "y": 470
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "browser-resize-1324x838",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 3,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": true
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        },
+        {
+          "phase": "windowed-restored",
+          "win32": {
+            "reason": "timer",
+            "clientWidth": 1324,
+            "clientHeight": 838,
+            "left": 0,
+            "top": 0,
+            "width": 1324,
+            "height": 838,
+            "monitorWidth": 1324,
+            "monitorHeight": 838
+          },
+          "desktop": {
+            "left": 0,
+            "top": 0,
+            "right": 1324,
+            "bottom": 838
+          },
+          "frame": {
+            "window": 3,
+            "width": 1324,
+            "height": 838,
+            "format": 0,
+            "keyframe": true
+          },
+          "swapchain": {
+            "width": 1324,
+            "height": 838,
+            "fullscreen": false
+          },
+          "renderedArea": {
+            "x": 0,
+            "y": 0,
+            "width": 1324,
+            "height": 838
+          },
+          "corners": [
+            [
+              253,
+              0,
+              0
+            ],
+            [
+              0,
+              255,
+              1
+            ],
+            [
+              0,
+              0,
+              254
+            ],
+            [
+              254,
+              254,
+              0
+            ]
+          ],
+          "mouse": {
+            "x": 1297,
+            "y": 821
+          },
+          "allCornersVisible": true,
+          "inputReachesBottomRight": true,
+          "virtualMonitorFollowsPhysical": true
+        }
+      ]
+    }
+  },
+  "modeAndClip": {
+    "evidence": "target/proton-final-mode-clip-v3/gpu-modes/results.json",
+    "passed": true,
+    "scenarios": [
+      {
+        "name": "explicit-mode",
+        "steps": [
+          {
+            "phase": "initial",
+            "native": [
+              1324,
+              838
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 1,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1324,
+                  838
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1324,
+                    838
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 2,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1324,
+                  838
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1324,
+                    838
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "phase": "request-1280x720",
+            "record": {
+              "serial": 3,
+              "pid": 364,
+              "changeResult": 0,
+              "monitor": [
+                1280,
+                720
+              ],
+              "modes": [
+                {
+                  "ok": true,
+                  "size": [
+                    1280,
+                    720
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": true,
+                  "size": [
+                    1324,
+                    838
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": false,
+                  "size": [
+                    0,
+                    0
+                  ],
+                  "hz": 0
+                }
+              ],
+              "dpi": [
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                }
+              ],
+              "clip": {
+                "ok": true,
+                "rect": [
+                  0,
+                  0,
+                  1280,
+                  720
+                ]
+              }
+            }
+          },
+          {
+            "phase": "explicit-before-convergence",
+            "native": [
+              1324,
+              838
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 4,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1280,
+                    720
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 5,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1280,
+                    720
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "phase": "host-converges-to-explicit",
+            "native": [
+              1280,
+              720
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 6,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1280,
+                    720
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 7,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1280,
+                    720
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "phase": "host-leaves-explicit",
+            "native": [
+              1490,
+              910
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 8,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1490,
+                      910
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1280,
+                    720
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 9,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1490,
+                      910
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1280,
+                    720
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "phase": "reset-to-native",
+            "record": {
+              "serial": 10,
+              "pid": 364,
+              "changeResult": 0,
+              "monitor": [
+                1490,
+                910
+              ],
+              "modes": [
+                {
+                  "ok": true,
+                  "size": [
+                    1490,
+                    910
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": true,
+                  "size": [
+                    1490,
+                    910
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": false,
+                  "size": [
+                    0,
+                    0
+                  ],
+                  "hz": 0
+                }
+              ],
+              "dpi": [
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                }
+              ],
+              "clip": {
+                "ok": true,
+                "rect": [
+                  0,
+                  0,
+                  1490,
+                  910
+                ]
+              }
+            }
+          },
+          {
+            "phase": "observer-after-reset",
+            "native": [
+              1490,
+              910
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 11,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1490,
+                  910
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1490,
+                      910
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1490,
+                      910
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1490,
+                    910
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 12,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1490,
+                  910
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1490,
+                      910
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1490,
+                      910
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1490,
+                    910
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "passed": true
+      },
+      {
+        "name": "native-follow",
+        "steps": [
+          {
+            "phase": "initial",
+            "native": [
+              1324,
+              838
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 13,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1324,
+                  838
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1324,
+                    838
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 14,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1324,
+                  838
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1324,
+                    838
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "phase": "portrait",
+            "native": [
+              838,
+              1324
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 15,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  838,
+                  1324
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      838,
+                      1324
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      838,
+                      1324
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    838,
+                    1324
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 16,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  838,
+                  1324
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      838,
+                      1324
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      838,
+                      1324
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    838,
+                    1324
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "passed": true
+      },
+      {
+        "name": "custom-clip",
+        "steps": [
+          {
+            "phase": "initial",
+            "native": [
+              1324,
+              838
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 17,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1324,
+                  838
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1324,
+                    838
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 18,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1324,
+                  838
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1324,
+                    838
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "phase": "explicit-before-clip",
+            "record": {
+              "serial": 19,
+              "pid": 364,
+              "changeResult": 0,
+              "monitor": [
+                1280,
+                720
+              ],
+              "modes": [
+                {
+                  "ok": true,
+                  "size": [
+                    1280,
+                    720
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": true,
+                  "size": [
+                    1324,
+                    838
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": false,
+                  "size": [
+                    0,
+                    0
+                  ],
+                  "hz": 0
+                }
+              ],
+              "dpi": [
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                }
+              ],
+              "clip": {
+                "ok": true,
+                "rect": [
+                  0,
+                  0,
+                  1280,
+                  720
+                ]
+              }
+            }
+          },
+          {
+            "phase": "set-custom-clip",
+            "record": {
+              "serial": 20,
+              "pid": 364,
+              "changeResult": 0,
+              "monitor": [
+                1280,
+                720
+              ],
+              "modes": [
+                {
+                  "ok": true,
+                  "size": [
+                    1280,
+                    720
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": true,
+                  "size": [
+                    1324,
+                    838
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": false,
+                  "size": [
+                    0,
+                    0
+                  ],
+                  "hz": 0
+                }
+              ],
+              "dpi": [
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                }
+              ],
+              "clip": {
+                "ok": true,
+                "rect": [
+                  100,
+                  80,
+                  900,
+                  600
+                ]
+              }
+            }
+          },
+          {
+            "phase": "custom-clip-initial",
+            "native": [
+              1324,
+              838
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 21,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    100,
+                    80,
+                    900,
+                    600
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 22,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1324,
+                      838
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    100,
+                    80,
+                    900,
+                    600
+                  ]
+                }
+              }
+            ],
+            "expectedClip": [
+              100,
+              80,
+              900,
+              600
+            ],
+            "roundingTolerance": 1
+          },
+          {
+            "phase": "custom-clip-growth",
+            "native": [
+              1490,
+              910
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 23,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1490,
+                      910
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    100,
+                    80,
+                    900,
+                    600
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 24,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      1490,
+                      910
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    100,
+                    80,
+                    900,
+                    600
+                  ]
+                }
+              }
+            ],
+            "expectedClip": [
+              100,
+              80,
+              900,
+              600
+            ],
+            "roundingTolerance": 1
+          },
+          {
+            "phase": "custom-clip-portrait",
+            "native": [
+              838,
+              1324
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 25,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      838,
+                      1324
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    99,
+                    80,
+                    900,
+                    600
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 26,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      838,
+                      1324
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    99,
+                    80,
+                    900,
+                    600
+                  ]
+                }
+              }
+            ],
+            "expectedClip": [
+              100,
+              80,
+              900,
+              600
+            ],
+            "roundingTolerance": 1
+          },
+          {
+            "phase": "release-clip",
+            "record": {
+              "serial": 27,
+              "pid": 364,
+              "changeResult": 0,
+              "monitor": [
+                1280,
+                720
+              ],
+              "modes": [
+                {
+                  "ok": true,
+                  "size": [
+                    1280,
+                    720
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": true,
+                  "size": [
+                    838,
+                    1324
+                  ],
+                  "hz": 60
+                },
+                {
+                  "ok": false,
+                  "size": [
+                    0,
+                    0
+                  ],
+                  "hz": 0
+                }
+              ],
+              "dpi": [
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                },
+                {
+                  "result": 0,
+                  "x": 96,
+                  "y": 96
+                }
+              ],
+              "clip": {
+                "ok": true,
+                "rect": [
+                  0,
+                  0,
+                  1280,
+                  720
+                ]
+              }
+            }
+          },
+          {
+            "phase": "released-to-full",
+            "native": [
+              838,
+              1324
+            ],
+            "processes": [
+              {
+                "name": "controller",
+                "serial": 28,
+                "pid": 364,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      838,
+                      1324
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1280,
+                    720
+                  ]
+                }
+              },
+              {
+                "name": "observer",
+                "serial": 29,
+                "pid": 380,
+                "changeResult": 0,
+                "monitor": [
+                  1280,
+                  720
+                ],
+                "modes": [
+                  {
+                    "ok": true,
+                    "size": [
+                      1280,
+                      720
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": true,
+                    "size": [
+                      838,
+                      1324
+                    ],
+                    "hz": 60
+                  },
+                  {
+                    "ok": false,
+                    "size": [
+                      0,
+                      0
+                    ],
+                    "hz": 0
+                  }
+                ],
+                "dpi": [
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  },
+                  {
+                    "result": 0,
+                    "x": 96,
+                    "y": 96
+                  }
+                ],
+                "clip": {
+                  "ok": true,
+                  "rect": [
+                    0,
+                    0,
+                    1280,
+                    720
+                  ]
+                }
+              }
+            ],
+            "expectedClip": [
+              0,
+              0,
+              1280,
+              720
+            ],
+            "roundingTolerance": 1
+          }
+        ],
+        "passed": true,
+        "clipFailures": []
+      }
+    ],
+    "failures": []
+  },
+  "routing": {
+    "passed": true,
+    "architecture": "x86_64",
+    "canvasIntentAbsentFromDisk": true,
+    "originalBaseHashesUnchanged": true,
+    "evidence": "target/router-real-integration/run-vfllwgud/results.json"
+  },
+  "dpi": [
+    {
+      "name": "window-growth",
+      "before": {
+        "width": 1319,
+        "height": 839
+      },
+      "after": {
+        "width": 1319,
+        "height": 839
+      },
+      "assertion": false,
+      "completed": true,
+      "expectedMonitorChange": false,
+      "geometryBefore": {
+        "x": 0,
+        "y": 0,
+        "width": 1000,
+        "height": 600
+      },
+      "geometryAfter": {
+        "x": 0,
+        "y": 0,
+        "width": 1324,
+        "height": 600
+      },
+      "passed": true
+    },
+    {
+      "name": "browser-resize",
+      "before": {
+        "width": 1319,
+        "height": 839
+      },
+      "after": {
+        "width": 1324,
+        "height": 838
+      },
+      "assertion": false,
+      "completed": true,
+      "expectedMonitorChange": true,
+      "geometryBefore": {
+        "x": 0,
+        "y": 0,
+        "width": 1000,
+        "height": 600
+      },
+      "geometryAfter": {
+        "x": 0,
+        "y": 0,
+        "width": 1000,
+        "height": 600
+      },
+      "passed": true
+    }
+  ]
+}

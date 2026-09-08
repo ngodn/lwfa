@@ -1,0 +1,86 @@
+--- a/server/winstation.c
++++ b/server/winstation.c
+@@ -646,12 +646,54 @@
+ }
+ 
+ 
++/* Preserve a custom virtual clipping interval when the physical monitor changes. */
++static int canvas_map_clip_edge( int value, double old_raw_center, double old_virtual_center,
++                                 double old_scale, double new_raw_center, double new_virtual_center,
++                                 double new_scale )
++{
++    double virtual = (value - old_raw_center) / old_scale + old_virtual_center;
++    double raw = (virtual - new_virtual_center) * new_scale + new_raw_center;
++    return raw < 0 ? raw - 0.5 : raw + 0.5;
++}
++
++static void canvas_update_clip( struct desktop *desktop, const struct monitor_info *old,
++                                const struct monitor_info *new )
++{
++    struct rectangle clip = desktop->shared->cursor.clip;
++    unsigned int flags = desktop->clip_flags;
++    int ow = old->raw.right - old->raw.left, oh = old->raw.bottom - old->raw.top;
++    int ovw = old->virt.right - old->virt.left, ovh = old->virt.bottom - old->virt.top;
++    int nw = new->raw.right - new->raw.left, nh = new->raw.bottom - new->raw.top;
++    int nvw = new->virt.right - new->virt.left, nvh = new->virt.bottom - new->virt.top;
++    double old_scale, new_scale;
++
++    if (ow <= 0 || oh <= 0 || ovw <= 0 || ovh <= 0 || nw <= 0 || nh <= 0 || nvw <= 0 || nvh <= 0) return;
++    old_scale = (double)ow / ovw < (double)oh / ovh ? (double)ow / ovw : (double)oh / ovh;
++    new_scale = (double)nw / nvw < (double)nh / nvh ? (double)nw / nvw : (double)nh / nvh;
++    if (flags & (SET_CURSOR_NOCLIP | SET_CURSOR_FSCLIP)) clip = new->raw;
++    else
++    {
++        clip.left = canvas_map_clip_edge( clip.left, old->raw.left + ow / 2.0, old->virt.left + ovw / 2.0,
++                                         old_scale, new->raw.left + nw / 2.0, new->virt.left + nvw / 2.0, new_scale );
++        clip.right = canvas_map_clip_edge( clip.right, old->raw.left + ow / 2.0, old->virt.left + ovw / 2.0,
++                                          old_scale, new->raw.left + nw / 2.0, new->virt.left + nvw / 2.0, new_scale );
++        clip.top = canvas_map_clip_edge( clip.top, old->raw.top + oh / 2.0, old->virt.top + ovh / 2.0,
++                                        old_scale, new->raw.top + nh / 2.0, new->virt.top + nvh / 2.0, new_scale );
++        clip.bottom = canvas_map_clip_edge( clip.bottom, old->raw.top + oh / 2.0, old->virt.top + ovh / 2.0,
++                                           old_scale, new->raw.top + nh / 2.0, new->virt.top + nvh / 2.0, new_scale );
++    }
++    set_clip_rectangle( desktop, &clip, flags, 0 );
++}
++
+ /* set the process current window station monitors */
+ DECL_HANDLER(set_winstation_monitors)
+ {
+     struct winstation *winstation;
+     struct desktop *desktop;
+     unsigned int size = get_req_data_size();
++    const char *canvas_follow = getenv( "WINE_CANVAS_FOLLOW_HOST" );
++    struct monitor_info previous;
++    int update_clip = 0;
+ 
+     if (!(winstation = (struct winstation *)get_handle_obj( current->process, current->process->winstation,
+                                                            0, &winstation_ops )))
+@@ -661,6 +703,14 @@
+         !winstation->monitors || memcmp( winstation->monitors, get_req_data(), size ))
+         winstation->monitor_serial++;
+ 
++    if (canvas_follow && !strcmp( canvas_follow, "1" ) && winstation->monitor_count == 1 &&
++        size == sizeof(previous) && !(winstation->monitors[0].flags & MONITOR_FLAG_INACTIVE))
++    {
++        previous = winstation->monitors[0];
++        update_clip = memcmp( &previous.raw, &((const struct monitor_info *)get_req_data())->raw,
++                              sizeof(previous.raw) ) != 0;
++    }
++
+     free( winstation->monitors );
+     winstation->monitors = NULL;
+     winstation->monitor_count = 0;
+@@ -677,6 +727,13 @@
+     if (size && (winstation->monitors = memdup( get_req_data(), size )))
+         winstation->monitor_count = size / sizeof(*winstation->monitors);
+ 
++    if (update_clip && winstation->monitor_count == 1 &&
++        !(winstation->monitors[0].flags & MONITOR_FLAG_INACTIVE))
++    {
++        LIST_FOR_EACH_ENTRY( desktop, &winstation->desktops, struct desktop, entry )
++            canvas_update_clip( desktop, &previous, &winstation->monitors[0] );
++    }
++
+     reply->serial = winstation->monitor_serial;
+     release_object( winstation );
+ }

@@ -16,6 +16,7 @@ static ID3D11DeviceContext *context;
 static ID3D11DeviceContext1 *context1;
 static ID3D11RenderTargetView *target;
 static UINT render_width, render_height;
+static int responsive;
 
 static int gpu_start(HWND window, UINT width, UINT height) {
     DXGI_SWAP_CHAIN_DESC desc = {0};
@@ -59,9 +60,9 @@ static void gpu_paint(void) {
     if (FAILED(hr)) printf("GPU_ERROR present=%lx\n", (unsigned long)hr);
 }
 
-static void gpu_resize_windowed(HWND window) {
+static void gpu_resize(HWND window) {
     BOOL fullscreen = TRUE;
-    if (!swapchain || FAILED(IDXGISwapChain_GetFullscreenState(swapchain, &fullscreen, NULL)) || fullscreen) return;
+    if (!swapchain || FAILED(IDXGISwapChain_GetFullscreenState(swapchain, &fullscreen, NULL)) || (fullscreen && !responsive)) return;
     RECT rect;
     GetClientRect(window, &rect);
     if (rect.right <= 0 || rect.bottom <= 0 || ((UINT)rect.right == render_width && (UINT)rect.bottom == render_height)) return;
@@ -81,10 +82,13 @@ static void gpu_resize_windowed(HWND window) {
 #endif
 
 static void geometry(HWND window, const char *reason) {
-    RECT client, outer;
+    RECT client, outer, desktop;
+    RECT clip = {0};
+    POINT cursor = {0};
     MONITORINFO monitor = { .cbSize = sizeof(MONITORINFO) };
     GetClientRect(window, &client);
     GetWindowRect(window, &outer);
+    GetWindowRect(GetDesktopWindow(), &desktop);
     GetMonitorInfoA(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
     printf("RECT {\"reason\":\"%s\",\"clientWidth\":%ld,\"clientHeight\":%ld,"
            "\"left\":%ld,\"top\":%ld,\"width\":%ld,\"height\":%ld,"
@@ -93,6 +97,12 @@ static void geometry(HWND window, const char *reason) {
            outer.right - outer.left, outer.bottom - outer.top,
            monitor.rcMonitor.right - monitor.rcMonitor.left,
            monitor.rcMonitor.bottom - monitor.rcMonitor.top);
+    GetClipCursor(&clip);
+    GetCursorPos(&cursor);
+    printf("CURSOR {\"x\":%ld,\"y\":%ld,\"clip\":[%ld,%ld,%ld,%ld]}\n",
+           cursor.x, cursor.y, clip.left, clip.top, clip.right, clip.bottom);
+    printf("DESKTOP {\"left\":%ld,\"top\":%ld,\"right\":%ld,\"bottom\":%ld}\n",
+           desktop.left, desktop.top, desktop.right, desktop.bottom);
 }
 
 static LRESULT CALLBACK events(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -103,7 +113,7 @@ static LRESULT CALLBACK events(HWND window, UINT message, WPARAM wparam, LPARAM 
         return 0;
     case WM_TIMER:
 #ifdef DXVK_FIXTURE
-        if (wparam == 2) { gpu_resize_windowed(window); gpu_paint(); return 0; }
+        if (wparam == 2) { gpu_resize(window); gpu_paint(); return 0; }
         if (swapchain) {
             BOOL fullscreen = FALSE;
             IDXGISwapChain_GetFullscreenState(swapchain, &fullscreen, NULL);
@@ -183,6 +193,7 @@ int main(void) {
                                  NULL, NULL, instance, NULL);
     if (!window) return 4;
 #ifdef DXVK_FIXTURE
+    responsive = getenv("LWFA_FIXTURE_RESPONSIVE") != NULL;
     UINT render_w = rect.right - rect.left, render_h = rect.bottom - rect.top;
     const char *configured_w = getenv("LWFA_FIXTURE_RENDER_WIDTH");
     const char *configured_h = getenv("LWFA_FIXTURE_RENDER_HEIGHT");
@@ -191,7 +202,10 @@ int main(void) {
     SetTimer(window, 2, 16, NULL);
 #endif
     geometry(window, "created");
-    SetTimer(window, 1, 250, NULL);
+    if (!SetTimer(window, 1, 250, NULL)) {
+        printf("TIMER_ERROR code=%lu\n", GetLastError());
+        return 6;
+    }
     puts("FULLSCREEN_FIXTURE_READY");
     MSG message;
     while (GetMessageA(&message, NULL, 0, 0) > 0) {

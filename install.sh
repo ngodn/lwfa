@@ -10,6 +10,8 @@
 # It writes three things: a config under ~/.config/lwfa, a systemd *user*
 # service, and one file under /etc for the udev rule. Everything else it only
 # looks at and reports.
+# A payload with Wine compatibility components also registers a separate Steam
+# tool. It preserves the original GE runtime and existing game selections.
 #
 # It does not install packages behind your back. When something is missing it
 # says so, prints the exact command for the distribution it detected, and asks
@@ -538,6 +540,31 @@ if [ "$PAYLOAD" = 1 ]; then
   # The uninstaller has to outlive the temporary directory it ran from.
   cp -a "$ROOT/install.sh" "$INSTALL_DIR/install.sh"
   ok "installed to $INSTALL_DIR"
+  # Register a separate optional tool. Existing GE runtimes and Steam's game
+  # selections are untouched, and Steam is never restarted by this step.
+  CANVAS_DIR="$INSTALL_DIR/share/lwfa/compat/wine-canvas"
+  if [ -f "$CANVAS_DIR/artifact/manifest.json" ]; then
+    CANVAS_STEAM_ROOT="${LWFA_STEAM_ROOT:-}"
+    if [ -z "$CANVAS_STEAM_ROOT" ]; then
+      for candidate in "$HOME/.steam/root" "${XDG_DATA_HOME:-$HOME/.local/share}/Steam"; do
+        if [ -d "$candidate/compatibilitytools.d" ]; then
+          CANVAS_STEAM_ROOT="$candidate"
+          break
+        fi
+      done
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+      warn "Wine canvas tool needs Python 3; its files were installed but registration was skipped"
+    elif [ -z "$CANVAS_STEAM_ROOT" ]; then
+      warn "Steam was not found; Wine canvas files were installed but no compatibility tool was registered"
+    elif python3 "$CANVAS_DIR/manage.py" install --bundle "$CANVAS_DIR/artifact" --steam-root "$CANVAS_STEAM_ROOT"; then
+      ok "registered the separate lwfa Wine tool"
+      note "Select the lwfa compatibility tool for the game after restarting Steam yourself"
+    else
+      warn "Wine canvas registration failed; lwfa was installed and existing Steam tools were left unchanged"
+      note "Run python3 $CANVAS_DIR/manage.py install --bundle $CANVAS_DIR/artifact --steam-root <Steam directory> after resolving the error"
+    fi
+  fi
   # Check the copy resolves its libraries, without running it.
   #
   # Never execute the engine to test it. It is a compositor, not a tool: it has

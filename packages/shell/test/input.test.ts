@@ -105,25 +105,6 @@ describe("windowPoint", () => {
   const element = (box: { x: number; y: number; width: number; height: number }) =>
     ({ getBoundingClientRect: () => ({ ...box, left: box.x, top: box.y }) }) as unknown as Element
 
-  it("maps a fullscreen game's contained image through its letterbox margins", () => {
-    const box = element({ x: 100, y: 50, width: 1000, height: 800 })
-    const content = { width: 1000, height: 800 }
-    const image = { width: 2560, height: 1440 }
-    // A 1000x562.5 image is centered vertically, with 118.75px above it.
-    expect(windowPoint({ clientX: 100, clientY: 168.75 }, box, content, image)).toEqual({ x: 0, y: 0 })
-    expect(windowPoint({ clientX: 1080, clientY: 720 }, box, content, image)).toEqual({ x: 980, y: 784 })
-    expect(windowPoint({ clientX: 600, clientY: 60 }, box, content, image)!.y).toBeLessThan(0)
-  })
-
-  it("maps pillarboxed content and preserves captured drags outside the image", () => {
-    const box = element({ x: 0, y: 0, width: 1200, height: 600 })
-    const content = { width: 1200, height: 600 }
-    const image = { width: 600, height: 600 }
-    expect(windowPoint({ clientX: 300, clientY: 0 }, box, content, image)).toEqual({ x: 0, y: 0 })
-    expect(windowPoint({ clientX: 900, clientY: 600 }, box, content, image)).toEqual({ x: 1200, y: 600 })
-    expect(windowPoint({ clientX: 1000, clientY: 600 }, box, content, image)!.x).toBeGreaterThan(1200)
-  })
-
   it("maps a click through the pixels actually on screen", () => {
     // The window is drawn in a 600x400 box, but the image in it is 1200x800:
     // the shell scales whatever the client rendered to fill the box.

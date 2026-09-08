@@ -1,0 +1,220 @@
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -154,6 +154,7 @@
+ 
+ static BOOL emulate_modelist = TRUE;
+ static BOOL emulate_modeset = TRUE;
++static BOOL canvas_follow_host, canvas_safe_dpi;
+ static UINT limit_resolutions = 0;
+ BOOL decorated_mode = TRUE;
+ UINT64 thunk_lock_callback = 0;
+@@ -564,6 +565,38 @@
+     return TRUE;
+ }
+ 
++/* These flags live beside the volatile display modes and are protected by
++ * display_device_init. Remember intent across processes and host mode changes. */
++static BOOL canvas_same_geometry( const DEVMODEW *a, const DEVMODEW *b )
++{
++    return a->dmPelsWidth == b->dmPelsWidth && a->dmPelsHeight == b->dmPelsHeight &&
++           a->dmDisplayOrientation == b->dmDisplayOrientation;
++}
++
++static void canvas_write_follow( HKEY key, UINT index, BOOL follow )
++{
++    WCHAR name[32];
++    DWORD value = follow;
++    asciiz_to_unicode( name, index == ENUM_CURRENT_SETTINGS ? "CanvasCurrentFollow" : "CanvasRegistryFollow" );
++    set_reg_value( key, name, REG_DWORD, &value, sizeof(value) );
++}
++
++static BOOL canvas_read_follow( HKEY key, UINT index, const DEVMODEW *mode,
++                                const DEVMODEW *previous_physical )
++{
++    char buffer[offsetof(KEY_VALUE_PARTIAL_INFORMATION, Data[sizeof(DWORD)])];
++    KEY_VALUE_PARTIAL_INFORMATION *value = (void *)buffer;
++    const char *name = index == ENUM_CURRENT_SETTINGS ? "CanvasCurrentFollow" : "CanvasRegistryFollow";
++    BOOL follow;
++
++    if (query_reg_ascii_value( key, name, value, sizeof(buffer) ) && value->Type == REG_DWORD &&
++        value->DataLength == sizeof(DWORD)) return !!*(DWORD *)value->Data;
++
++    follow = canvas_same_geometry( mode, previous_physical );
++    canvas_write_follow( key, index, follow );
++    return follow;
++}
++
+ static BOOL source_get_registry_settings( const struct source *source, DEVMODEW *mode )
+ {
+     BOOL ret = FALSE;
+@@ -595,6 +628,12 @@
+     else
+     {
+         ret = write_source_mode( hkey, ENUM_REGISTRY_SETTINGS, mode );
++        if (ret && canvas_follow_host)
++        {
++            DEVMODEW physical;
++            if (read_source_mode( hkey, WINE_ENUM_PHYSICAL_SETTINGS, &physical ))
++                canvas_write_follow( hkey, ENUM_REGISTRY_SETTINGS, canvas_same_geometry( mode, &physical ) );
++        }
+         NtClose( hkey );
+     }
+ 
+@@ -609,7 +648,7 @@
+     return TRUE;
+ }
+ 
+-static BOOL source_set_current_settings( const struct source *source, const DEVMODEW *mode )
++static BOOL source_set_current_settings( const struct source *source, const DEVMODEW *mode, BOOL requested )
+ {
+     HANDLE mutex;
+     HKEY hkey;
+@@ -622,6 +661,12 @@
+     {
+         ret = write_source_mode( hkey, ENUM_CURRENT_SETTINGS, mode );
+         if (ret) set_reg_value( hkey, depthW, REG_DWORD, &mode->dmBitsPerPel, sizeof(mode->dmBitsPerPel) );
++        if (ret && requested && canvas_follow_host)
++        {
++            DEVMODEW physical;
++            if (read_source_mode( hkey, WINE_ENUM_PHYSICAL_SETTINGS, &physical ))
++                canvas_write_follow( hkey, ENUM_CURRENT_SETTINGS, canvas_same_geometry( mode, &physical ) );
++        }
+         NtClose( hkey );
+     }
+ 
+@@ -2728,7 +2773,27 @@
+     else
+     {
+         if (!read_source_mode( source->key, ENUM_CURRENT_SETTINGS, &virtual ) || is_detached_mode( &virtual ))
++        {
+             virtual = physical;
++            if (canvas_follow_host) canvas_write_follow( source->key, ENUM_CURRENT_SETTINGS, TRUE );
++        }
++        if (canvas_follow_host)
++        {
++            DEVMODEW previous_physical = physical, registry;
++            read_source_mode( source->key, WINE_ENUM_PHYSICAL_SETTINGS, &previous_physical );
++            if (canvas_read_follow( source->key, ENUM_CURRENT_SETTINGS, &virtual, &previous_physical ))
++            {
++                TRACE( "canvas: following host mode %s -> %s\n", debugstr_devmodew( &virtual ),
++                       debugstr_devmodew( &physical ) );
++                virtual = physical;
++            }
++            /* Keep the default desktop mode current for ChangeDisplaySettings(NULL).
++             * An explicitly saved non-native mode keeps its own geometry. */
++            if (!read_source_mode( source->key, ENUM_REGISTRY_SETTINGS, &registry ))
++                canvas_write_follow( source->key, ENUM_REGISTRY_SETTINGS, TRUE );
++            else if (canvas_read_follow( source->key, ENUM_REGISTRY_SETTINGS, &registry, &previous_physical ))
++                write_source_mode( source->key, ENUM_REGISTRY_SETTINGS, &physical );
++        }
+ 
+         if ((virtual_modes = get_virtual_modes( current, &physical, host_modes, host_modes_count, &virtual_count )))
+         {
+@@ -2842,6 +2907,45 @@
+     }
+ }
+ 
++/* Keep an overflowing DPI fraction in the existing 16-bit wire format.
++ * Continued fractions bound both fields while retaining the closest ratio. */
++static UINT canvas_pack_dpi( UINT numerator, UINT denominator )
++{
++    ULONGLONG n = numerator, d = denominator, p0 = 0, q0 = 1, p1 = 1, q1 = 0;
++    const ULONGLONG limit = 65535;
++    ULONGLONG p, q;
++
++    if (!d) return USER_DEFAULT_SCREEN_DPI;
++    while (d)
++    {
++        ULONGLONG a = n / d, p2 = p0 + a * p1, q2 = q0 + a * q1;
++        if (p2 > limit || q2 > limit)
++        {
++            ULONGLONG k = limit, error, previous_error;
++            if (p1) k = min( k, (limit - p0) / p1 );
++            if (q1) k = min( k, (limit - q0) / q1 );
++            p = p0 + k * p1;
++            q = q0 + k * q1;
++            if (!q || !p) { p = p1; q = q1; }
++            else if (q1 && p1)
++            {
++                ULONGLONG left = p * denominator, right = (ULONGLONG)numerator * q;
++                ULONGLONG old_left = p1 * denominator, old_right = (ULONGLONG)numerator * q1;
++                error = left > right ? left - right : right - left;
++                previous_error = old_left > old_right ? old_left - old_right : old_right - old_left;
++                if (previous_error * q < error * q1) { p = p1; q = q1; }
++            }
++            goto packed;
++        }
++        p0 = p1; q0 = q1; p1 = p2; q1 = q2;
++        a = n % d; n = d; d = a;
++    }
++    p = p1; q = q1;
++packed:
++    if (!p || !q) return USER_DEFAULT_SCREEN_DPI;
++    return ((q == 1 ? 0 : (UINT)q) << 16) | (UINT)p;
++}
++
+ /* display_lock must be held */
+ static UINT monitor_get_dpi( struct monitor *monitor, MONITOR_DPI_TYPE type, UINT *dpi_x, UINT *dpi_y )
+ {
+@@ -2856,20 +2960,30 @@
+         num = source->physical.dmPelsWidth;
+         den = source->current.dmPelsWidth;
+         d = gcd( num * dpi, den );
+-        assert( num * dpi / d < 65536 );
+-        assert( den / d < 65536 );
+-        den /= d;
+-        if (den == 1) den = 0;
+-        *dpi_x = (den << 16) | (num * dpi / d);
++        if (canvas_safe_dpi && (num * dpi / d >= 65536 || den / d >= 65536))
++            *dpi_x = canvas_pack_dpi( num * dpi, den );
++        else
++        {
++            assert( num * dpi / d < 65536 );
++            assert( den / d < 65536 );
++            den /= d;
++            if (den == 1) den = 0;
++            *dpi_x = (den << 16) | (num * dpi / d);
++        }
+ 
+         num = source->physical.dmPelsHeight;
+         den = source->current.dmPelsHeight;
+         d = gcd( num * dpi, den );
+-        assert( num * dpi / d < 65536 );
+-        assert( den / d < 65536 );
+-        den /= d;
+-        if (den == 1) den = 0;
+-        *dpi_y = (den << 16) | (num * dpi / d);
++        if (canvas_safe_dpi && (num * dpi / d >= 65536 || den / d >= 65536))
++            *dpi_y = canvas_pack_dpi( num * dpi, den );
++        else
++        {
++            assert( num * dpi / d < 65536 );
++            assert( den / d < 65536 );
++            den /= d;
++            if (den == 1) den = 0;
++            *dpi_y = (den << 16) | (num * dpi / d);
++        }
+         if (source->physical.dmPelsWidth * source->current.dmPelsHeight <=
+             source->physical.dmPelsHeight * source->current.dmPelsWidth)
+             dpi_ret = *dpi_x;
+@@ -5033,7 +5147,7 @@
+         mode = displays;
+         LIST_FOR_EACH_ENTRY( source, &sources, struct source, entry )
+         {
+-            if (!source_set_current_settings( source, mode ))
++            if (!source_set_current_settings( source, mode, !target || source->id == target->id ))
+                 WARN( "Failed to write source %u current mode.\n", source->id );
+             mode = NEXT_DEVMODEW(mode);
+         }
+@@ -6604,6 +6718,11 @@
+         emulate_modelist = !IS_OPTION_TRUE( buffer[0] );
+     if (!get_config_key( hkey, appkey, "EmulateModeset", buffer, sizeof(buffer) ))
+         emulate_modeset = IS_OPTION_TRUE( buffer[0] );
++    {
++        const char *value;
++        canvas_follow_host = (value = getenv( "WINE_CANVAS_FOLLOW_HOST" )) && !strcmp( value, "1" );
++        canvas_safe_dpi = (value = getenv( "WINE_CANVAS_DPI_SAFE" )) && !strcmp( value, "1" );
++    }
+ 
+     {
+         const char *decorate = NULL;

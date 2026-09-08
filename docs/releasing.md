@@ -16,6 +16,24 @@ three `crates/*/Cargo.toml` and four `package.json`. `Cargo.lock` records the
 three workspace members and needs refreshing with them; `pnpm-lock.yaml` does
 not record an importer's own version and is untouched.
 
+## Wine compatibility artifacts
+
+Set `LWFA_WINE_CANVAS_ARTIFACT` to a validated artifact directory to include the
+separate GE-Proton tool. Without it, packaging produces the ordinary engine and
+shell installer. The [compatibility recipe](../compat/wine-canvas/README.md)
+pins source, original runtime hashes and both architecture builds.
+
+The local package script accepts a host build for testing on that machine.
+Portable packaging requires an artifact built in the Steam Runtime SDK and
+marked portable. A host-built Wine artifact must not be distributed as the
+portable release merely because the engine was built in the container.
+
+After extraction, run `manage.py validate --bundle <artifact>` from the bundled
+compatibility directory. Test the actual registered launchers with disposable
+prefixes: nested launches must load private libraries, host launches must load
+original GE, and a cross-runtime launch must refuse an already-active prefix.
+Registration preserves Steam's existing game selections.
+
 ## If a download in the image build dies
 
 Docker's bridge is 1500 bytes whatever the host can actually carry. Behind a

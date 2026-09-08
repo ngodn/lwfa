@@ -222,3 +222,26 @@ describe("a socket that has gone quiet", () => {
     expect(opened).toHaveLength(1)
   })
 })
+
+
+describe("an incompatible engine", () => {
+  it("shows an update notice and stops reconnecting before decoding old window fields", () => {
+    const h = handlers()
+    const onMessage = vi.fn()
+    const onStatus = vi.fn(h.onStatus)
+    const conn = new Connection("ws://engine", { ...h, onMessage, onStatus })
+    conn.connect()
+    const socket = opened[0]!
+    socket.accept()
+    socket.deliver(JSON.stringify({ type: "hello", protocolVersion: 1,
+      windows: [{ scaling: { mode: "sharp", scale: 1 }, effectiveScale: 1 }] }))
+    expect(onStatus).toHaveBeenLastCalledWith("incompatible", expect.stringMatching(/Update lwfa and reload/))
+    expect(onMessage).not.toHaveBeenCalled()
+    expect(socket.readyState).toBe(3)
+    socket.closeFromServer("")
+    vi.advanceTimersByTime(30_000)
+    expect(h.seen.at(-1)).toBe("incompatible")
+    expect(opened).toHaveLength(1)
+    conn.close()
+  })
+})

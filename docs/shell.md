@@ -30,22 +30,24 @@ phone wants the bar where a thumb is, the same person on a 27" display wants
 it down the side, and syncing them would make one device's ergonomics fight
 the other's.
 
-## Window scaling
+## Window sizing
 
-Sharper and More space are temporarily disabled while display sizing and
-Proton compatibility are reworked. Windows use the 1x baseline. The engine
-also rejects scaling requests from older browser clients.
+Windows use the 1x baseline. Sharper and More space have been removed from
+the shell and protocol. Frames fill their browser canvas, and input is mapped
+from that canvas to the application dimensions. A cached shell using the old
+protocol must be reloaded after upgrading.
 
 Xwayland starts after the primary browser reports its viewport, so games see
-that size as their initial desktop resolution. The monitor stays fixed during
-the session to avoid Wine's display-resize DPI failure. Reconnecting preserves
+that size as their initial desktop resolution. The shared monitor follows later
+primary viewport changes; an individual window resize does not change it.
+Reconnecting preserves
 the existing arrangement when it still matches the engine. Apps can enforce
 a minimum window size, and games can choose their own internal resolution.
 
-An explicit `session.xwayland_resolution` overrides the initial display size
-and permits X11 startup without a browser. A local app launch before a browser
-connects uses the host size. Change the initial resolution by restarting the
-engine; rotating the browser does not change a running game's monitor.
+The obsolete `session.xwayland_resolution` key is accepted for compatibility
+but ignored. A deliberate local app launch before a browser connects uses the
+host size initially. See the [canvas sizing investigation](research/canvas-sizing-removal.md)
+for the Wine compatibility work and current test status.
 
 ## Restarting the session
 

@@ -36,9 +36,9 @@ window.getPrefs=getPrefs;
 window.patchPrefs=patchPrefs;
 const output={width:1280,height:800};
 const windows=new Map([
- [1,{id:1,title:'capture.rs - lwfa - Visual Studio Code',appId:'code',fullscreen:false,xwayland:false,scaling:{mode:'sharp',scale:1},effectiveScale:1}],
- [2,{id:2,title:'Wayland documentation - Chromium',appId:'chromium',fullscreen:false,xwayland:false,scaling:{mode:'workspace',scale:1.25},effectiveScale:1.25}],
- [3,{id:3,title:'Terminal',appId:'alacritty',fullscreen:false,xwayland:true,scaling:{mode:'sharp',scale:1},effectiveScale:1}],
+ [1,{id:1,title:'capture.rs - lwfa - Visual Studio Code',appId:'code',fullscreen:false,xwayland:false}],
+ [2,{id:2,title:'Wayland documentation - Chromium',appId:'chromium',fullscreen:false,xwayland:false}],
+ [3,{id:3,title:'Terminal',appId:'alacritty',fullscreen:false,xwayland:true}],
 ]);
 let strip=EMPTY;
 for(const id of windows.keys()) strip=addWindow(strip,id,output,DEFAULT_CONFIG);

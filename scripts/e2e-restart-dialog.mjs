@@ -49,7 +49,7 @@ try {
         if (message.type === "ping") socket.send(JSON.stringify({ type: "pong" }))
       })
       const output = { width: 1324, height: 900, scale: 1 }
-      socket.send(JSON.stringify({ type: "hello", protocolVersion: 1, output,
+      socket.send(JSON.stringify({ type: "hello", protocolVersion: 2, output,
         windows: [{ id: 1, title: "Mock game", appId: "fixture", fullscreen: false }], focused: 1,
         permissions: { mode: "interact", allowedApps: null }, account: scenario.account,
         session: 1, primary: true, peers: [] }))

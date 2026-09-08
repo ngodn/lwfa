@@ -1,5 +1,9 @@
 # Client display sizing and refresh
 
+This records the 1.5.4 investigation. Scaling controls and the blanket X11
+letterboxing described below have since been removed. See
+[the current behavior and regression checks](canvas-sizing-removal.md).
+
 Investigated on 2026-09-08 after 1.5.3.
 
 ## Reproduced causes

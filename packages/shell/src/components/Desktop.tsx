@@ -217,7 +217,6 @@ export const Desktop = memo(function Desktop({
             rect={w.rect}
             z={w.z}
             filling={fillsOutput(w.rect, output)}
-            preserveAspect={windows.get(w.id)?.xwayland ?? false}
             focused={w.id === focused}
             label={labelFor(windows.get(w.id), w.id)}
             streamed={streamedIds.has(w.id)}

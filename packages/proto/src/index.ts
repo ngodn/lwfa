@@ -19,7 +19,7 @@
  */
 
 /** Bumped on any breaking change. Must equal the Rust `PROTOCOL_VERSION`. */
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 /** Engine-assigned window handle. A bare number on the wire. */
 export type WindowId = number
@@ -37,12 +37,6 @@ export interface Rect {
   height: number
 }
 
-export interface WindowScaling {
-  mode: "sharp" | "workspace"
-  /** Null selects display density automatically in sharp mode. */
-  scale: number | null
-}
-
 export interface WindowInfo {
   id: WindowId
   appId: string | null
@@ -55,9 +49,7 @@ export interface WindowInfo {
    * `fullscreenRequest` event catches up (which never fires on a reconnect).
    */
   fullscreen: boolean
-  scaling?: WindowScaling
   xwayland?: boolean
-  effectiveScale?: number
 }
 
 export interface SpringSpec {
@@ -539,7 +531,6 @@ export type ToEngine =
    * makes every window the wrong physical size. Answered with `outputChanged`.
    */
   | { type: "setViewport"; width: number; height: number; scale: number }
-  | { type: "setWindowScaling"; id: WindowId; scaling: WindowScaling }
   /** Ask for the installed applications. Answered with `apps`, without icons. */
   | { type: "listApps" }
   /**
@@ -797,6 +788,16 @@ export class ProtocolError extends Error {
   }
 }
 
+/** Raised before decoding version-specific fields in the greeting. */
+export class ProtocolVersionError extends ProtocolError {
+  readonly engineVersion: number
+  constructor(engineVersion: number) {
+    super(`Engine protocol ${engineVersion} does not match this page (${PROTOCOL_VERSION}). Update lwfa and reload this page.`)
+    this.engineVersion = engineVersion
+    this.name = "ProtocolVersionError"
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Strict field readers
 //
@@ -917,24 +918,14 @@ function decodeRect(value: unknown, at: string): Rect {
 
 function decodeWindowInfo(value: unknown, at: string): WindowInfo {
   const o = asObject(value, at)
-  noExtraKeys(o, ["id", "appId", "title", "fullscreen", "scaling", "xwayland", "effectiveScale"], at)
+  noExtraKeys(o, ["id", "appId", "title", "fullscreen", "xwayland"], at)
   return {
     id: int(o, "id", at),
     appId: nullableStr(o, "appId", at),
     title: nullableStr(o, "title", at),
     fullscreen: bool(o, "fullscreen", at),
-    ...("scaling" in o ? { scaling: decodeWindowScaling(o["scaling"], `${at}.scaling`) } : {}),
     ...("xwayland" in o ? { xwayland: bool(o, "xwayland", at) } : {}),
-    ...("effectiveScale" in o ? { effectiveScale: num(o, "effectiveScale", at) } : {}),
   }
-}
-
-function decodeWindowScaling(value: unknown, at: string): WindowScaling {
-  const o = asObject(value, at)
-  noExtraKeys(o, ["mode", "scale"], at)
-  const mode = str(o, "mode", at)
-  if (mode !== "sharp" && mode !== "workspace") throw new ProtocolError(`${at}.mode: unknown scaling mode`)
-  return { mode, scale: o["scale"] === null ? null : num(o, "scale", at) }
 }
 
 function decodeSpring(value: unknown, at: string): SpringSpec {
@@ -1008,6 +999,8 @@ export function decodeToShell(text: string): ToShell {
   switch (t) {
     case "hello": {
       const where = `${at}.hello`
+      const protocolVersion = int(o, "protocolVersion", where)
+      if (protocolVersion !== PROTOCOL_VERSION) throw new ProtocolVersionError(protocolVersion)
       noExtraKeys(
         o,
         [
@@ -1026,7 +1019,7 @@ export function decodeToShell(text: string): ToShell {
       )
       return {
         type: "hello",
-        protocolVersion: int(o, "protocolVersion", where),
+        protocolVersion,
         output: decodeOutput(o["output"], `${where}.output`),
         windows: array(o, "windows", where).map((w, i) =>
           decodeWindowInfo(w, `${where}.windows[${i}]`),
@@ -1562,11 +1555,6 @@ export function decodeToEngine(text: string): ToEngine {
         height: int(o, "height", where),
         scale: num(o, "scale", where),
       }
-    }
-    case "setWindowScaling": {
-      const where = `${at}.setWindowScaling`
-      noExtraKeys(o, ["type", "id", "scaling"], where)
-      return { type: "setWindowScaling", id: int(o, "id", where), scaling: decodeWindowScaling(o["scaling"], `${where}.scaling`) }
     }
     case "spawn": {
       const where = `${at}.spawn`

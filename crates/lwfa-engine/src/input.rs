@@ -494,6 +494,14 @@ impl Lwfa {
         };
         cmd.env("WAYLAND_DISPLAY", &self.socket_name);
 
+        // The separate Wine canvas compatibility tool reads these options.
+        // Stock Wine ignores them. Scope them to nested applications so using
+        // that same tool on the host keeps its ordinary display behavior.
+        if self.resize_output.is_some() {
+            cmd.env("WINE_CANVAS_FOLLOW_HOST", "1");
+            cmd.env("WINE_CANVAS_DPI_SAFE", "1");
+        }
+
         // Start where a login session would, not where the compositor was
         // launched from.
         //

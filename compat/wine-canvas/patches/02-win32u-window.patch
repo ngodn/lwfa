@@ -1,0 +1,58 @@
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -2109,12 +2109,28 @@
+     else NtUserRemoveProp( hwnd, frameless_window_prop );
+ }
+ 
++/* Compute the proposed destination before deriving visible and surface bounds.
++ * The stored presentation rectangle is committed only after SetWindowPos succeeds. */
++static BOOL get_position_present_rect( HWND hwnd, const struct window_rects *rects, RECT *present )
++{
++    const char *canvas_follow = getenv( "WINE_CANVAS_FOLLOW_HOST" );
++    struct window_rects previous;
++    UINT dpi = get_thread_dpi();
++
++    if (!get_present_rect( hwnd, present, dpi )) return FALSE;
++    if (canvas_follow && !strcmp( canvas_follow, "1" ) &&
++        get_window_rects( hwnd, COORDS_PARENT, &previous, dpi ) &&
++        EqualRect( present, &previous.client ) && EqualRect( &previous.window, &previous.client ))
++        *present = rects->client;
++    return TRUE;
++}
++
+ static RECT get_visible_rect( HWND hwnd, BOOL shaped, UINT style, UINT ex_style, const struct window_rects *rects )
+ {
+     UINT dpi = get_dpi_for_window( hwnd ), style_mask, ex_style_mask;
+     RECT visible_rect, rect = {0};
+ 
+-    if (get_present_rect( hwnd, &rect, get_thread_dpi() )) return rect;
++    if (get_position_present_rect( hwnd, rects, &rect )) return rect;
+     if (IsRectEmpty( &rects->window ) || EqualRect( &rects->window, &rects->client ) || shaped || !decorated_mode) return rects->window;
+     if (is_frameless_window( hwnd, style, rects )) return rects->window;
+     if (!user_driver->pGetWindowStyleMasks( hwnd, style, ex_style, &style_mask, &ex_style_mask )) return rects->window;
+@@ -2227,7 +2243,7 @@
+     if (get_window_region( hwnd, FALSE, &shape, &dummy )) shaped = FALSE;
+     else if ((shaped = !!shape)) NtGdiDeleteObjectApp( shape );
+ 
+-    if (!get_present_rect( hwnd, &rects->visible, get_thread_dpi() )) rects->visible = rects->window;
++    if (!get_position_present_rect( hwnd, rects, &rects->visible )) rects->visible = rects->window;
+     if (is_child) monitor_rects = map_dpi_window_rects( *rects, get_thread_dpi(), raw_dpi );
+     else monitor_rects = map_window_rects_virt_to_raw( *rects, get_thread_dpi() );
+ 
+@@ -2437,6 +2453,16 @@
+ 
+         if ((ret = !wine_server_call( req )))
+         {
++            const char *canvas_follow = getenv( "WINE_CANVAS_FOLLOW_HOST" );
++
++            /* Keep a fullscreen presentation destination attached to a resized
++             * client. Explicit subrectangles retain their requested geometry. */
++            if (canvas_follow && !strcmp( canvas_follow, "1" ) &&
++                !IsRectEmpty( &win->present_rect ) &&
++                EqualRect( &win->present_rect, &win->rects.client ) &&
++                EqualRect( &win->rects.window, &win->rects.client ))
++                win->present_rect = new_rects->client;
++
+             win->dwStyle      = reply->new_style;
+             win->dwExStyle    = reply->new_ex_style;
+             win->rects        = *new_rects;

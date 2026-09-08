@@ -5,11 +5,6 @@
     "appId": "firefox",
     "title": "lwfa — not an em dash test, just unicode",
     "fullscreen": false,
-    "scaling": {
-      "mode": "sharp",
-      "scale": 1.0
-    },
-    "xwayland": false,
-    "effectiveScale": 1.0
+    "xwayland": false
   }
 }

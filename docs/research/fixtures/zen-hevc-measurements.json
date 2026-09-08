@@ -1,0 +1,343 @@
+{
+  "date": "2026-09-08",
+  "browser": "Mozilla Zen 1.21.15b",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:154.0) Gecko/20100101 Firefox/154.0",
+  "codecPreferences": {
+    "dom.media.webcodecs.h265.enabled": true
+  },
+  "defaultPreferenceProbe": {
+    "headlessHevcSupported": 0,
+    "headedHevcSupported": 0,
+    "hevcChecksEach": 24,
+    "h264SupportedEach": 6
+  },
+  "offlineFrameDecoder": {
+    "cases": [
+      {
+        "stage": 0,
+        "recovery": false,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1000,
+        "height": 640,
+        "sourceWidth": 1000,
+        "sourceHeight": 640,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 0,
+        "recovery": true,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1000,
+        "height": 640,
+        "sourceWidth": 1000,
+        "sourceHeight": 640,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 1,
+        "recovery": false,
+        "codec": "hvc1.1.6.L180.90",
+        "width": 4000,
+        "height": 3000,
+        "sourceWidth": 4000,
+        "sourceHeight": 3000,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 1,
+        "recovery": true,
+        "codec": "hvc1.1.6.L180.90",
+        "width": 4000,
+        "height": 3000,
+        "sourceWidth": 4000,
+        "sourceHeight": 3000,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 2,
+        "recovery": false,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1000,
+        "height": 640,
+        "sourceWidth": 1000,
+        "sourceHeight": 640,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 2,
+        "recovery": true,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1000,
+        "height": 640,
+        "sourceWidth": 1000,
+        "sourceHeight": 640,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 3,
+        "recovery": false,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1192,
+        "height": 860,
+        "sourceWidth": 1192,
+        "sourceHeight": 860,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 3,
+        "recovery": true,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1192,
+        "height": 860,
+        "sourceWidth": 1192,
+        "sourceHeight": 860,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 4,
+        "recovery": false,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1490,
+        "height": 1076,
+        "sourceWidth": 1490,
+        "sourceHeight": 1075,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 4,
+        "recovery": true,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1490,
+        "height": 1076,
+        "sourceWidth": 1490,
+        "sourceHeight": 1075,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 5,
+        "recovery": false,
+        "codec": "hvc1.1.6.H150.90",
+        "width": 1788,
+        "height": 1290,
+        "sourceWidth": 1788,
+        "sourceHeight": 1290,
+        "maxChannelError": 2,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 5,
+        "recovery": true,
+        "codec": "hvc1.1.6.H150.90",
+        "width": 1788,
+        "height": 1290,
+        "sourceWidth": 1788,
+        "sourceHeight": 1290,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 6,
+        "recovery": false,
+        "codec": "hvc1.1.6.H150.90",
+        "width": 2384,
+        "height": 1720,
+        "sourceWidth": 2384,
+        "sourceHeight": 1720,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 6,
+        "recovery": true,
+        "codec": "hvc1.1.6.H150.90",
+        "width": 2384,
+        "height": 1720,
+        "sourceWidth": 2384,
+        "sourceHeight": 1720,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 7,
+        "recovery": false,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1002,
+        "height": 642,
+        "sourceWidth": 1001,
+        "sourceHeight": 641,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 7,
+        "recovery": true,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1002,
+        "height": 642,
+        "sourceWidth": 1001,
+        "sourceHeight": 641,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 8,
+        "recovery": false,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1192,
+        "height": 860,
+        "sourceWidth": 1192,
+        "sourceHeight": 860,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      },
+      {
+        "stage": 8,
+        "recovery": true,
+        "codec": "hvc1.1.6.H123.90",
+        "width": 1192,
+        "height": 860,
+        "sourceWidth": 1192,
+        "sourceHeight": 860,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "passed": true
+      }
+    ],
+    "errors": [],
+    "keyframeRequests": []
+  },
+  "liveFrameDecoder": {
+    "phases": [
+      {
+        "count": 3,
+        "width": 1000,
+        "height": 640,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "requestedWidth": 1000,
+        "requestedHeight": 640,
+        "decodedFrames": 3,
+        "wireFormats": [
+          2
+        ],
+        "passed": true
+      },
+      {
+        "count": 6,
+        "width": 1324,
+        "height": 838,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "requestedWidth": 1324,
+        "requestedHeight": 838,
+        "decodedFrames": 3,
+        "wireFormats": [
+          2
+        ],
+        "passed": true
+      },
+      {
+        "count": 9,
+        "width": 838,
+        "height": 1324,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "requestedWidth": 838,
+        "requestedHeight": 1324,
+        "decodedFrames": 3,
+        "wireFormats": [
+          2
+        ],
+        "passed": true
+      },
+      {
+        "count": 12,
+        "width": 1324,
+        "height": 838,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "requestedWidth": 1324,
+        "requestedHeight": 838,
+        "decodedFrames": 3,
+        "wireFormats": [
+          2
+        ],
+        "passed": true
+      },
+      {
+        "count": 15,
+        "width": 1000,
+        "height": 640,
+        "maxChannelError": 1,
+        "right": 0,
+        "bottom": 0,
+        "requestedWidth": 1000,
+        "requestedHeight": 640,
+        "decodedFrames": 3,
+        "wireFormats": [
+          2
+        ],
+        "passed": true
+      }
+    ],
+    "errors": [],
+    "keyframeRequests": [],
+    "wireFormats": [
+      2
+    ]
+  },
+  "notes": [
+    "Live native X11 fixture ran in a separate current development engine on loopback port 6756.",
+    "Existing user profiles, production service, and root test engine were not changed.",
+    "Capabilities claiming prefer-hardware do not establish GPU decoding."
+  ]
+}

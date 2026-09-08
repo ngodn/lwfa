@@ -1,5 +1,8 @@
 # Window scaling correctness review
 
+Historical record. Sharper and More space were removed on 2026-09-08.
+See [the removal and regression checks](canvas-sizing-removal.md) for current behavior.
+
 Reviewed 2026-09-07 while scaling integration and the isolated Xwayland output fix were in progress. This is an independent review of the Rust implementation and wire/input contract. It does not certify live iPad behavior. No implementation files or production processes were changed by this review.
 
 ## Findings

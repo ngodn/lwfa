@@ -91,10 +91,6 @@ impl XwmHandler for Lwfa {
         let window = Window::new_x11_window(surface);
         let id = self.next_window_id();
         self.layout.track(id, window.clone());
-        if fullscreen {
-            let pending = self.layout.set_x11_fullscreen(id, true, std::time::Instant::now());
-            self.send_configures(pending.into_iter().collect());
-        }
 
         // Off-screen with no size yet, like the Wayland path: invisible until
         // something places it, so it cannot flash at the origin for a frame.

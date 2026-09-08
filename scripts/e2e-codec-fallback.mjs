@@ -68,7 +68,7 @@ try {
     const wire = []
     let peer
     let connections = 0
-    const hello = (ids,mode = 'interact') => ({type:'hello',protocolVersion:1,output:{width:1000,height:700,scale:1},
+    const hello = (ids,mode = 'interact') => ({type:'hello',protocolVersion:2,output:{width:1000,height:700,scale:1},
       windows:ids.map(id => ({id,title:`Codec target ${id}`,appId:'fixture',fullscreen:false})),focused:ids[0],
       permissions:{mode,allowedApps:null},account:'test',session:1,primary:false,peers:[]})
     const watchers = new Set()

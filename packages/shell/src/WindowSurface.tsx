@@ -84,8 +84,6 @@ export interface WindowSurfaceProps {
    * Drives whether it is drawn as a card or edge to edge. See `fillsOutput`.
    */
   filling: boolean
-  /** Fit X11 frames that keep a native size independently of the browser. */
-  preserveAspect?: boolean
   focused: boolean
   label: string
   /**
@@ -130,7 +128,6 @@ export const WindowSurface = memo(function WindowSurface({
   rect,
   z,
   filling,
-  preserveAspect = false,
   focused,
   label,
   streamed,
@@ -342,10 +339,8 @@ export const WindowSurface = memo(function WindowSurface({
       aria-label={label}
       onPointerDown={(event) => {
         onFocus(id)
-        const point = windowPoint(event, event.currentTarget, contentSize(), preserveAspect ? canvas.current ?? undefined : undefined)
+        const point = windowPoint(event, event.currentTarget, contentSize())
         if (!point) return
-        const size = contentSize()
-        if (preserveAspect && (point.x < 0 || point.y < 0 || point.x >= size.width || point.y >= size.height)) return
         // Capture, so a drag that leaves the element still delivers its
         // release. Without this a client is left with a button stuck down.
         event.currentTarget.setPointerCapture(event.pointerId)
@@ -428,7 +423,7 @@ export const WindowSurface = memo(function WindowSurface({
         if (dock === "mouse" && event.pointerType === "touch") {
           const p = mousePts.current.get(event.pointerId)
           if (!p) return
-          const point = windowPoint(event, event.currentTarget, contentSize(), preserveAspect ? canvas.current ?? undefined : undefined)
+          const point = windowPoint(event, event.currentTarget, contentSize())
           if (!point) return
           p.x = point.x
           p.y = point.y
@@ -471,7 +466,7 @@ export const WindowSurface = memo(function WindowSurface({
         }
         // A finger that wanders is a drag, not a press.
         if (event.pointerType === "touch") longPress.current.move(event)
-        const point = windowPoint(event, event.currentTarget, contentSize(), preserveAspect ? canvas.current ?? undefined : undefined)
+        const point = windowPoint(event, event.currentTarget, contentSize())
         if (!point) return
         // Once the long press has fired the touch has already been ended, so
         // further motion for it would reopen a gesture the client thinks is
@@ -570,7 +565,7 @@ export const WindowSurface = memo(function WindowSurface({
         event.preventDefault()
       }}
     >
-      <canvas ref={canvas} className={cn("block h-full w-full", preserveAspect && "object-contain bg-black")} />
+      <canvas ref={canvas} className="block h-full w-full" />
       {/*
         * No "paused" badge for unfocused windows on purpose. With
         * pause-inactive on, a frozen side window is the normal state of the

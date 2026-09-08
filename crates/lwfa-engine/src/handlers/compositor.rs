@@ -31,10 +31,6 @@ impl CompositorHandler for Lwfa {
             .compositor_state
     }
 
-    fn new_surface(&mut self, surface: &WlSurface) {
-        self.x11_outputs.enter(surface);
-    }
-
     fn new_subsurface(&mut self, surface: &WlSurface, parent: &WlSurface) {
         self.inherit_surface_density(surface, parent);
     }

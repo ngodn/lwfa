@@ -125,9 +125,6 @@ impl Animated {
 
 struct Tracked {
     window: Window,
-    workspace_scale: f64,
-    /// Application fullscreen intent, separate from the browser's presentation.
-    x11_fullscreen: bool,
     base_rect: Option<Rectangle<i32, Logical>>,
     x: Animated,
     y: Animated,
@@ -199,7 +196,6 @@ pub struct Layout {
     tracked: HashMap<WindowId, Tracked>,
     mode: Mode,
     output_size: Size<i32, Logical>,
-    x11_output_size: Option<Size<i32, Logical>>,
 }
 
 /// A geometry the engine should send to a client as a `configure`.
@@ -219,50 +215,7 @@ impl Layout {
             tracked: HashMap::new(),
             mode: Mode::Safe,
             output_size,
-            x11_output_size: None,
         }
-    }
-
-    pub(crate) fn workspace_rect_for(
-        &self,
-        id: WindowId,
-        factor: f64,
-    ) -> Option<Rectangle<i32, Logical>> {
-        let tracked = self.tracked.get(&id)?;
-        Some(configured_workspace_rect(
-            tracked.base_rect?, factor,
-            tracked.window.is_x11(),
-            tracked.x11_fullscreen,
-            self.x11_output_size,
-        ))
-    }
-
-    pub(crate) fn x11_fullscreen(&self, id: WindowId) -> bool {
-        self.tracked.get(&id).is_some_and(|tracked| tracked.x11_fullscreen)
-    }
-
-    /// Keep a fullscreen application's native workspace at the fixed monitor
-    /// size. Its browser rectangle remains available for presentation and exit.
-    pub(crate) fn set_x11_fullscreen(
-        &mut self,
-        id: WindowId,
-        fullscreen: bool,
-        now: Instant,
-    ) -> Option<PendingConfigure> {
-        let tracked = self.tracked.get_mut(&id)?;
-        if !tracked.window.is_x11() { return None; }
-        tracked.x11_fullscreen = fullscreen;
-        let base = match tracked.base_rect {
-            Some(rect) => rect,
-            None if fullscreen => Rectangle::from_size(self.x11_output_size?),
-            None => return None,
-        };
-        let rect = configured_workspace_rect(
-            base, tracked.workspace_scale, true, fullscreen, self.x11_output_size,
-        );
-        if !tracked.needs_configure(rect) { return None; }
-        tracked.configured(rect, now);
-        Some(PendingConfigure { window: tracked.window.clone(), rect })
     }
 
     pub fn preview_rect(&self, id: WindowId) -> Option<Rectangle<i32, Logical>> {
@@ -270,15 +223,6 @@ impl Layout {
         let mut rect = t.base_rect?;
         rect.loc = (t.x.current.round() as i32, t.y.current.round() as i32).into();
         Some(rect)
-    }
-
-    pub fn set_workspace_scale(&mut self, id: WindowId, factor: f64, now: Instant) -> Option<PendingConfigure> {
-        let tracked = self.tracked.get_mut(&id)?;
-        tracked.workspace_scale = factor;
-        let rect = configured_workspace_rect(tracked.base_rect?, factor, tracked.window.is_x11(), tracked.x11_fullscreen, self.x11_output_size);
-        if !tracked.needs_configure(rect) { return None; }
-        tracked.configured(rect, now);
-        Some(PendingConfigure { window: tracked.window.clone(), rect })
     }
 
     pub fn mode(&self) -> Mode {
@@ -293,11 +237,6 @@ impl Layout {
         self.output_size = size;
     }
 
-    /// Set the X11 coordinate bounds chosen when Xwayland binds its output.
-    pub(crate) fn set_x11_output_size(&mut self, size: Size<i32, Logical>) {
-        self.x11_output_size = Some((size.w.clamp(1, 32767), size.h.clamp(1, 32767)).into());
-    }
-
     pub fn output_size(&self) -> Size<i32, Logical> {
         self.output_size
     }
@@ -307,8 +246,6 @@ impl Layout {
             id,
             Tracked {
                 window,
-                workspace_scale: 1.0,
-                x11_fullscreen: false,
                 base_rect: None,
                 x: Animated::new(0.0),
                 y: Animated::new(0.0),
@@ -422,7 +359,7 @@ impl Layout {
                     .into(),
             );
             tracked.base_rect = Some(rect);
-            let rect = configured_workspace_rect(rect, tracked.workspace_scale, tracked.window.is_x11(), tracked.x11_fullscreen, self.x11_output_size);
+            let rect = configured_client_rect(rect, tracked.window.is_x11(), Some(self.output_size));
             if tracked.needs_configure(rect) {
                 tracked.configured(rect, now);
                 configures.push(PendingConfigure {
@@ -457,7 +394,7 @@ impl Layout {
             tracked.y.snap_to(0.0);
             let rect = Rectangle::new((0, 0).into(), size);
             tracked.base_rect = Some(rect);
-            let rect = configured_workspace_rect(rect, tracked.workspace_scale, tracked.window.is_x11(), tracked.x11_fullscreen, self.x11_output_size);
+            let rect = configured_client_rect(rect, tracked.window.is_x11(), Some(self.output_size));
             if tracked.needs_configure(rect) {
                 tracked.configured(rect, now);
                 configures.push(PendingConfigure {
@@ -736,27 +673,25 @@ mod tests {
     }
 }
 
-/// Resolve native app geometry without changing the browser preview.
-fn configured_workspace_rect(
+/// Resolve native app geometry from the browser's current rectangle.
+fn configured_client_rect(
     preview: Rectangle<i32, Logical>,
-    factor: f64,
     x11: bool,
-    fullscreen: bool,
-    x11_output_size: Option<Size<i32, Logical>>,
+    output_size: Option<Size<i32, Logical>>,
 ) -> Rectangle<i32, Logical> {
-    if x11 && fullscreen && let Some(size) = x11_output_size {
-        // Fullscreen swapchains can keep their monitor-sized render target
-        // after a WM resize. A smaller X11 parent would clip their contents.
-        return Rectangle::from_size(size);
-    }
-    client_rect(workspace_rect(preview, factor), x11, x11_output_size)
+    client_rect(bounded_client_rect(preview), x11, output_size)
 }
 
-/// Keep placement in the shell's coordinates while changing only app layout.
-fn workspace_rect(mut rect: Rectangle<i32, Logical>, factor: f64) -> Rectangle<i32, Logical> {
-    let factor = crate::scaling::bounded_density(rect.size, factor);
-    rect.size = ((f64::from(rect.size.w) * factor).round().clamp(1.0, 8192.0) as i32,
-                 (f64::from(rect.size.h) * factor).round().clamp(1.0, 8192.0) as i32).into();
+/// Avoid requesting buffers larger than the capture allocation limit from an
+/// ordinary client. Capture also bounds apps that refuse the requested size.
+fn bounded_client_rect(mut rect: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+    if !crate::surface_density::valid_capture_size(rect.size.to_physical(1)) {
+        let density = crate::surface_density::bounded_density(rect.size);
+        rect.size = (
+            (f64::from(rect.size.w) * density).round().clamp(1.0, 8192.0) as i32,
+            (f64::from(rect.size.h) * density).round().clamp(1.0, 8192.0) as i32,
+        ).into();
+    }
     rect
 }
 
@@ -773,76 +708,45 @@ fn client_rect(
         rect.loc.x = rect.loc.x.max(0);
         rect.loc.y = rect.loc.y.max(0);
         if let Some(limit) = x11_output_size {
-            // Fit the whole workspace instead of leaving app pixels outside
-            // the root rectangle where X11 cannot deliver pointer input.
-            let fit = (f64::from(limit.w) / f64::from(rect.size.w))
-                .min(f64::from(limit.h) / f64::from(rect.size.h))
-                .min(1.0);
-            rect.size = (
-                (f64::from(rect.size.w) * fit).round().clamp(1.0, f64::from(limit.w)) as i32,
-                (f64::from(rect.size.h) * fit).round().clamp(1.0, f64::from(limit.h)) as i32,
-            ).into();
-            rect.loc.x = rect.loc.x.min(limit.w - rect.size.w);
-            rect.loc.y = rect.loc.y.min(limit.h - rect.size.h);
+            // Keep the origin reachable without resizing the client merely
+            // because its window extends beyond the current monitor.
+            rect.loc.x = rect.loc.x.min((limit.w - rect.size.w).max(0));
+            rect.loc.y = rect.loc.y.min((limit.h - rect.size.h).max(0));
         }
     }
     rect
 }
 
 #[cfg(test)]
-mod scaling_tests {
+mod client_geometry_tests {
     use super::*;
 
     #[test]
-    fn app_fullscreen_keeps_native_swapchain_extent_across_browser_resizes() {
-        let monitor = Size::from((2560, 1440));
+    fn native_window_geometry_tracks_the_browser_as_the_output_resizes() {
         for size in [(1324, 838), (640, 900), (2560, 1440)] {
-            let preview = Rectangle::new((300, -100).into(), size.into());
-            for factor in [0.5, 1.0, 1.5, 2.0] {
-                let app = configured_workspace_rect(preview, factor, true, true, Some(monitor));
-                assert_eq!(app, Rectangle::from_size(monitor));
-                assert_eq!(preview.loc, Point::from((300, -100)));
-                assert_eq!(preview.size, Size::from(size));
-            }
+            let browser = Rectangle::from_size(size.into());
+            assert_eq!(configured_client_rect(browser, true, Some(size.into())), browser);
         }
     }
 
     #[test]
-    fn leaving_app_fullscreen_restores_workspace_scale_and_position() {
+    fn browser_columns_keep_their_requested_size_inside_the_shared_output() {
         let monitor = Size::from((2560, 1440));
-        let preview = Rectangle::new((100, 200).into(), (1000, 600).into());
-        let normal = configured_workspace_rect(preview, 1.5, true, false, Some(monitor));
-        assert_eq!(normal, Rectangle::new((100, 200).into(), (1500, 900).into()));
-        assert_eq!(configured_workspace_rect(preview, 1.5, true, true, Some(monitor)),
-            Rectangle::from_size(monitor));
-        assert_eq!(configured_workspace_rect(preview, 1.5, true, false, Some(monitor)), normal);
+        let browser = Rectangle::new((100, 200).into(), (1000, 600).into());
+        assert_eq!(configured_client_rect(browser, true, Some(monitor)), browser);
+        assert_eq!(configured_client_rect(browser, false, Some(monitor)), browser);
     }
 
     #[test]
-    fn browser_fullscreen_does_not_imply_native_x11_fullscreen() {
-        let monitor = Size::from((2560, 1440));
-        let browser = Rectangle::from_size((1324, 838).into());
-        assert_eq!(configured_workspace_rect(browser, 1.0, true, false, Some(monitor)), browser);
-        assert_eq!(configured_workspace_rect(browser, 1.5, false, true, Some(monitor)),
-            workspace_rect(browser, 1.5));
-    }
-
-    #[test]
-    fn oversized_x11_workspaces_fit_without_cropping_or_changing_preview_geometry() {
-        let limit = Size::from((1920, 1080));
-        for (requested, expected) in [
-            ((4000, 2000), (1920, 960)),
-            ((2000, 4000), (540, 1080)),
-            ((3840, 2160), (1920, 1080)),
-        ] {
-            let preview = Rectangle::new((-100, 200).into(), requested.into());
-            let app = client_rect(preview, true, Some(limit));
-            assert_eq!(app.size, Size::from(expected));
+    fn x11_windows_larger_than_the_monitor_keep_the_requested_dimensions() {
+        let monitor = Size::from((1319, 839));
+        for size in [(1324, 600), (4000, 2000), (2000, 4000), (3840, 2160)] {
+            let preview = Rectangle::new((-100, 200).into(), size.into());
+            let app = configured_client_rect(preview, true, Some(monitor));
+            assert_eq!(app.size, preview.size);
             assert_eq!(app.loc.x, 0);
-            assert!(app.loc.y + app.size.h <= limit.h);
-            assert_eq!(client_rect(preview, false, Some(limit)), preview);
-            assert_eq!(preview.size, Size::from(requested));
-            assert_eq!(preview.loc, Point::from((-100, 200)));
+            assert_eq!(app.loc.y, 200.min((monitor.h - app.size.h).max(0)));
+            assert_eq!(client_rect(preview, false, Some(monitor)), preview);
         }
     }
 
@@ -857,62 +761,69 @@ mod scaling_tests {
     }
 
     #[test]
-    fn every_scaled_x11_workspace_keeps_its_far_corner_reachable() {
+    fn fitting_x11_windows_keep_the_far_corner_reachable_without_resizing() {
         let limit = Size::from((1319, 839));
         for position in [(-1000, -200), (0, 0), (1000, 700)] {
-            let preview = Rectangle::new(position.into(), (1000, 600).into());
-            for factor in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
-                let requested = workspace_rect(preview, factor);
+            for size in [(640, 480), (1000, 600), (1319, 839)] {
+                let requested = Rectangle::new(position.into(), size.into());
                 let app = client_rect(requested, true, Some(limit));
+                assert_eq!(app.size, requested.size);
                 assert!(app.loc.x >= 0 && app.loc.y >= 0);
                 assert!(app.loc.x + app.size.w <= limit.w);
                 assert!(app.loc.y + app.size.h <= limit.h);
-                assert!(app.size.w > 0 && app.size.h > 0);
-                // Integer rounding may change either dimension by half a pixel.
-                let cross_error = (i64::from(app.size.w) * i64::from(requested.size.h)
-                    - i64::from(app.size.h) * i64::from(requested.size.w)).abs();
-                assert!(cross_error <= i64::from(requested.size.w + requested.size.h) / 2);
             }
         }
     }
 
     #[test]
-    fn x11_bounds_are_separate_from_browser_output_changes() {
+    fn x11_pointer_bounds_follow_the_shared_output() {
         let mut layout = Layout::new((1000, 600).into());
-        assert_eq!(layout.x11_output_size, None);
-        layout.set_x11_output_size((1920, 1080).into());
         layout.set_output_size((800, 1200).into());
-        assert_eq!(layout.x11_output_size, Some(Size::from((1920, 1080))));
-        assert_eq!(layout.output_size(), Size::from((800, 1200)));
+        let browser = Rectangle::from_size((800, 1200).into());
+        assert_eq!(configured_client_rect(browser, true, Some(layout.output_size())), browser);
     }
 
     #[test]
-    fn scrolled_x11_workspaces_remain_addressable_at_reduced_scale() {
+    fn scrolled_x11_windows_remain_addressable() {
         let browser = Rectangle::new((-1000, -200).into(), (2000, 1000).into());
-        for factor in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
-            let app = client_rect(workspace_rect(browser, factor), true, None);
-            assert_eq!(app.loc, Point::from((0, 0)));
-            // The visible browser origin falls halfway across the window.
-            let pointer_root_x = f64::from(app.loc.x) + 0.5 * f64::from(app.size.w);
-            assert!(pointer_root_x >= 0.0 && pointer_root_x < f64::from(app.size.w));
-            let native = client_rect(workspace_rect(browser, factor), false, None);
-            assert_eq!(native.loc, browser.loc, "Wayland geometry is unchanged");
-        }
-        assert_eq!(browser.loc, Point::from((-1000, -200)));
+        let app = client_rect(browser, true, None);
+        assert_eq!(app.loc, Point::from((0, 0)));
+        assert_eq!(app.size, browser.size);
+        // The visible browser origin falls halfway across the window.
+        let pointer_root_x = f64::from(app.loc.x) + 0.5 * f64::from(app.size.w);
+        assert!(pointer_root_x >= 0.0 && pointer_root_x < f64::from(app.size.w));
+        assert_eq!(client_rect(browser, false, None), browser);
         let visible = Rectangle::new((100, 200).into(), (1000, 500).into());
         assert_eq!(client_rect(visible, true, None), visible);
     }
 
     #[test]
-    fn workspace_factors_change_app_size_without_moving_the_browser_rectangle() {
-        let base = Rectangle::new((17, 23).into(), (1000, 500).into());
-        for factor in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
-            let configured = workspace_rect(base, factor);
-            assert_eq!(configured.loc, base.loc);
-            assert_eq!(configured.size.w, (1000.0 * factor) as i32);
-            assert_eq!(configured.size.h, (500.0 * factor) as i32);
+    fn valid_capture_boundaries_keep_the_exact_browser_size() {
+        for size in [(4096, 4096), (8192, 2048), (2048, 8192)] {
+            let browser = Rectangle::new((17, 23).into(), size.into());
+            assert_eq!(configured_client_rect(browser, false, None), browser);
         }
-        let oversized = workspace_rect(Rectangle::from_size((8000, 8000).into()), 2.0);
-        assert!(crate::scaling::valid_capture_size(oversized.size.to_physical(1)));
+    }
+
+    #[test]
+    fn oversized_native_configures_are_bounded_before_the_app_allocates_buffers() {
+        for size in [(8000, 8000), (8193, 1024), (1024, 8193), (i32::MAX, i32::MAX)] {
+            let browser = Rectangle::new((17, 23).into(), size.into());
+            let app = configured_client_rect(browser, false, None);
+            assert_eq!(app.loc, browser.loc);
+            assert!(app.size.w <= browser.size.w && app.size.h <= browser.size.h);
+            assert!(crate::surface_density::valid_capture_size(app.size.to_physical(1)));
+        }
+    }
+
+    #[test]
+    fn ordinary_windows_follow_browser_dimensions_without_density_multipliers() {
+        let monitor = Size::from((2560, 1440));
+        for size in [(662, 814), (1000, 500), (1324, 838), (1324, 970)] {
+            let browser = Rectangle::new((17, 23).into(), size.into());
+            for x11 in [false, true] {
+                assert_eq!(configured_client_rect(browser, x11, Some(monitor)), browser);
+            }
+        }
     }
 }

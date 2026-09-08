@@ -1,0 +1,56 @@
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -2029,6 +2029,17 @@
+     unsigned long old_generation, generation;
+     long old_monitors[4], monitors[4];
+     UINT flags;
++    const char *canvas_follow = getenv( "WINE_CANVAS_FOLLOW_HOST" );
++    BOOL canvas_native = FALSE;
++
++    if (data->is_fullscreen && canvas_follow && !strcmp( canvas_follow, "1" ))
++    {
++        UINT x = 0, y = 0, dpi = NtUserGetDpiForWindow( data->hwnd );
++        UINT previous = NtUserSetThreadDpiAwarenessContext( NTUSER_DPI_PER_MONITOR_AWARE_V2 );
++        HMONITOR monitor = NtUserMonitorFromWindow( data->hwnd, MONITOR_DEFAULTTONEAREST );
++        if (NtUserGetDpiForMonitor( monitor, MDT_RAW_DPI, &x, &y )) canvas_native = x == dpi && y == dpi;
++        NtUserSetThreadDpiAwarenessContext( previous );
++    }
+ 
+     if (!data->managed) return 0; /* unmanaged windows are managed by the Win32 side */
+     if (is_virtual_desktop()) return 0; /* ignore window manager config changes in virtual desktop mode */
+@@ -2039,12 +2050,18 @@
+     if (data->mwm_hints_serial) return 0; /* another MWM_HINT update is pending, wait for it to complete */
+     if (data->configure_serial) return 0; /* another config update is pending, wait for it to complete */
+ 
++    /* Native host geometry must not replace a game's explicit emulated mode,
++     * including rotations where the old rectangle no longer covers the monitor. */
++    if (data->is_fullscreen && canvas_follow && !strcmp( canvas_follow, "1" ) && !canvas_native) return 0;
++
+     /* Ignore fullscreen config changes when it's still on the same monitor. This is needed because
+      * adding __NET_WM_STATE_FULLSCREEN will make WMs move the window to cover exactly the monitor
+      * rect. If the application sets a visible rect slightly larger than the monitor rect and insists
+      * on changing to the rect that it previously set when the rect is changed by the WM, then the
+      * window rect will be repeatedly changed by the WM and the application, causing a flickering effect */
+-    if (data->is_fullscreen)
++    /* A canvas-managed fullscreen window must receive the native resize even
++     * when ConfigureNotify arrives before the updated RandR monitor cache. */
++    if (data->is_fullscreen && !canvas_native)
+     {
+         if (xinerama_get_fullscreen_monitors( &data->rects.visible, &old_generation, old_monitors )
+             && xinerama_get_fullscreen_monitors( &data->current_state.rect, &generation, monitors )
+@@ -2052,6 +2069,15 @@
+             return 0;
+     }
+ 
++    /* Exclusive presentation can advance the native monitor rectangle before
++     * the actual Win32 client receives ConfigureNotify. Compare against the
++     * Win32 rectangle rather than treating that native cache as an acknowledgement. */
++    if (canvas_native)
++    {
++        UINT dpi = NtUserGetWinMonitorDpi( data->hwnd, MDT_WINE_RAW_DPI );
++        NtUserGetWindowRect( data->hwnd, &old_rect, dpi );
++    }
++
+     flags = SWP_NOACTIVATE | SWP_NOZORDER;
+     rect = new_rect = window_rect_from_visible( &data->rects, data->current_state.rect );
+     if (new_rect.left == old_rect.left && new_rect.top == old_rect.top) flags |= SWP_NOMOVE;

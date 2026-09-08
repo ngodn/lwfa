@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest"
 import {
   PROTOCOL_VERSION,
   ProtocolError,
+  ProtocolVersionError,
   decodeToEngine,
   decodeToShell,
   encode,
@@ -60,6 +61,21 @@ const toShell = fixtures("to-shell")
 const toEngine = fixtures("to-engine")
 
 describe("protocol version", () => {
+  it("reports version mismatch before decoding obsolete window metadata", () => {
+    const oldHello = {
+      type: "hello", protocolVersion: 1,
+      windows: [{ id: 1, scaling: { mode: "sharp", scale: 1 }, effectiveScale: 1 }],
+    }
+    expect(() => decodeToShell(JSON.stringify(oldHello))).toThrow(ProtocolVersionError)
+    expect(() => decodeToShell(JSON.stringify(oldHello))).toThrow(/Update lwfa and reload/)
+  })
+
+  it("rejects removed window scaling requests", () => {
+    expect(() => decodeToEngine(JSON.stringify({
+      type: "setWindowScaling", id: 1, scaling: { mode: "workspace", scale: 1.5 },
+    }))).toThrow(/unknown message type/)
+  })
+
   it("matches the Rust constant", () => {
     // Read out of the Rust source rather than duplicated by hand, so bumping
     // one side without the other fails here instead of at runtime.
@@ -93,14 +109,12 @@ describe("engine to shell", () => {
       appId: "Alacritty",
       title: "~/development/lwfa",
       fullscreen: true,
-      scaling: { mode: "sharp", scale: 1 },
       xwayland: false,
-      effectiveScale: 1,
     })
     // A window that has not set app_id or title yet is normal, not an error.
     expect(hello.windows[1]).toEqual({
       id: 2, appId: null, title: null, fullscreen: false,
-      scaling: { mode: "sharp", scale: 1 }, xwayland: false, effectiveScale: 1,
+      xwayland: false,
     })
     expect(hello.focused).toBe(1)
   })

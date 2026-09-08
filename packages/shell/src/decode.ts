@@ -134,7 +134,7 @@ export class FrameDecoder {
     }
 
     // Parameter sets on each keyframe describe the real profile and level,
-    // including HEVC level 6 when density scaling goes beyond 4K.
+    // including HEVC level 6 for frames larger than 4K.
     const codec = keyframe ? codecFromAnnexB(frame.payload, family) : null
     if (keyframe && !codec) {
       // Do not feed a truncated parameter set into a previously valid decoder.

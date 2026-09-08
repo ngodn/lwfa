@@ -1,5 +1,8 @@
 # Window scaling status
 
+Historical record. Sharper and More space were removed on 2026-09-08.
+See [the removal and regression checks](canvas-sizing-removal.md) for current behavior.
+
 Status as of 2026-09-07. Version 1.5.0 is implemented and verified locally,
 ready for the user's package/upgrade test. It has not been installed into the
 production compositor or published as a release.

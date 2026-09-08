@@ -141,6 +141,22 @@ for doc in "$ROOT"/docs/*.md; do
 done
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 
+# Wine is a separate compatibility tool. Only a complete, pinned artifact may
+# travel with the installer; the ordinary engine package needs no Wine runtime.
+if [ -n "${LWFA_WINE_CANVAS_ARTIFACT:-}" ]; then
+  CANVAS_ARTIFACT="$(cd "$LWFA_WINE_CANVAS_ARTIFACT" && pwd)"
+  CANVAS_CHECK=()
+  [ "${LWFA_PORTABLE_BUILD:-0}" != 1 ] || CANVAS_CHECK+=(--portable)
+  python3 "$ROOT/compat/wine-canvas/manage.py" validate --bundle "$CANVAS_ARTIFACT" "${CANVAS_CHECK[@]}"
+  CANVAS_STAGE="$STAGE/share/lwfa/compat/wine-canvas"
+  mkdir -p "$CANVAS_STAGE"
+  cp -a "$ROOT/compat/wine-canvas/." "$CANVAS_STAGE/"
+  rm -rf "$CANVAS_STAGE/__pycache__"
+  "${CC:-cc}" -O2 -std=c11 -Wall -Wextra -Werror "$ROOT/compat/wine-canvas/launcher.c" -o "$CANVAS_STAGE/launcher"
+  cp -a "$CANVAS_ARTIFACT" "$CANVAS_STAGE/artifact"
+  say "  bundled the verified Wine canvas compatibility tool"
+fi
+
 say "collecting libraries"
 COPIED=0
 SKIPPED=0

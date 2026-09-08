@@ -1,12 +1,15 @@
-// Isolated fullscreen Wine window -> engine stream regression. No game prefix
-// or display mode is changed. Explicit test engine and display are mandatory.
+// Isolated fullscreen Wine window -> engine stream regression. Uses a fresh
+// prefix and changes only the explicitly selected test compositor's display.
 // Required: LWFA_ISOLATED_TEST=1 LWFA_TEST_URL AUTH_PASS LWFA_TEST_DISPLAY
 // PROTON_DIR ZIG. Optional LWFA_TEST_RESULTS_DIR (default target/proton-fullscreen).
 // LWFA_TEST_DXVK=1 uses GE's native D3D11 fullscreen swapchain implementation.
-// LWFA_TEST_FULLSCREEN_MATRIX=1 also exercises rejected scaling and fullscreen exit.
-// LWFA_TEST_SCALING_ENABLED=1 retains the enabled-scaling matrix for older builds.
+// LWFA_TEST_WINDOWS_ARCH=i686 also exercises the 32-bit Wine libraries.
+// LWFA_TEST_FULLSCREEN_MATRIX=1 also exercises viewport resizing and fullscreen exit.
+// LWFA_TEST_ALLOW_CACHED_MODE=1 diagnoses presentation while permitting an old Wine virtual mode.
+// LWFA_TEST_CANVAS_OUTPUT=1 requires monitor and app dimensions to follow each viewport.
+// LWFA_TEST_DXVK_RESPONSIVE=1 also resizes fullscreen buffers on client-size changes.
 // LWFA_TEST_RENDER_SIZE=1280x720 selects a smaller DXVK emulated display mode.
-// LWFA_TEST_BROWSER=1 verifies the built shell's contained image and mouse input.
+// LWFA_TEST_BROWSER=1 verifies the built shell's full-canvas image and mouse input.
 // LWFA_TEST_MONITOR_SIZE=WxH asserts the monitor selected after the first viewport.
 // Without it, query the selected monitor; explicit fixed-resolution engines work too.
 import assert from 'node:assert/strict';
@@ -31,9 +34,14 @@ await mkdir(resultsDir, { recursive: true });
 const temporary = await mkdtemp(join(tmpdir(), 'lwfa-proton-fullscreen-'));
 const prefix = join(temporary, 'prefix');
 await mkdir(prefix);
-const env = { ...process.env, DISPLAY: process.env.LWFA_TEST_DISPLAY, WAYLAND_DISPLAY: '', WINEPREFIX: prefix, WINEDEBUG: '-all', WINEDLLOVERRIDES: 'mscoree,mshtml=', WINEESYNC: '0', WINEFSYNC: '0' };
+const env = { ...process.env, DISPLAY: process.env.LWFA_TEST_DISPLAY, WAYLAND_DISPLAY: '', WINEPREFIX: prefix, WINEDEBUG: process.env.LWFA_TEST_WINE_DEBUG || '-all', WINEDLLOVERRIDES: 'mscoree,mshtml=', WINEESYNC: '0', WINEFSYNC: '0' };
 const dxvk = process.env.LWFA_TEST_DXVK === '1';
-const scalingEnabled = process.env.LWFA_TEST_SCALING_ENABLED === '1';
+const windowsArch = process.env.LWFA_TEST_WINDOWS_ARCH || 'x86_64';
+assert(['x86_64', 'i686'].includes(windowsArch), 'LWFA_TEST_WINDOWS_ARCH must be x86_64 or i686');
+const canvasOutput = process.env.LWFA_TEST_CANVAS_OUTPUT === '1';
+const allowCachedMode = process.env.LWFA_TEST_ALLOW_CACHED_MODE === '1';
+if (process.env.LWFA_TEST_DXVK_RESPONSIVE === '1') env.LWFA_FIXTURE_RESPONSIVE = '1';
+let protocolVersion, expectedMonitor;
 const renderSize = process.env.LWFA_TEST_RENDER_SIZE?.match(/^(\d+)x(\d+)$/);
 assert(!process.env.LWFA_TEST_RENDER_SIZE || (dxvk && renderSize && Number(renderSize[1]) > 100 && Number(renderSize[2]) > 100), 'LWFA_TEST_RENDER_SIZE requires DXVK and positive WxH dimensions greater than the corner markers');
 if (renderSize) {
@@ -45,8 +53,8 @@ if (dxvk) {
   env.DXVK_LOG_PATH = resultsDir;
 }
 delete env.LD_PRELOAD;
-const results = { startedAt: new Date().toISOString(), viewport: { width: 1324, height: 838 }, phases: [], errors: [] };
-let socket, child, childError, output = '', interrupted = false;
+const results = { startedAt: new Date().toISOString(), windowsArch, viewport: { width: 1324, height: 838 }, phases: [], errors: [] };
+let socket, child, childError, output = '', diagnostics = '', interrupted = false;
 let frames = 0, latestFrame;
 const stop = () => { interrupted = true; };
 process.on('SIGINT', stop); process.on('SIGTERM', stop);
@@ -79,9 +87,9 @@ function x11Snapshot() {
 }
 try {
   const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/proton-fullscreen-window.c');
-  run(process.env.ZIG, ['cc', '-std=c11', '-target', 'x86_64-windows-gnu', fixture, '-o', join(temporary, 'fixture.exe'), '-luser32', '-lgdi32', ...(dxvk ? ['-DDXVK_FIXTURE', '-ld3d11', '-ldxgi'] : [])], { timeout: 180000 });
+  run(process.env.ZIG, ['cc', '-std=c11', '-target', `${windowsArch === 'i686' ? 'x86' : windowsArch}-windows-gnu`, fixture, '-o', join(temporary, 'fixture.exe'), '-luser32', '-lgdi32', ...(dxvk ? ['-DDXVK_FIXTURE', '-ld3d11', '-ldxgi'] : [])], { timeout: 180000 });
   if (dxvk) {
-    for (const name of ['d3d11.dll', 'dxgi.dll']) await copyFile(join(process.env.PROTON_DIR, 'files/lib/wine/dxvk/x86_64-windows', name), join(temporary, name));
+    for (const name of ['d3d11.dll', 'dxgi.dll']) await copyFile(join(process.env.PROTON_DIR, `files/lib/wine/dxvk/${windowsArch === 'i686' ? 'i386' : 'x86_64'}-windows`, name), join(temporary, name));
     results.renderer = 'DXVK D3D11 fullscreen swapchain';
   }
   // Query this test display's native geometry, independently of Wine's
@@ -93,6 +101,18 @@ static int find(Display*d,Window w,int depth){char*n=NULL;XFetchName(d,w,&n);int
 int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,DefaultRootWindow(d),0);XCloseDisplay(d);return found?0:3;}
 `);
   run(process.env.CC || 'cc', ['-std=c11', join(temporary, 'x11.c'), '-lX11', '-o', join(temporary, 'x11')]);
+  await writeFile(join(temporary, 'pointer.c'), `#include <X11/Xlib.h>
+#include <stdio.h>
+static void tree(Display*d,Window w,int depth){XWindowAttributes a;Window root,parent,*kids=NULL;unsigned count=0;
+if(depth>8||!XGetWindowAttributes(d,w,&a))return;
+printf("%*s0x%lx %dx%d+%d+%d class=%d mapped=%d\\n",depth,"",w,a.width,a.height,a.x,a.y,a.class,a.map_state);
+if(XQueryTree(d,w,&root,&parent,&kids,&count)){for(unsigned i=0;i<count;i++)tree(d,kids[i],depth+1);if(kids)XFree(kids);}}
+int main(int argc,char**argv){(void)argv;Display*d=XOpenDisplay(NULL);if(!d)return 2;Window root,child;int x,y,wx,wy;unsigned mask;
+if(argc>1){tree(d,DefaultRootWindow(d),0);XCloseDisplay(d);return 0;}
+if(!XQueryPointer(d,DefaultRootWindow(d),&root,&child,&x,&y,&wx,&wy,&mask))return 3;
+printf("%d %d %lu\\n",x,y,child);XCloseDisplay(d);return 0;}
+`);
+  run(process.env.CC || 'cc', ['-std=c11', join(temporary, 'pointer.c'), '-lX11', '-o', join(temporary, 'pointer')]);
   const windows = new Map();
   let hello = false;
   socket = new WebSocket(url); socket.binaryType = 'arraybuffer';
@@ -103,7 +123,7 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
       return;
     }
     const message = JSON.parse(data);
-    if (message.type === 'hello') { hello = true; for (const window of message.windows) windows.set(window.id, window); }
+    if (message.type === 'hello') { protocolVersion = message.protocolVersion; hello = true; for (const window of message.windows) windows.set(window.id, window); }
     if (message.window && typeof message.window === 'object') windows.set(message.window.id, message.window);
     if (message.type === 'windowClosed') windows.delete(message.id);
     if (message.type === 'fullscreenRequest') results.phases.push({ event: message, at: new Date().toISOString() });
@@ -118,7 +138,9 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
     const query = spawnSync('xrandr', ['--current'], { env, encoding: 'utf8', timeout: 2000 });
     if (query.status !== 0) return false;
     screen = query.stdout.split('\n')[0];
-    return /current (\d+) x (\d+)/.test(screen);
+    const expected = process.env.LWFA_TEST_MONITOR_SIZE || `${results.viewport.width}x${results.viewport.height}`;
+    const [w,h] = expected.split('x');
+    return screen.includes(`current ${w} x ${h},`);
   }, 'Xwayland ready after the first viewport');
   const dimensions = /current (\d+) x (\d+)/.exec(screen);
   const monitor = { width: Number(dimensions[1]), height: Number(dimensions[2]) };
@@ -129,27 +151,31 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
   }
   results.display = screen;
   results.monitor = monitor;
+  expectedMonitor = monitor;
   child = spawn(join(process.env.PROTON_DIR, 'files/bin/wine'), [join(temporary, 'fixture.exe')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', error => { childError = error; });
-  child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { output += data; });
+  // Wine traces can arrive between chunks of a fixture JSON record. Keep
+  // stderr separate so enabling diagnostics cannot corrupt observations.
+  child.stdout.on('data', data => { output += data; });
+  child.stderr.on('data', data => { diagnostics += data; });
   let id;
   await until(() => { id = [...windows.values()].find(window => window.title === 'lwfa-proton-fullscreen-fixture')?.id; return id !== undefined && output.includes('FULLSCREEN_FIXTURE_READY'); }, 'Wine fullscreen fixture', 60000);
   if (dxvk) assert(output.includes('DXVK_FIXTURE_READY'), 'D3D11 fullscreen swapchain must initialize');
   results.window = id;
   results.phases.push({ phase: 'native-fullscreen', at: new Date().toISOString(), win32: records('RECT').at(-1), x11: x11Snapshot(), metadata: windows.get(id) });
-  async function checkPhase(name, messages, expectedSize, fullscreen = true, expectedRejection = false) {
-    const errorsBefore = results.errors.length;
-    const beforeRejection = expectedRejection ? {
-      x11: x11Snapshot(),
-      frame: { width: latestFrame.header.width, height: latestFrame.header.height },
-      client: records('RECT').at(-1),
-    } : undefined;
+  async function checkPhase(name, messages, expectedSize, fullscreen = true) {
     const before = frames;
     const rectsBefore = records('RECT').length;
     for (const message of messages) send(message);
-    await until(() => frames >= before + 5 && records('RECT').length >= rectsBefore + 3 && (!expectedSize || latestFrame.header.width === expectedSize.width && latestFrame.header.height === expectedSize.height), `${name}: stream and Win32 resize observations`);
+    await until(() => {
+      const rectangles = records('RECT');
+      const client = rectangles.at(-1);
+      return frames >= before + 5 && rectangles.length >= rectsBefore + 3
+        && (!expectedSize || latestFrame.header.width === expectedSize.width && latestFrame.header.height === expectedSize.height)
+        && (!expectedSize || allowCachedMode || renderSize || client.clientWidth === expectedSize.width && client.clientHeight === expectedSize.height);
+    }, `${name}: stream and Win32 resize observations`);
     const captured = latestFrame;
-    const phase = { phase: name, at: new Date().toISOString(), win32: records('RECT').at(-1), x11: x11Snapshot(), metadata: windows.get(id), frame: captured.header };
+    const phase = { phase: name, at: new Date().toISOString(), win32: records('RECT').at(-1), desktop: records('DESKTOP').at(-1), x11: x11Snapshot(), metadata: windows.get(id), frame: captured.header };
     if (dxvk) phase.swapchain = records('SWAP').at(-1);
     results.phases.push(phase);
     assert.equal(captured.header.format, 0, 'Regression captures JPEG for independent pixel inspection');
@@ -159,7 +185,7 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
     const { width, height } = captured.header;
     // Wine fits an emulated fullscreen mode inside its physical monitor. Its
     // letterboxing is already in the captured pixels, separately from CSS fit.
-    const render = phase.swapchain || { width, height };
+    const render = renderSize ? phase.swapchain : { width, height };
     const fit = Math.min(width / render.width, height / render.height);
     const painted = { width: render.width * fit, height: render.height * fit };
     const origin = { x: (width - painted.width) / 2, y: (height - painted.height) / 2 };
@@ -169,35 +195,26 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
     phase.corners = points.map(([x,y]) => [...rgb.subarray((Math.floor(y*height)*width+Math.floor(x*width))*3, (Math.floor(y*height)*width+Math.floor(x*width))*3+3)]);
     const mouseBefore = records('MOUSE').length;
     const [mouseX, mouseY] = inFrame([.98, .98]);
-    send({ type: 'pointerMotion', window: id, x: mouseX, y: mouseY, normalized: true });
+    send({ type: 'pointerMotion', window: id, x: protocolVersion === 0 ? mouseX * width : mouseX, y: protocolVersion === 0 ? mouseY * height : mouseY, ...(protocolVersion === 0 ? {} : { normalized: true }) });
     send({ type: 'pointerButton', button: 272, pressed: true }); send({ type: 'pointerButton', button: 272, pressed: false });
     await until(() => records('MOUSE').length > mouseBefore, 'bottom-right click');
     phase.mouse = records('MOUSE').at(-1);
     const expectedColors = [[255,0,0],[0,255,0],[0,0,255],[255,255,0]];
     phase.allCornersVisible = phase.corners.every((color, i) => color.every((channel, j) => Math.abs(channel - expectedColors[i][j]) < 60));
     phase.inputReachesClientBottomRight = phase.mouse.x > phase.win32.clientWidth - 100 && phase.mouse.y > phase.win32.clientHeight - 100;
-    const inputWidth = phase.swapchain?.width ?? phase.win32.clientWidth;
-    const inputHeight = phase.swapchain?.height ?? phase.win32.clientHeight;
+    // WM_LBUTTONDOWN reports client coordinates, including when a retained
+    // backbuffer is scaled to a resized native-mode client.
+    const inputWidth = phase.win32.clientWidth;
+    const inputHeight = phase.win32.clientHeight;
     phase.inputReachesBottomRight = phase.mouse.x > inputWidth - 100 && phase.mouse.y > inputHeight - 100 && phase.mouse.x < inputWidth && phase.mouse.y < inputHeight;
     phase.display = run('xrandr', ['--current']).split('\n')[0];
-    assert(phase.display.includes(`current ${monitor.width} x ${monitor.height}`), 'Shared monitor stays at its selected size in every phase');
-    if (!renderSize) {
-      assert.equal(phase.win32.monitorWidth, monitor.width);
-      assert.equal(phase.win32.monitorHeight, monitor.height);
+    assert(phase.display.includes(`current ${expectedMonitor.width} x ${expectedMonitor.height}`), 'Xwayland monitor must match the expected viewport policy');
+    phase.virtualMonitorFollowsPhysical = phase.win32.monitorWidth === expectedMonitor.width && phase.win32.monitorHeight === expectedMonitor.height;
+    if (!renderSize && !allowCachedMode) {
+      assert.equal(phase.win32.monitorWidth, expectedMonitor.width);
+      assert.equal(phase.win32.monitorHeight, expectedMonitor.height);
     }
     assert(!output.includes('GPU_ERROR'), 'GPU operations must succeed');
-    if (expectedRejection) {
-      const rejected = results.errors.splice(errorsBefore);
-      assert.equal(rejected.length, 1, 'Disabled scaling must return exactly one error');
-      assert.equal(rejected[0].request, 'setWindowScaling');
-      assert.match(rejected[0].message, /scaling is temporarily disabled/i);
-      phase.expectedRejection = rejected[0];
-      assert.deepEqual(phase.metadata.scaling, { mode: 'sharp', scale: 1 }, 'Rejected scaling preserves 1× settings');
-      assert.deepEqual(phase.x11, beforeRejection.x11, 'Rejected scaling preserves native geometry and fullscreen state');
-      assert.deepEqual({ width, height }, beforeRejection.frame, 'Rejected scaling preserves capture dimensions');
-      assert.equal(phase.win32.clientWidth, beforeRejection.client.clientWidth);
-      assert.equal(phase.win32.clientHeight, beforeRejection.client.clientHeight);
-    }
     assert.equal(results.errors.length, 0, 'No unexpected engine errors');
     assert(phase.allCornersVisible, `Fullscreen image cropped: ${JSON.stringify(phase.corners)}`);
     assert(phase.inputReachesBottomRight, 'Normalized bottom-right input must reach the app bottom-right');
@@ -205,15 +222,17 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
     if (expectedSize) {
       assert.equal(phase.x11.width, expectedSize.width);
       assert.equal(phase.x11.height, expectedSize.height);
-      assert.equal(phase.win32.clientWidth, expectedSize.width);
-      assert.equal(phase.win32.clientHeight, expectedSize.height);
+      if (!allowCachedMode) {
+        const clientSize = renderSize && fullscreen
+          ? { width: Number(renderSize[1]), height: Number(renderSize[2]) }
+          : expectedSize;
+        assert.equal(phase.win32.clientWidth, clientSize.width);
+        assert.equal(phase.win32.clientHeight, clientSize.height);
+      }
     }
   }
   const layout = { type: 'setLayout', windows: [{ id, z: 0, rect: { x: 0, y: 0, ...results.viewport } }], animate: null };
-  await checkPhase('browser-layout', [{ type: 'focusWindow', id }, layout, { type: 'setWindowScaling', id, scaling: { mode: 'sharp', scale: 1 } }, { type: 'setStreams', windows: [id], codecs: [] }], renderSize ? undefined : monitor);
-  if (!scalingEnabled) {
-    await checkPhase('fullscreen-workspace-rejected', [{ type: 'setWindowScaling', id, scaling: { mode: 'workspace', scale: 1.5 } }], renderSize ? undefined : monitor, true, true);
-  }
+  await checkPhase('browser-layout', [{ type: 'focusWindow', id }, layout, { type: 'setStreams', windows: [id], codecs: [] }], renderSize ? undefined : monitor);
   if (process.env.LWFA_TEST_BROWSER === '1') {
     const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium' });
@@ -243,12 +262,11 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
         const bounds = element.getBoundingClientRect();
         return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, sourceWidth: element.width, sourceHeight: element.height, objectFit: getComputedStyle(element).objectFit };
       });
-      assert.equal(geometry.objectFit, 'contain', 'Built shell must preserve X11 image aspect ratio');
+      assert.equal(geometry.objectFit, 'fill', 'Built shell must use the whole canvas');
       assert.equal(geometry.sourceWidth, latestFrame.header.width);
       assert.equal(geometry.sourceHeight, latestFrame.header.height);
-      const scale = Math.min(geometry.width / geometry.sourceWidth, geometry.height / geometry.sourceHeight);
-      const paintedWidth = geometry.sourceWidth * scale, paintedHeight = geometry.sourceHeight * scale;
-      const offsetX = (geometry.width - paintedWidth) / 2, offsetY = (geometry.height - paintedHeight) / 2;
+      const paintedWidth = geometry.width, paintedHeight = geometry.height;
+      const offsetX = 0, offsetY = 0;
       const previous = records('MOUSE').length;
       const render = records('SWAP').at(-1) || { width: geometry.sourceWidth, height: geometry.sourceHeight };
       const sourceFit = Math.min(geometry.sourceWidth / render.width, geometry.sourceHeight / render.height);
@@ -259,13 +277,7 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
       const mouse = records('MOUSE').at(-1);
       const extent = records('SWAP').at(-1) || { width: records('RECT').at(-1).clientWidth, height: records('RECT').at(-1).clientHeight };
       assert(mouse.x > extent.width - 100 && mouse.x < extent.width && mouse.y > extent.height - 100 && mouse.y < extent.height, 'Built shell click reaches rendered bottom-right');
-      assert(offsetX > 2 || offsetY > 2, 'Fixture must exercise actual letterboxing');
-      wire.length = 0;
-      const margin = offsetY > 2 ? { x: geometry.x + geometry.width / 2, y: geometry.y + offsetY / 2 } : { x: geometry.x + offsetX / 2, y: geometry.y + geometry.height / 2 };
-      await page.mouse.click(margin.x, margin.y);
-      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      results.browser = { geometry, mouse, margin, marginWire: [...wire], passed: false };
-      assert(!wire.some(message => message.type === 'pointerButton' && message.pressed || message.type === 'touchDown'), 'Letterbox margins must not send application presses');
+      results.browser = { geometry, mouse, passed: false };
       const beforeReload = x11Snapshot();
       await page.reload();
       await surface.waitFor();
@@ -295,30 +307,24 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
     } finally { await browser.close(); }
   }
   if (process.env.LWFA_TEST_FULLSCREEN_MATRIX === '1') {
-    await checkPhase('browser-viewport-resize', [{ type: 'setViewport', width: 1490, height: 910, scale: 1 }], monitor);
-    if (scalingEnabled) {
-      for (const scale of [1.5, 2]) await checkPhase(`fullscreen-workspace-${scale}`, [{ type: 'setWindowScaling', id, scaling: { mode: 'workspace', scale } }], monitor);
-    } else {
-      for (const [name, scaling] of [['sharp', { mode: 'sharp', scale: 1.5 }], ['auto', { mode: 'sharp', scale: null }]]) {
-        await checkPhase(`fullscreen-${name}-rejected`, [{ type: 'setWindowScaling', id, scaling }], monitor, true, true);
-      }
+    for (const [width, height] of [[1490, 910], [838, 1324], [640, 480], [1324, 838]]) {
+      if (canvasOutput) expectedMonitor = { width, height };
+      await checkPhase(`browser-resize-${width}x${height}`, [{ type: 'setViewport', width, height, scale: 1 }, { type: 'setLayout', windows: [{ id, z: 0, rect: { x: 0, y: 0, width, height } }], animate: null }], canvasOutput ? { width, height } : monitor);
     }
-    send({ type: 'setWindowScaling', id, scaling: { mode: 'sharp', scale: 1 } });
     send({ type: 'focusWindow', id });
     send({ type: 'key', key: 87, pressed: true }); send({ type: 'key', key: 87, pressed: false });
     await until(() => output.includes('FULLSCREEN_EXIT_REQUESTED'), 'fixture fullscreen exit');
     await checkPhase('windowed-restored', [layout], results.viewport, false);
-    const requested = { width: 1986, height: 1257 };
-    const fit = Math.min(1, monitor.width / requested.width, monitor.height / requested.height);
-    const workspace = { width: Math.round(requested.width * fit), height: Math.round(requested.height * fit) };
-    await checkPhase(scalingEnabled ? 'windowed-workspace-1.5' : 'windowed-workspace-rejected',
-      [{ type: 'setWindowScaling', id, scaling: { mode: 'workspace', scale: 1.5 } }],
-      scalingEnabled ? workspace : results.viewport, false, !scalingEnabled);
+
   }
   results.passed = true;
 } catch (error) {
   results.passed = false; results.error = error.message;
-  results.observations = { frames, latestFrame: latestFrame?.header, rectangles: records('RECT').length, lastRectangle: records('RECT').at(-1), lastSwapchain: records('SWAP').at(-1) };
+  results.observations = { frames, latestFrame: latestFrame?.header, rectangles: records('RECT').length, lastRectangle: records('RECT').at(-1), desktop: records('DESKTOP').at(-1), lastSwapchain: records('SWAP').at(-1), cursor: records('CURSOR').at(-1) };
+  try {
+    results.observations.nativePointer = run(join(temporary, 'pointer'), []).trim().split(' ').map(Number);
+    await writeFile(join(resultsDir, 'x11-tree.txt'), run(join(temporary, 'pointer'), ['--tree']));
+  } catch (diagnosticError) { results.observations.diagnosticError = diagnosticError.message; }
   if (latestFrame?.header.format === 0) await writeFile(join(resultsDir, 'last-frame.jpg'), latestFrame.payload);
   process.exitCode = 1;
 } finally {
@@ -331,6 +337,7 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
   }
   socket?.close();
   await writeFile(join(resultsDir, 'wine.log'), output);
+  await writeFile(join(resultsDir, 'wine-stderr.log'), diagnostics);
   results.finishedAt = new Date().toISOString();
   await writeFile(join(resultsDir, 'results.json'), JSON.stringify(results, null, 2)+'\n');
   await rm(temporary, { recursive: true, force: true });

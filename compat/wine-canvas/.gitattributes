@@ -1,0 +1,4 @@
+# Unified patches contain space-prefixed empty context lines. Preserve these
+# and the generated preparer's final blank line; their exact hashes are pinned.
+patches/*.patch whitespace=-blank-at-eol,-blank-at-eof
+prepare.sh whitespace=-blank-at-eof

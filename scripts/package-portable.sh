@@ -94,6 +94,14 @@ if [ -n "$MTU" ] && [ "$MTU" -lt 1500 ] 2>/dev/null; then
   echo "the route out carries $MTU bytes, so packaging runs on a matching network"
 fi
 
+# Reject host-built Wine components before spending time on the engine build.
+CANVAS_ARGS=()
+if [ -n "${LWFA_WINE_CANVAS_ARTIFACT:-}" ]; then
+  CANVAS_ARTIFACT="$(cd "$LWFA_WINE_CANVAS_ARTIFACT" && pwd)"
+  python3 "$ROOT/compat/wine-canvas/manage.py" validate --bundle "$CANVAS_ARTIFACT" --portable
+  CANVAS_ARGS=(-v "$CANVAS_ARTIFACT:/lwfa-wine-canvas-artifact:ro" -e LWFA_WINE_CANVAS_ARTIFACT=/lwfa-wine-canvas-artifact)
+fi
+
 echo "building the shell on the host"
 pnpm run build >/dev/null || { echo "shell build failed" >&2; exit 1; }
 
@@ -107,7 +115,8 @@ echo "building the engine and packaging inside it"
 # The cargo registry is shared so a rebuild does not re-download the index.
 # The engine goes to /tmp inside the container rather than /src/target, so the
 # host's own build is left alone.
-docker run --rm "${NET_ARGS[@]}" \
+docker run --rm "${NET_ARGS[@]}" "${CANVAS_ARGS[@]}" \
+  -e LWFA_PORTABLE_BUILD=1 \
   -e "LWFA_PACKAGE_OWNER=$(id -u):$(id -g)" \
   -v "$ROOT:/src" \
   -v "$HOME/.cargo/registry:/root/.cargo/registry" \

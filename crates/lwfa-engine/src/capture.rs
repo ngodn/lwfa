@@ -364,7 +364,7 @@ impl SurfaceCapture {
         overlays: &[(WlSurface, Point<i32, Logical>)],
         gpu_direct: bool,
     ) -> Option<CapturedFrame> {
-        if !crate::scaling::valid_capture_size(size) {
+        if !crate::surface_density::valid_capture_size(size) {
             return None;
         }
 

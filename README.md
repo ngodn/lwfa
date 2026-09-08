@@ -119,8 +119,6 @@ test evidence and remaining limits.
 
 - Per-window hardware video (NVENC), decoded with WebCodecs, zero-copy from the
   GL texture into the encoder when the NVIDIA driver allows it
-- Per-window display scaling from 0.5x to 2x: sharper native Wayland rendering
-  or more workspace inside the same browser window
 - Adaptive bitrate driven by real socket backpressure, up to 32 Mbit/s, with the
   focused window getting the budget and unwatched windows paused
 - Audio over Opus, per-device opt-in, quality that degrades last

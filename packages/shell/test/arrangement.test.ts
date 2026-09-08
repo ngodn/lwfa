@@ -7,8 +7,7 @@ const output = { width: 1324, height: 838 }
 const config = DEFAULT_CONFIG
 const windows: WindowInfo[] = [{
   id: 7, appId: "steam_app_3764200", title: "RESIDENT EVIL requiem",
-  fullscreen: false, scaling: { mode: "sharp", scale: 1 }, xwayland: true,
-  effectiveScale: 1,
+  fullscreen: false, xwayland: true,
 }]
 const resized = () => setColumnWidth(addWindow(EMPTY, 7, output, config), 7, 1, output, config)
 

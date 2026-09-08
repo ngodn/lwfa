@@ -333,8 +333,6 @@ pub struct Lwfa {
     pub(crate) pending_x11_spawns: Vec<(String, bool)>,
     pub(crate) autostart_pending: bool,
 
-    pub(crate) x11_outputs: crate::x11_output::X11Outputs,
-    pub(crate) scaling: std::collections::HashMap<WindowId, lwfa_proto::WindowScaling>,
     // These globals are held for their lifetime, not queried by callbacks.
     #[allow(dead_code)]
     pub fractional_scale_state: smithay::wayland::fractional_scale::FractionalScaleManagerState,
@@ -473,8 +471,6 @@ impl Lwfa {
             x11_start_pending: false,
             pending_x11_spawns: Vec::new(),
             autostart_pending: false,
-            x11_outputs: Default::default(),
-            scaling: Default::default(),
             fractional_scale_state: smithay::wayland::fractional_scale::FractionalScaleManagerState::new::<Self>(&dh),
             viewporter_state: smithay::wayland::viewporter::ViewporterState::new::<Self>(&dh),
             compositor_state,
@@ -579,7 +575,7 @@ impl Lwfa {
             }
         };
         Some(WindowInfo { id, app_id, title, fullscreen: self.window_fills_output(id),
-            scaling: self.window_scaling(id), xwayland: window.is_x11(), effective_scale: self.effective_scale(id) })
+            xwayland: window.is_x11() })
     }
 
     /// Whether the browser layout currently fills the whole output.
@@ -632,7 +628,6 @@ impl Lwfa {
         if self.pointer_window == Some(id) {
             self.pointer_window = None;
         }
-        self.scaling.remove(&id);
         self.forget_reported(id);
         self.capture.forget(id);
         self.streaming.remove(&id);
@@ -709,14 +704,9 @@ impl Lwfa {
         let Some(id) = self.layout.id_of(&window) else {
             return;
         };
-        if self.layout.x11_fullscreen(id) == fullscreen {
-            return;
-        }
-        let pending = self.layout.set_x11_fullscreen(id, fullscreen, std::time::Instant::now());
-        // Fullscreen state and its native monitor-sized geometry must agree.
-        // The browser can still present this workspace at a different size.
+        // The shell owns the requested window geometry. Fullscreen state
+        // does not pin the native window to a separate monitor-sized extent.
         let _ = surface.set_fullscreen(fullscreen);
-        self.send_configures(pending.into_iter().collect());
         self.capture.invalidate(id);
         self.report_window_changes(id);
         tracing::info!(
@@ -2416,19 +2406,15 @@ mod window_retirement_tests {
     use super::*;
 
     #[test]
-    fn closing_a_window_clears_its_scaling_and_pending_pointer_target() {
+    fn closing_a_window_clears_its_pending_pointer_target() {
         let mut event_loop = EventLoop::try_new().unwrap();
         let display = Display::new().unwrap();
         let mut state = Lwfa::without_listener(&mut event_loop, display);
         let closed = state.next_window_id();
         state.pointer_window = Some(closed);
-        state.scaling.insert(closed, lwfa_proto::WindowScaling { mode: lwfa_proto::ScalingMode::Workspace, scale: Some(2.0) });
         state.retire_window(closed);
         assert_eq!(state.pointer_window, None);
-        assert!(!state.scaling.contains_key(&closed));
-        assert!(state.set_window_scaling(closed, Default::default()).is_err());
         let reopened = state.next_window_id();
         assert_ne!(reopened, closed);
-        assert_eq!(state.window_scaling(reopened), Default::default());
     }
 }

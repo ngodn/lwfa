@@ -202,7 +202,8 @@ pub struct Session {
     pub terminal: String,
     pub autostart_terminal: bool,
     pub xwayland: bool,
-    /// Fixed X11 display size. None uses the first primary browser viewport.
+    /// Accepted for old configuration files, but ignored. The primary browser
+    /// controls the shared monitor dimensions.
     pub xwayland_resolution: Option<[u32; 2]>,
 }
 
@@ -675,6 +676,13 @@ mod tests {
         // [layout] and [animation] are deliberately absent: the shell owns
         // them, and the engine parses them only to keep deny_unknown_fields
         // from rejecting a good file.
+    }
+
+    #[test]
+    fn legacy_xwayland_resolution_does_not_reject_existing_config() {
+        let parsed: Config = toml::from_str("[session]\nxwayland_resolution = [2560, 1440]\n")
+            .expect("the retired setting remains parseable");
+        assert_eq!(parsed.session.xwayland_resolution, Some([2560, 1440]));
     }
 
     #[test]

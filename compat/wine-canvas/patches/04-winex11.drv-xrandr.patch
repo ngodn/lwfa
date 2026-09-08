@@ -1,0 +1,21 @@
+--- a/dlls/winex11.drv/xrandr.c
++++ b/dlls/winex11.drv/xrandr.c
+@@ -1562,6 +1562,7 @@
+     BOOL ret = FALSE;
+     RECT primary;
+     INT mode_idx;
++    const char *canvas_follow = getenv( "WINE_CANVAS_FOLLOW_HOST" );
+ 
+     pthread_mutex_lock( &xrandr_mutex );
+     for (mode_idx = 0; mode_idx < current_mode_count; ++mode_idx)
+@@ -1569,7 +1570,9 @@
+         if (current_modes[mode_idx].id != id.id)
+             continue;
+ 
+-        if (!current_modes[mode_idx].loaded)
++        /* A different process may already have refreshed the shared display
++         * cache while this thread still has unprocessed RandR events. */
++        if (!current_modes[mode_idx].loaded || (canvas_follow && !strcmp( canvas_follow, "1" )))
+         {
+             mode_ptr = &current_modes[mode_idx];
+             break;

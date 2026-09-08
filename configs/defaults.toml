@@ -135,16 +135,9 @@ autostart_terminal = true
 # one child process. Without it those do not degrade, they fail to start.
 xwayland = true
 
-# X11 and Proton share a fixed display for the engine session. By default its
-# resolution matches the first primary browser's viewport, before apps start.
-# Reconnecting or rotating the browser does not change a running game's monitor.
-# Larger X11 workspaces fit
-# within it, so scaling or opening another app cannot resize a running game's
-# monitor. Native Wayland windows keep their independent scaling.
-# Set a larger reserve before starting lwfa if needed (maximum 8192 per axis).
-# Games may select this as their desktop resolution. This also permits startup
-# without a browser. Requires an engine restart.
-# xwayland_resolution = [3840, 2160]
+# X11 starts after the first primary browser viewport. Its shared monitor
+# follows that viewport. Resizing an individual app does not resize the monitor.
+# The old xwayland_resolution override is accepted but ignored.
 
 # ---------------------------------------------------------------------------
 # Streaming to a remote shell

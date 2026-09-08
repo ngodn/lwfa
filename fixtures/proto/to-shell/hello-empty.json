@@ -1,6 +1,6 @@
 {
   "type": "hello",
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "output": {
     "width": 1920,
     "height": 1080,

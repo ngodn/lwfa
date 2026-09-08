@@ -40,7 +40,7 @@ mod http;
 mod icons;
 mod input;
 mod layout;
-mod scaling;
+mod surface_density;
 mod remote_input;
 mod restart;
 mod shell;
@@ -97,8 +97,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_shell_link(&mut event_loop, &mut data)?;
     init_host_clipboard(&mut data, host_display);
     // A remote desktop gets its initial monitor from the primary browser.
-    // An explicit resolution also supports unattended/local X11 sessions.
-    if data.config.session.xwayland_resolution.is_some() || data.resize_output.is_none() {
+    // Local sessions without browser-driven output resizing can start now.
+    if data.config.session.xwayland_resolution.is_some() {
+        tracing::warn!("session.xwayland_resolution is obsolete and ignored; the primary browser controls display dimensions");
+    }
+    if data.resize_output.is_none() {
         init_xwayland(&mut data);
     }
     init_portal(&mut event_loop, &mut data);
@@ -358,7 +361,7 @@ fn reap_children() {
 /// cannot run Steam. `LWFA_NO_XWAYLAND` skips it deliberately.
 ///
 /// Start after the first valid primary viewport, before launching applications.
-/// The resulting monitor stays fixed for Wine mode-emulation compatibility.
+/// Later primary viewport changes update the shared monitor.
 /// A deliberate local launch can start it at the host size without a browser.
 fn init_xwayland(data: &mut Lwfa) {
     if data.x11_start_attempted {
@@ -1068,7 +1071,6 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
         ToEngine::Ping | ToEngine::Crashed { .. } => true,
 
         ToEngine::SetLayout { .. } | ToEngine::SetViewport { .. } => is_primary,
-        ToEngine::SetWindowScaling { .. } => is_primary && who.permissions.may_interact(),
 
         // Taking the wheel needs the right to use it.
         ToEngine::TakeControl => who.permissions.may_interact(),
@@ -1145,11 +1147,6 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
         ToEngine::ClipUse { id } => state.clip_use(id),
         ToEngine::ClipDrop { id } => state.clip_forget(id),
         ToEngine::ClipClear => state.clip_clear(),
-        ToEngine::SetWindowScaling { id, scaling } => {
-            if let Err(message) = state.set_window_scaling(id, scaling) {
-                state.send_to_session(session, ToShell::Error { request: "setWindowScaling".into(), message: message.into() });
-            }
-        }
         ToEngine::SetLayout { windows, animate } => {
             let configures = state.layout.apply(
                 &windows,
@@ -1202,7 +1199,9 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             // answered, and leaving the engine waiting for an answer it has
             // had would hold its first frames for the whole grace.
             state.got_a_viewport();
-            if width < 160 || height < 160 {
+            if width < 160 || height < 160
+                || !surface_density::valid_capture_size((width, height).into())
+            {
                 tracing::debug!("ignoring an implausible viewport {width}x{height}");
                 return;
             }
@@ -1214,9 +1213,7 @@ fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, messag
             if state.viewport_override == Some((width, height, scale)) {
                 return;
             }
-            let previous_display_scale = state.viewport_override.map(|v| v.2).unwrap_or(1.0);
             state.viewport_override = Some((width, height, scale));
-            state.refresh_auto_scaling(previous_display_scale);
             match state.resize_output.clone() {
                 Some(resize) => {
                     tracing::debug!("session {session} set the viewport to {width}x{height}@{scale}");
@@ -1809,15 +1806,6 @@ mod tests {
     }
 
     #[test]
-    fn scaling_belongs_only_to_the_primary_session() {
-        let message = ToEngine::SetWindowScaling { id: WindowId(1), scaling: Default::default() };
-        assert!(allowed(&session(SessionMode::Interact), true, &message));
-        assert!(!allowed(&session(SessionMode::Interact), false, &message));
-        assert!(!allowed(&session(SessionMode::View), false, &message));
-        assert!(!allowed(&session(SessionMode::View), true, &message));
-    }
-
-    #[test]
     fn a_viewer_may_watch_but_not_touch() {
         let viewer = session(SessionMode::View);
         assert!(allowed(
@@ -1929,9 +1917,12 @@ mod tests {
         state.spawn("lwfa-test-must-not-launch", false);
         assert_eq!(state.pending_x11_spawns, vec![("lwfa-test-must-not-launch".into(), false)]);
         assert!(!state.x11_start_attempted);
-        for (session, width) in [(2, 1324), (1, 0)] {
+        for (session, width, height) in [
+            (2, 1324, 838), (1, 0, 838), (1, 8193, 838),
+            (1, 1324, 8193), (1, 8192, 8192), (1, i32::MAX, 838),
+        ] {
             handle_shell_event(&mut state, ShellEvent::Message(session, ToEngine::SetViewport {
-                width, height: 838, scale: 2.0,
+                width, height, scale: 2.0,
             }));
             assert!(!state.x11_start_attempted);
             assert_eq!(state.viewport_override, None);

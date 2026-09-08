@@ -3,8 +3,6 @@
 // LWFA_TEST_DISPLAY, PROTON_DIR, and ZIG (absolute binary path).
 // The caller starts and stops the isolated engine. No installed game or prefix
 // is used. Optional LWFA_TEST_BROWSER_RESIZE=1 adds a viewport resize case.
-// Scaling is expected to be disabled. LWFA_TEST_SCALING_ENABLED=1 tests older
-// engines where workspace scaling remains available.
 // Results and Wine child-process logs: LWFA_TEST_RESULTS_DIR, or target/proton-display.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -86,7 +84,6 @@ function screen() {
 }
 
 const assertion = output => /monitor_get_dpi[^\n]*Assertion|num \* dpi \/ d < 65536/.test(output);
-const scalingEnabled = process.env.LWFA_TEST_SCALING_ENABLED === '1';
 const results = [];
 try {
   run(process.env.CC || 'cc', ['-std=c11', '-Wall', '-Wextra', join(source, 'proton-display-window.c'), '-lX11', '-o', join(temporary, 'window')]);
@@ -102,6 +99,7 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
   const windows = new Map();
   const errors = [];
   let hello = false;
+  let engineVersion = null;
   socket = new WebSocket(endpoint);
   socket.addEventListener('message', ({ data }) => {
     if (typeof data !== 'string') return;
@@ -110,6 +108,7 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
       hello = true;
       for (const window of message.windows) windows.set(window.id, window);
     }
+    if (message.type === 'engineVersion') engineVersion = message.version;
     if (message.window) windows.set(message.window.id, message.window);
     if (message.type === 'windowClosed') windows.delete(message.id);
     if (message.type === 'error') errors.push(message);
@@ -118,15 +117,19 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
   await waitUntil(() => hello, 'authenticated engine hello');
   assert.equal(windows.size, 0, 'The isolated engine must have no pre-existing application windows');
   const send = message => socket.send(JSON.stringify(message));
-  const setViewport = width => send({ type: 'setViewport', width, height: 839, scale: 1 });
-  const scenarios = ['window-growth', 'workspace-scaling'];
+  const setViewport = (width, height = 839) => send({ type: 'setViewport', width, height, scale: 1 });
+  const scenarios = ['window-growth'];
   if (process.env.LWFA_TEST_BROWSER_RESIZE === '1') scenarios.push('browser-resize');
   for (const name of scenarios) {
     const prefix = join(temporary, `prefix-${name}`);
     await mkdir(prefix);
     const env = { ...displayEnv, WINEPREFIX: prefix, WINEDEBUG: '-all', WINEDLLOVERRIDES: 'mscoree,mshtml=', WINEESYNC: '0', WINEFSYNC: '0' };
     let native, probe;
-    const result = { name, before: null, after: null, assertion: false, completed: false };
+    const result = {
+      name, before: null, after: null, assertion: false, completed: false,
+      expectedMonitorChange: name === 'browser-resize',
+      runtime: { engineVersion, protonDir: process.env.PROTON_DIR, wineEsync: env.WINEESYNC, wineFsync: env.WINEFSYNC },
+    };
     try {
       errors.length = 0;
       setViewport(1319);
@@ -152,8 +155,7 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
         return probe.output.includes('dpi type=2');
       }, 'initial Wine DPI query', 60_000);
       if (name === 'window-growth') layout(1324);
-      else if (name === 'workspace-scaling') send({ type: 'setWindowScaling', id, scaling: { mode: 'workspace', scale: 1.5 } });
-      else setViewport(1324);
+      else setViewport(1324, 838);
       await delay(500);
       result.after = screen();
       result.geometryAfter = geometry();
@@ -165,17 +167,13 @@ int main(void){Display*d=XOpenDisplay(NULL);if(!d)return 2;int found=find(d,Defa
       result.completed = probe.output.includes('DPI_PROBE_OK');
       assert(!result.assertion, 'Wine child process hit monitor_get_dpi assertion');
       assert(result.completed, 'Wine child process did not finish all DPI queries');
-      if (name === 'workspace-scaling' && !scalingEnabled) {
-        assert.equal(errors.length, 1, 'Disabled workspace scaling must return one error');
-        assert.equal(errors[0].request, 'setWindowScaling');
-        assert.match(errors[0].message, /scaling is temporarily disabled/i);
-        result.expectedRejection = errors[0];
-        assert.deepEqual(result.geometryAfter, result.geometryBefore, 'Rejected scaling preserves native window geometry');
-        assert.deepEqual(windows.get(id).scaling, { mode: 'sharp', scale: 1 }, 'Rejected scaling preserves baseline settings');
+      assert.equal(errors.length, 0, `Engine errors: ${JSON.stringify(errors)}`);
+      assert.deepEqual(result.before, { width: 1319, height: 839 }, 'Initial shared display follows the browser viewport');
+      if (name === 'window-growth') {
+        assert.deepEqual(result.after, result.before, 'Changing one window must not change the shared monitor');
       } else {
-        assert.equal(errors.length, 0, `Engine errors: ${JSON.stringify(errors)}`);
+        assert.deepEqual(result.after, { width: 1324, height: 838 }, 'The shared monitor follows the changed browser viewport');
       }
-      assert.deepEqual(result.after, result.before, 'Window operations and browser resize preserve the active shared display');
       result.passed = true;
     } catch (error) {
       result.passed = false;

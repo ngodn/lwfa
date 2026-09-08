@@ -1,0 +1,4419 @@
+{
+  "date": "2026-09-08",
+  "baseCommit": "9936a8979d611c6db6a4c9a1037e5535883549cd",
+  "note": "gpuDirect records the engine configuration, not a GPU throughput measurement. HEVC unavailable in test browser.",
+  "runs": [
+    {
+      "codec": "jpeg",
+      "gpuDirect": true,
+      "runtime": {
+        "node": "v24.15.0",
+        "chromium": "151.0.7922.137"
+      },
+      "cases": [
+        {
+          "platform": "wayland",
+          "phase": "resize-1",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              62,
+              205,
+              187
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-2",
+          "canvas": [
+            1192,
+            814
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1192,
+            814
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-3",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-4",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-5",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "wayland",
+          "phase": "browser-dpr2",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 2,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "browser-dpr1",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-1",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-2",
+          "canvas": [
+            1192,
+            814
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1192,
+            814
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-3",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-4",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-5",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "x11",
+          "phase": "browser-dpr2",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 2,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "browser-dpr1",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        }
+      ]
+    },
+    {
+      "codec": "h264",
+      "gpuDirect": true,
+      "runtime": {
+        "node": "v24.15.0",
+        "chromium": "151.0.7922.137"
+      },
+      "cases": [
+        {
+          "platform": "wayland",
+          "phase": "resize-1",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              46,
+              178,
+              176
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-2",
+          "canvas": [
+            1192,
+            814
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1192,
+            814
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-3",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-4",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-5",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "wayland",
+          "phase": "browser-dpr2",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 2,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "browser-dpr1",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-1",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-2",
+          "canvas": [
+            1192,
+            814
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1192,
+            814
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-3",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-4",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-5",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "x11",
+          "phase": "browser-dpr2",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 2,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "browser-dpr1",
+          "canvas": [
+            1000,
+            640
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1000,
+            640
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        }
+      ]
+    },
+    {
+      "codec": "jpeg",
+      "gpuDirect": false,
+      "runtime": {
+        "node": "v24.15.0",
+        "chromium": "151.0.7922.137"
+      },
+      "cases": [
+        {
+          "platform": "wayland",
+          "phase": "resize-1",
+          "canvas": [
+            802,
+            602
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            802,
+            602
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              57,
+              177,
+              165
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-2",
+          "canvas": [
+            1192,
+            814
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1192,
+            814
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-3",
+          "canvas": [
+            640,
+            480
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            640,
+            480
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-4",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "wayland",
+          "phase": "browser-dpr2",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 2,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "browser-dpr1",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-1",
+          "canvas": [
+            802,
+            602
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            802,
+            602
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-2",
+          "canvas": [
+            1192,
+            814
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1192,
+            814
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-3",
+          "canvas": [
+            640,
+            480
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            640,
+            480
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-4",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "x11",
+          "phase": "browser-dpr2",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 2,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "browser-dpr1",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 0,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              63,
+              220,
+              203
+            ],
+            "right": [
+              63,
+              220,
+              203
+            ],
+            "top": [
+              63,
+              220,
+              203
+            ],
+            "bottom": [
+              63,
+              220,
+              203
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        }
+      ]
+    },
+    {
+      "codec": "h264",
+      "gpuDirect": false,
+      "runtime": {
+        "node": "v24.15.0",
+        "chromium": "151.0.7922.137"
+      },
+      "cases": [
+        {
+          "platform": "wayland",
+          "phase": "resize-1",
+          "canvas": [
+            802,
+            602
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            802,
+            602
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              178,
+              176
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-2",
+          "canvas": [
+            1192,
+            814
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1192,
+            814
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-3",
+          "canvas": [
+            640,
+            480
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            640,
+            480
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "resize-4",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "wayland",
+          "phase": "browser-dpr2",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 2,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "wayland",
+          "phase": "browser-dpr1",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-1",
+          "canvas": [
+            802,
+            602
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            802,
+            602
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-2",
+          "canvas": [
+            1192,
+            814
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1192,
+            814
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-3",
+          "canvas": [
+            640,
+            480
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            640,
+            480
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "resize-4",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": true
+        },
+        {
+          "platform": "x11",
+          "phase": "browser-dpr2",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 2,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        },
+        {
+          "platform": "x11",
+          "phase": "browser-dpr1",
+          "canvas": [
+            1324,
+            838
+          ],
+          "browserDpr": 1,
+          "appDpr": 1,
+          "frame": [
+            1324,
+            838
+          ],
+          "format": 1,
+          "blackRight": 0,
+          "blackBottom": 0,
+          "contentBorders": {
+            "left": [
+              48,
+              203,
+              200
+            ],
+            "right": [
+              48,
+              203,
+              200
+            ],
+            "top": [
+              48,
+              203,
+              200
+            ],
+            "bottom": [
+              48,
+              203,
+              200
+            ]
+          },
+          "inputPassed": true,
+          "popupPassed": null
+        }
+      ]
+    }
+  ],
+  "runsLabel": "Earlier pre-standard-output candidate, retained separately from the current candidate below",
+  "passedCases": 52,
+  "standardOutputCandidate": {
+    "label": "standard-output candidate",
+    "date": "2026-09-08T15:31:18Z",
+    "binarySha256": "042cb2f735d5f8779965a0699165efeec6c7ea69b12c5226de73b0f587f480bb",
+    "binaryMtime": 1788881376.217989,
+    "note": "Fresh isolated current debug binary with standard output restored. Configuration-only upper viewport guard was not compiled into this candidate. Counts here are separate from the earlier 52 cases. gpuDirect is configuration; direct H.264 log additionally confirmed GL capture feeds NVENC on GPU. Disabled-direct H.264 still uses NVENC after CPU pixel transfer. No throughput or latency claim.",
+    "passedCases": 48,
+    "failedCases": 0,
+    "runs": [
+      {
+        "codec": "jpeg",
+        "gpuDirect": true,
+        "date": "2026-09-08T15:31:20.244Z",
+        "runtime": {
+          "node": "v24.15.0",
+          "chromium": "151.0.7922.137"
+        },
+        "wireFormatCounts": {
+          "0": 65
+        },
+        "decoderErrors": [],
+        "passedCases": 12,
+        "cases": [
+          {
+            "platform": "wayland",
+            "phase": "resize-1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                60,
+                176,
+                163
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 3780,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-2",
+            "canvas": [
+              802,
+              602
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              802,
+              602
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-3",
+            "canvas": [
+              1324,
+              838
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1324,
+              838
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-4",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 4,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "wayland",
+            "phase": "browser-dpr2",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 2,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "browser-dpr1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-2",
+            "canvas": [
+              802,
+              602
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              802,
+              602
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-3",
+            "canvas": [
+              1324,
+              838
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1324,
+              838
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-4",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "x11",
+            "phase": "browser-dpr2",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 2,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "browser-dpr1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          }
+        ]
+      },
+      {
+        "codec": "h264",
+        "gpuDirect": true,
+        "date": "2026-09-08T15:31:35.309Z",
+        "runtime": {
+          "node": "v24.15.0",
+          "chromium": "151.0.7922.137"
+        },
+        "wireFormatCounts": {
+          "1": 358
+        },
+        "decoderErrors": [],
+        "passedCases": 12,
+        "cases": [
+          {
+            "platform": "wayland",
+            "phase": "resize-1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                46,
+                178,
+                176
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 4213,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-2",
+            "canvas": [
+              802,
+              602
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              802,
+              602
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-3",
+            "canvas": [
+              1324,
+              838
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1324,
+              838
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 8,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-4",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 6,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "wayland",
+            "phase": "browser-dpr2",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 2,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "browser-dpr1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 14,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-2",
+            "canvas": [
+              802,
+              602
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              802,
+              602
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-3",
+            "canvas": [
+              1324,
+              838
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1324,
+              838
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-4",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "x11",
+            "phase": "browser-dpr2",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 2,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "browser-dpr1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          }
+        ],
+        "encoderEvidence": "GL capture feeds NVENC on the GPU"
+      },
+      {
+        "codec": "jpeg",
+        "gpuDirect": false,
+        "date": "2026-09-08T15:31:45.290Z",
+        "runtime": {
+          "node": "v24.15.0",
+          "chromium": "151.0.7922.137"
+        },
+        "wireFormatCounts": {
+          "0": 63
+        },
+        "decoderErrors": [],
+        "passedCases": 12,
+        "cases": [
+          {
+            "platform": "wayland",
+            "phase": "resize-1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                56,
+                181,
+                167
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 3748,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-2",
+            "canvas": [
+              802,
+              602
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              802,
+              602
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-3",
+            "canvas": [
+              1324,
+              838
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1324,
+              838
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 4,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-4",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "wayland",
+            "phase": "browser-dpr2",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 2,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "browser-dpr1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-2",
+            "canvas": [
+              802,
+              602
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              802,
+              602
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-3",
+            "canvas": [
+              1324,
+              838
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1324,
+              838
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-4",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "x11",
+            "phase": "browser-dpr2",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 2,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "browser-dpr1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 0,
+            "wireFormats": [
+              0
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                63,
+                220,
+                203
+              ],
+              "right": [
+                63,
+                220,
+                203
+              ],
+              "top": [
+                63,
+                220,
+                203
+              ],
+              "bottom": [
+                63,
+                220,
+                203
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          }
+        ]
+      },
+      {
+        "codec": "h264",
+        "gpuDirect": false,
+        "date": "2026-09-08T15:32:00.715Z",
+        "runtime": {
+          "node": "v24.15.0",
+          "chromium": "151.0.7922.137"
+        },
+        "wireFormatCounts": {
+          "1": 350
+        },
+        "decoderErrors": [],
+        "passedCases": 12,
+        "cases": [
+          {
+            "platform": "wayland",
+            "phase": "resize-1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                47,
+                175,
+                174
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 4115,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-2",
+            "canvas": [
+              802,
+              602
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              802,
+              602
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-3",
+            "canvas": [
+              1324,
+              838
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1324,
+              838
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "resize-4",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "wayland",
+            "phase": "browser-dpr2",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 2,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "wayland",
+            "phase": "browser-dpr1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 14,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-2",
+            "canvas": [
+              802,
+              602
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              802,
+              602
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 4,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-3",
+            "canvas": [
+              1324,
+              838
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1324,
+              838
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 7,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "resize-4",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": true
+          },
+          {
+            "platform": "x11",
+            "phase": "browser-dpr2",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 2,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 2,
+            "inputPassed": true,
+            "popupPassed": null
+          },
+          {
+            "platform": "x11",
+            "phase": "browser-dpr1",
+            "canvas": [
+              1000,
+              640
+            ],
+            "browserDpr": 1,
+            "appDpr": 1,
+            "frame": [
+              1000,
+              640
+            ],
+            "format": 1,
+            "wireFormats": [
+              1
+            ],
+            "blackRight": 0,
+            "blackBottom": 0,
+            "contentBorders": {
+              "left": [
+                48,
+                203,
+                200
+              ],
+              "right": [
+                48,
+                203,
+                200
+              ],
+              "top": [
+                48,
+                203,
+                200
+              ],
+              "bottom": [
+                48,
+                203,
+                200
+              ]
+            },
+            "markerWaitMs": 3,
+            "inputPassed": true,
+            "popupPassed": null
+          }
+        ],
+        "encoderEvidence": "h264_nvenc with gpu_direct=false"
+      }
+    ],
+    "cleanup": "All four owned engines stopped and temporary runtimes removed; root engine 6755 untouched."
+  }
+}

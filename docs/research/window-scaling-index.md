@@ -1,5 +1,8 @@
 # Window scaling investigation index
 
+Historical record. Sharper and More space were removed on 2026-09-08.
+See [the removal and regression checks](canvas-sizing-removal.md) for current behavior.
+
 Read this index and the status document when resuming the scaling goal.
 
 ## Established decisions

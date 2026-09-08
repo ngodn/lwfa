@@ -6,8 +6,8 @@
  */
 
 import {
-  PROTOCOL_VERSION,
   ProtocolError,
+  ProtocolVersionError,
   type DecodedFrame,
   decodeAudio,
   decodeFrame,
@@ -278,6 +278,11 @@ export class Connection {
       try {
         message = decodeToShell(event.data)
       } catch (err) {
+        if (err instanceof ProtocolVersionError) {
+          this.#handlers.onStatus("incompatible", err.message)
+          this.close()
+          return
+        }
         // Loud, not silent. A message the shell cannot parse means the two
         // sides disagree about the protocol, which is exactly the failure the
         // parity tests exist to prevent reaching here.
@@ -288,15 +293,6 @@ export class Connection {
 
       if (message.type === "hello") {
         this.#everGreeted = true
-        if (message.protocolVersion !== PROTOCOL_VERSION) {
-          const detail = `engine speaks protocol ${message.protocolVersion}, shell speaks ${PROTOCOL_VERSION}`
-          console.error(detail)
-          this.#handlers.onStatus("incompatible", detail)
-          // Refuse to drive rather than mislay windows against a protocol we do
-          // not understand.
-          socket.close()
-          return
-        }
         this.#handlers.onStatus("connected")
       }
 

@@ -1,0 +1,37 @@
+--- a/dlls/winex11.drv/init.c
++++ b/dlls/winex11.drv/init.c
+@@ -462,16 +462,30 @@
+     XWindowChanges changes = surface->changes;
+     struct x11drv_win_data *data;
+     int mask = 0;
+-    RECT rect;
++    RECT rect, client_rect;
++    BOOL presenting = NtUserGetPresentRect( hwnd, &rect, dpi );
++    const char *canvas_follow = getenv( "WINE_CANVAS_FOLLOW_HOST" );
++    BOOL canvas_full_client = presenting && canvas_follow && !strcmp( canvas_follow, "1" ) &&
++                              NtUserGetClientRect( hwnd, &client_rect, dpi ) && EqualRect( &rect, &client_rect );
+ 
+-    if (NtUserGetPresentRect( hwnd, &rect, dpi )) OffsetRect( &rect, -rect.left, -rect.top );
++    if (presenting) OffsetRect( &rect, -rect.left, -rect.top );
+     else if (!NtUserGetClientRect( hwnd, &rect, dpi )) return;
+     else NtUserMapWindowPoints( origin, toplevel, (POINT *)&rect, 2, dpi );
+ 
+     if ((data = get_win_data( toplevel )))
+     {
+-        OffsetRect( &rect, data->rects.client.left - data->rects.visible.left,
+-                    data->rects.client.top - data->rects.visible.top );
++        if (canvas_full_client && data->is_fullscreen)
++        {
++            /* A fixed virtual mode keeps its client rectangle across host mode
++             * changes. Derive letterboxing from current native bounds instead
++             * of an offset cached before the physical monitor resized. */
++            OffsetRect( &rect, ((data->current_state.rect.right - data->current_state.rect.left) -
++                               (rect.right - rect.left)) / 2,
++                              ((data->current_state.rect.bottom - data->current_state.rect.top) -
++                               (rect.bottom - rect.top)) / 2 );
++        }
++        else OffsetRect( &rect, data->rects.client.left - data->rects.visible.left,
++                         data->rects.client.top - data->rects.visible.top );
+         release_win_data( data );
+     }
+ 

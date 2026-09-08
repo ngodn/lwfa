@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 /// The engine sends this in [`ToShell::Hello`] and the shell is expected to
 /// refuse to drive a version it does not understand, rather than silently
 /// mislaying windows.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Engine-assigned window handle. Stable for the lifetime of the window.
 ///
@@ -83,31 +83,6 @@ pub struct Rect {
     pub height: f64,
 }
 
-/// Per-window rendering policy. `None` follows the primary display density in
-/// sharp mode; workspace mode requires an explicit factor.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WindowScaling {
-    pub mode: ScalingMode,
-    pub scale: Option<f64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ScalingMode { Sharp, Workspace }
-
-impl Default for WindowScaling {
-    fn default() -> Self { Self { mode: ScalingMode::Sharp, scale: Some(1.0) } }
-}
-
-impl WindowScaling {
-    pub fn valid(self) -> bool {
-        self.scale.is_none_or(|scale| [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0].contains(&scale))
-    }
-}
-
-fn default_effective_scale() -> f64 { 1.0 }
-
 /// What the engine knows about a window that the shell might want to show.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -126,11 +101,7 @@ pub struct WindowInfo {
     /// encoder is rebuilt when the size is corrected a beat later.
     pub fullscreen: bool,
     #[serde(default)]
-    pub scaling: WindowScaling,
-    #[serde(default)]
     pub xwayland: bool,
-    #[serde(default = "default_effective_scale")]
-    pub effective_scale: f64,
 }
 
 /// Spring parameters for an animation intent.
@@ -1102,7 +1073,7 @@ pub enum ToEngine {
         /// Logical pixels, i.e. CSS pixels, not device pixels.
         width: i32,
         height: i32,
-        /// Device pixel ratio, so the engine can capture at native resolution.
+        /// Browser device pixel ratio. Does not multiply application dimensions.
         scale: f64,
     },
 
@@ -1162,10 +1133,6 @@ pub enum ToEngine {
     /// entirely, and the engine already knows where it put things.
     #[serde(rename_all = "camelCase")]
     PointerMotion { window: WindowId, x: f64, y: f64, #[serde(default)] normalized: bool },
-
-    /// Set a window's pixel density or application workspace size.
-    #[serde(rename_all = "camelCase")]
-    SetWindowScaling { id: WindowId, scaling: WindowScaling },
 
     /// Pointer button pressed or released, on the window last moved over.
     #[serde(rename_all = "camelCase")]
@@ -1481,7 +1448,7 @@ mod tests {
                 id: WindowId(1),
                 app_id: Some("Alacritty".into()),
                 title: None,
-                fullscreen: false, scaling: Default::default(), xwayland: false, effective_scale: 1.0,
+                fullscreen: false, xwayland: false,
             }],
             focused: Some(WindowId(1)),
         };
@@ -1529,7 +1496,7 @@ mod tests {
             id: WindowId(1),
             app_id: Some("foo".into()),
             title: None,
-            fullscreen: false, scaling: Default::default(), xwayland: false, effective_scale: 1.0,
+            fullscreen: false, xwayland: false,
         })
         .unwrap();
         assert!(json.contains("\"appId\""), "got {json}");
@@ -1995,13 +1962,11 @@ mod frame_tests {
 }
 
 #[cfg(test)]
-mod scaling_tests {
+mod window_input_tests {
     use super::*;
     #[test]
-    fn absent_density_metadata_defaults_to_existing_behavior() {
+    fn absent_xwayland_metadata_defaults_to_native_window() {
         let window: WindowInfo = serde_json::from_str(r#"{"id":1,"appId":null,"title":null,"fullscreen":false}"#).unwrap();
-        assert_eq!(window.scaling, WindowScaling::default());
-        assert_eq!(window.effective_scale, 1.0);
         assert!(!window.xwayland);
     }
     #[test]
@@ -2015,13 +1980,10 @@ mod scaling_tests {
         }
     }
     #[test]
-    fn both_modes_and_all_factors_roundtrip() {
-        for mode in [ScalingMode::Sharp, ScalingMode::Workspace] {
-            for scale in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
-                let message = ToEngine::SetWindowScaling { id: WindowId(1), scaling: WindowScaling { mode, scale: Some(scale) } };
-                let json = serde_json::to_string(&message).unwrap();
-                assert_eq!(serde_json::from_str::<ToEngine>(&json).unwrap(), message);
-            }
+    fn removed_window_scaling_requests_are_rejected() {
+        for mode in ["sharp", "workspace"] {
+            let json = format!(r#"{{"type":"setWindowScaling","id":1,"scaling":{{"mode":"{mode}","scale":1.5}}}}"#);
+            assert!(serde_json::from_str::<ToEngine>(&json).is_err());
         }
     }
 }

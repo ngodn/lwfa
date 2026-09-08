@@ -54,7 +54,7 @@ try {
         wire.push(message)
         if (message.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }))
       })
-      ws.send(JSON.stringify({ type: 'hello', protocolVersion: 1,
+      ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2,
         output: { width: 1000, height: 700, scale: 1 },
         windows: [windowInfo(1), windowInfo(2)], focused: 1,
         permissions: { mode, allowedApps: null }, account: 'test', session: 1, primary: false, peers: [] }))
@@ -83,7 +83,7 @@ try {
     if (mode === 'interact') {
       // Permission changes arrive as another hello on the existing socket.
       wire.length = 0
-      const hello = changedMode => ({ type: 'hello', protocolVersion: 1,
+      const hello = changedMode => ({ type: 'hello', protocolVersion: 2,
         output: { width: 1000, height: 700, scale: 1 },
         windows: [windowInfo(1), windowInfo(2)], focused: 1,
         permissions: { mode: changedMode, allowedApps: null }, account: 'test', session: 1, primary: false, peers: [] })
