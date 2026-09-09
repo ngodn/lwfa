@@ -52,7 +52,7 @@ try {
         windows: [{ id: 1, title: "Mock game", appId: "fixture", fullscreen: false }], focused: 1,
         permissions: { mode: "interact", allowedApps: null }, account: "owner",
         session: 1, primary: scenario !== "follower", peers: [] }))
-      socket.send(JSON.stringify({ type: "engineVersion", version: "1.5.5" }))
+      socket.send(JSON.stringify({ type: "engineVersion", version: "1.5.6" }))
       socket.send(JSON.stringify({ type: "layout", output, windows: [{ id: 1, z: 0, rect: { x: 0, y: 0, width: 1324, height: 900 } }] }))
     })
     await page.addInitScript(mode => {
