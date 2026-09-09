@@ -1385,6 +1385,55 @@ describe("setColumnWidth", () => {
 describe("setFullscreen", () => {
   const out: Output = { width: 1200, height: 800 }
 
+  it("keeps shell fullscreen through the game's enter/leave feedback", () => {
+    let state = toggleFullscreen(withWindows([1], out), out, config)
+    const immersive = { width: 1389, height: 938 }
+    state = reflow(state, immersive, config)
+    const selected = state
+    for (let i = 0; i < 10; i++) {
+      state = setFullscreen(state, 1, true, immersive, config)
+      state = setFullscreen(state, 1, false, immersive, config)
+      expect(state).toBe(selected)
+    }
+    expect(layout(state, immersive, config)[0]!.rect).toEqual({
+      x: 0, y: 0, ...immersive,
+    })
+    state = toggleFullscreen(state, immersive, config)
+    expect(isFullscreen(state)).toBe(false)
+    const windowed = state
+    state = setFullscreen(state, 1, true, immersive, config)
+    expect(state).toBe(windowed)
+    state = setFullscreen(state, 1, false, immersive, config)
+    expect(state).toBe(windowed)
+    expect(isFullscreen(state)).toBe(false)
+  })
+
+  it("releases the shell choice when focus moves away", () => {
+    let state = toggleFullscreen(withWindows([1, 2], out), out, config)
+    state = focusWindow(state, 1, out, config)
+    state = setFullscreen(state, 2, true, out, config)
+    state = setFullscreen(state, 2, false, out, config)
+    expect(isFullscreen(state)).toBe(false)
+  })
+
+  it("releases the shell choice when moving focus within a stack", () => {
+    let state = consumeIntoColumn(withWindows([1, 2], out), out, config)
+    state = toggleFullscreen(state, out, config)
+    state = focusUp(state)
+    state = focusDown(state)
+    state = setFullscreen(state, 2, false, out, config)
+    expect(isFullscreen(state)).toBe(false)
+  })
+
+  it("does not retain shell ownership after closing and reusing a window ID", () => {
+    let state = toggleFullscreen(withWindows([1], out), out, config)
+    state = removeWindow(state, 1, out, config)
+    state = addWindow(state, 1, out, config)
+    state = setFullscreen(state, 1, true, out, config)
+    state = setFullscreen(state, 1, false, out, config)
+    expect(isFullscreen(state)).toBe(false)
+  })
+
   it("puts the named window fullscreen", () => {
     const state = setFullscreen(withWindows([1, 2], out), 1 as WindowId, true, out, config)
     expect(isFullscreen(state)).toBe(true)

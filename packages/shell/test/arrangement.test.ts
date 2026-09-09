@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { WindowInfo } from "@lwfa/proto"
 import { loadArrangement, restoreArrangement, saveArrangement } from "../src/lib/arrangement.js"
-import { EMPTY, DEFAULT_CONFIG, addWindow, allWindows, moveToWorkspace, setColumnWidth, setFullscreen, layout } from "../src/strip.js"
+import { EMPTY, DEFAULT_CONFIG, addWindow, allWindows, moveToWorkspace, setColumnWidth, setFullscreen, toggleFullscreen, layout } from "../src/strip.js"
 
 const output = { width: 1324, height: 838 }
 const config = DEFAULT_CONFIG
@@ -19,6 +19,23 @@ describe("reconnecting arrangement", () => {
     const before = layout(state, output, config)
     const restored = restoreArrangement(windows, 7, output, config, { state, output }, before)
     expect(layout(restored, output, config)).toEqual(before)
+  })
+
+  it("preserves a shell fullscreen choice through a validated page reload", () => {
+    const entries = new Map<string, string>()
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => entries.set(key, value),
+    })
+    const state = toggleFullscreen(resized(), output, config)
+    saveArrangement(state, output)
+    const restored = restoreArrangement(windows, 7, output, config,
+      loadArrangement(), layout(state, output, config))
+    expect(setFullscreen(restored, 7, false, output, config)).toBe(restored)
+    const left = toggleFullscreen(restored, output, config)
+    expect(layout(left, output, config)).toEqual(layout(resized(), output, config))
+    saveArrangement(left, output)
+    expect(loadArrangement()?.state).toEqual(left)
   })
 
   it("rejects a cache when another device changed the engine arrangement", () => {

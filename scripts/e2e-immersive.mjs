@@ -9,6 +9,7 @@ import path from "node:path"
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright")
 const root = fileURLToPath(new URL("../", import.meta.url))
+const version = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version
 const dist = path.join(root, "packages/shell/dist")
 const artifacts = path.join(root, "target/immersive-e2e")
 await mkdir(artifacts, { recursive: true })
@@ -39,8 +40,10 @@ try {
     await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort())
     const page = await context.newPage()
     const wire = [], errors = []
+    let engineSocket
     page.on("pageerror", error => errors.push(error.message))
     await page.routeWebSocket(/.*/, socket => {
+      engineSocket = socket
       assert.equal(new URL(socket.url()).host, new URL(origin).host)
       socket.onMessage(raw => {
         const message = JSON.parse(raw)
@@ -52,7 +55,7 @@ try {
         windows: [{ id: 1, title: "Mock game", appId: "fixture", fullscreen: false }], focused: 1,
         permissions: { mode: "interact", allowedApps: null }, account: "owner",
         session: 1, primary: scenario !== "follower", peers: [] }))
-      socket.send(JSON.stringify({ type: "engineVersion", version: "1.5.6" }))
+      socket.send(JSON.stringify({ type: "engineVersion", version }))
       socket.send(JSON.stringify({ type: "layout", output, windows: [{ id: 1, z: 0, rect: { x: 0, y: 0, width: 1324, height: 900 } }] }))
     })
     await page.addInitScript(mode => {
@@ -143,6 +146,58 @@ try {
     assert.deepEqual(await page.getByRole("main").boundingBox(), immersiveBox, "Navigation overlays the canvas")
     assert.deepEqual(mutations(wire.slice(beforeShow)), [], "Opening navigation must not resize or send game input")
     await page.screenshot({ path: path.join(artifacts, `${scenario}-navigation.png`), animations: "disabled" })
+    if (scenario === "native") {
+      const latestRect = () => wire.findLast(message => message.type === "setLayout").windows.find(window => window.id === 1).rect
+      const viewport = wire.findLast(message => message.type === "setViewport")
+      const fullRect = { x: 0, y: 0, width: viewport.width, height: viewport.height }
+      const columnRect = latestRect()
+      assert.notDeepEqual(columnRect, fullRect, "The fixture starts with a windowed game")
+      const requestFullscreen = fullscreen => engineSocket.send(JSON.stringify({ type: "fullscreenRequest", window: 1, fullscreen }))
+
+      // An app still owns fullscreen entered through its own controls.
+      requestFullscreen(true)
+      await settle(page)
+      assert.deepEqual(latestRect(), fullRect, "App-requested fullscreen fills the canvas")
+      requestFullscreen(false)
+      await settle(page)
+      assert.deepEqual(latestRect(), columnRect, "The app can leave its own fullscreen")
+
+      await page.getByRole("button", { name: "Windows", exact: true }).click()
+      await page.getByRole("button", { name: "Fullscreen", exact: true }).click()
+      await settle(page)
+      assert.deepEqual(latestRect(), fullRect, "The Windows panel fullscreen button fills the immersive canvas")
+      const beforeReplay = wire.length
+      // Replay the enter/leave pair seen about 80 ms apart in the live X11 log.
+      // There is one user click; neither incoming message comes from the UI.
+      requestFullscreen(true)
+      await page.waitForTimeout(80)
+      requestFullscreen(false)
+      await settle(page)
+      const replayLayouts = wire.slice(beforeReplay).filter(message => message.type === "setLayout")
+      await writeFile(path.join(artifacts, "fullscreen-request-replay.json"), `${JSON.stringify({
+        fullRect, columnRect, incoming: [{ fullscreen: true, delayMs: 0 }, { fullscreen: false, delayMs: 80 }],
+        layouts: replayLayouts, actualRect: latestRect(),
+        browserFullscreen: await page.evaluate(() => document.fullscreenElement === document.documentElement),
+      }, null, 2)}\n`)
+      assert.deepEqual(latestRect(), fullRect, "An app fullscreen notification must not undo fullscreen selected in the Windows panel")
+      assert.deepEqual(replayLayouts, [], "Ignored app fullscreen feedback must not send redundant layouts")
+      assert.equal(await page.evaluate(() => document.fullscreenElement === document.documentElement), true,
+        "App fullscreen requests must not exit browser immersive mode")
+      assert(!wire.slice(beforeReplay).some(message => ["key", "pointerButton", "touchDown"].includes(message.type)),
+        "The replay generates no extra user input")
+      await page.getByRole("button", { name: "Exit fullscreen", exact: true }).click()
+      await settle(page)
+      assert.deepEqual(latestRect(), columnRect, "The user can explicitly leave shell fullscreen")
+      const beforeExitReplay = wire.length
+      requestFullscreen(true)
+      await page.waitForTimeout(80)
+      requestFullscreen(false)
+      await settle(page)
+      assert.deepEqual(latestRect(), columnRect, "App fullscreen feedback must not undo the user's explicit exit")
+      assert.deepEqual(wire.slice(beforeExitReplay).filter(message => message.type === "setLayout"), [],
+        "Ignored feedback after exit must not send redundant layouts")
+      await page.getByRole("button", { name: "Windows", exact: true }).click()
+    }
     const hide = page.getByRole("button", { name: "Hide navigation", exact: true })
     const beforeHide = wire.length
     await hide.click()

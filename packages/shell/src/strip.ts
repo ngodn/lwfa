@@ -188,6 +188,11 @@ export interface Workspace {
    * nothing else on the workspace is drawn while it is set.
    */
   fullscreen: WindowId | null
+  /** The focused window whose fullscreen/windowed placement the user chose.
+   * Its application requests cannot override that choice until focus moves.
+   * Missing in older saved arrangements, where application requests still apply.
+   */
+  fullscreenOverride?: WindowId | undefined
 }
 
 export interface StripState {
@@ -649,7 +654,15 @@ function withWorkspace(
   fn: (ws: Workspace) => Workspace,
 ): StripState {
   const index = clampIndex(state.focus, state.workspaces.length)
-  const workspaces = state.workspaces.map((ws, i) => (i === index ? fn(ws) : ws))
+  const workspaces = state.workspaces.map((ws, i) => {
+    if (i !== index) return ws
+    const next = fn(ws)
+    const column = next.columns[clampIndex(next.focus, next.columns.length)]
+    const focused = column?.windows[clampIndex(column.focus, column.windows.length)]
+    return next.fullscreenOverride !== undefined && next.fullscreenOverride !== focused
+      ? { ...next, fullscreenOverride: undefined }
+      : next
+  })
   return { ...state, workspaces }
 }
 
@@ -743,7 +756,8 @@ export function removeWindow(
     let focus = ws.focus
     const columnEmptied = ws.columns[found.column]!.windows.length === 1
     if (columnEmptied && found.column < ws.focus) focus -= 1
-    return { ...ws, columns, focus: clampIndex(focus, columns.length) }
+    return { ...ws, columns, focus: clampIndex(focus, columns.length),
+      fullscreenOverride: ws.fullscreenOverride === id ? undefined : ws.fullscreenOverride }
   })
 
   return settle({ ...state, workspaces }, output, config)
@@ -967,6 +981,13 @@ export function setFullscreen(
   const where = findWindow(state, id)
   if (!where || where.workspace !== state.focus) return state
 
+  const workspace = currentWorkspace(state)
+  // Wine can derive enter/leave requests from the geometry we just configured.
+  // Those requests must not undo either direction of the user's explicit choice.
+  // Focus changes and window removal release that choice.
+  if (workspace.fullscreenOverride === id) return state
+  if ((workspace.fullscreen === id) === fullscreen) return state
+
   const focused = fullscreen ? focusWindow(state, id, output, config) : state
   const next = withWorkspace(focused, (ws) => ({
     ...ws,
@@ -998,6 +1019,7 @@ export function setFit(
     ...ws,
     fit,
     fullscreen: fit ? null : ws.fullscreen,
+    fullscreenOverride: fit ? undefined : ws.fullscreenOverride,
   }))
   return scrollFocusIntoView(next, output, config)
 }
@@ -1018,6 +1040,7 @@ export function toggleFullscreen(
   const next = withWorkspace(state, (ws) => ({
     ...ws,
     fullscreen: ws.fullscreen === focused ? null : focused,
+    fullscreenOverride: focused,
   }))
   // Still settle the offset. Leaving fullscreen has to land on a strip that is
   // scrolled to the window you were just looking at, not wherever it was when
@@ -1187,7 +1210,7 @@ export function moveWindow(
 
   // Moving a window while something is fullscreen would rearrange a strip
   // nobody can see. Clearing it shows the result of what was just done.
-  const shown = withWorkspace(next, (ws) => ({ ...ws, fullscreen: null }))
+  const shown = withWorkspace(next, (ws) => ({ ...ws, fullscreen: null, fullscreenOverride: undefined }))
   return settle(shown, output, config)
 }
 
@@ -1296,7 +1319,8 @@ function detach(ws: Workspace, id: WindowId): Workspace {
       return { ...column, windows, focus: clampIndex(column.focus, windows.length) }
     })
     .filter((column) => column.windows.length > 0)
-  return { ...ws, columns, focus: clampIndex(ws.focus, columns.length) }
+  return { ...ws, columns, focus: clampIndex(ws.focus, columns.length),
+    fullscreenOverride: ws.fullscreenOverride === id ? undefined : ws.fullscreenOverride }
 }
 
 /** Add a window to a workspace as a new column beside its focus. */
@@ -1304,7 +1328,7 @@ function attach(ws: Workspace, id: WindowId, config: StripConfig): Workspace {
   const at = ws.columns.length === 0 ? 0 : clampIndex(ws.focus, ws.columns.length) + 1
   const columns = [...ws.columns]
   columns.splice(at, 0, { windows: [id], focus: 0, width: config.defaultWidth })
-  return { ...ws, columns, focus: at }
+  return { ...ws, columns, focus: at, fullscreenOverride: undefined }
 }
 
 /**

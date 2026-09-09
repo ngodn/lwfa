@@ -532,6 +532,7 @@ export function App(): React.ReactElement {
       }
       const out = outputRef.current;
       const next = fn(stripRef.current, out, configRef.current);
+      if (next === stripRef.current) return;
       stripRef.current = next;
       setStrip(next);
       push(next, out, animate);

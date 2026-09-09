@@ -22,7 +22,8 @@ function validState(value: unknown): value is StripState {
   return state.workspaces.every((ws) => {
     if (!ws || !Array.isArray(ws.columns) || !index(ws.focus, ws.columns.length) ||
       !Number.isFinite(ws.viewOffset) || typeof ws.fit !== "boolean" ||
-      !(ws.fullscreen === null || Number.isInteger(ws.fullscreen))) return false
+      !(ws.fullscreen === null || Number.isInteger(ws.fullscreen)) ||
+      !(ws.fullscreenOverride === undefined || Number.isInteger(ws.fullscreenOverride))) return false
     if (!ws.columns.every((column) => {
       if (!column || !Array.isArray(column.windows) || column.windows.length === 0 ||
         !index(column.focus, column.windows.length) || !index(column.width, WIDTH_PRESETS.length) ||
@@ -33,6 +34,8 @@ function validState(value: unknown): value is StripState {
         return true
       })
     })) return false
+    if (ws.fullscreenOverride !== undefined &&
+      ws.columns[ws.focus]?.windows[ws.columns[ws.focus]!.focus] !== ws.fullscreenOverride) return false
     return ws.fullscreen === null || ws.columns.some((column) => column.windows.includes(ws.fullscreen!))
   })
 }

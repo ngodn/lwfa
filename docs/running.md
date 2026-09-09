@@ -66,6 +66,11 @@ immediately left of **Fullscreen**. Immersive mode fills the browser screen and
 hides lwfa navigation. The existing Fullscreen action still controls whether one
 remote window fills the canvas; the two controls can be used together.
 
+**Fullscreen** and **Exit fullscreen** keep your chosen window placement even
+if the game changes its own display mode. That choice lasts while the window
+remains selected in its workspace. Selecting another window or rearranging it
+lets application fullscreen requests control placement again.
+
 Tap the floating lwfa logo to show or hide navigation. Drag it anywhere on the
 screen; its position is remembered on this device. Navigation overlays the
 desktop, so showing it does not resize the game. With navigation visible, use
