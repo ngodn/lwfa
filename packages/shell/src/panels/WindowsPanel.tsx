@@ -59,6 +59,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { cn } from "@/lib/utils"
+import { ImmersiveButton } from "@/components/ImmersiveMode"
 
 /** Column width labels, derived so a new preset needs no edit here. */
 const widthLabel = (preset: number) => `${Math.round((WIDTH_PRESETS[preset] ?? 0) * 100)}%`
@@ -145,7 +146,7 @@ function WindowsPanel() {
      * same rule whether or not it sits inside the fieldset.
      */
     <div className="flex flex-col gap-4">
-      {!primary ? <Following /> : null}
+      {!primary ? <><Following /><div className="flex items-center gap-2"><ImmersiveButton /><span className="text-sm">Immersive mode</span></div></> : null}
 
       <fieldset disabled={!primary} className="contents">
         {/* The thing most people opened this panel to do, so it comes first
@@ -612,6 +613,7 @@ const WindowItem = memo(function WindowItem({
       {open ? (
         <div className="space-y-1.5 border-t bg-muted/20 px-3 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
+            <ImmersiveButton />
             <IconAction
               label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
               onClick={() => act(actions.toggleFullscreen)}

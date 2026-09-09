@@ -59,6 +59,22 @@ Alt rather than Super, because the host compositor sees keys first and usually
 has Super bound. All of the above is layout policy, so the engine forwards
 those keys to the shell rather than acting on them itself.
 
+## Immersive mode
+
+In **Windows**, expand a window's actions and press **Enter immersive mode**,
+immediately left of **Fullscreen**. Immersive mode fills the browser screen and
+hides lwfa navigation. The existing Fullscreen action still controls whether one
+remote window fills the canvas; the two controls can be used together.
+
+Tap the floating lwfa logo to show or hide navigation. Drag it anywhere on the
+screen; its position is remembered on this device. Navigation overlays the
+desktop, so showing it does not resize the game. With navigation visible, use
+**Exit immersive mode** to return, or use the browser's fullscreen exit gesture.
+
+Installed Home Screen apps hide lwfa navigation without requesting browser
+fullscreen. If the browser refuses fullscreen, navigation remains visible and
+lwfa shows an explanation.
+
 ## Scrollable tiling
 
 Layout follows [niri](https://github.com/niri-wm/niri): windows live in columns

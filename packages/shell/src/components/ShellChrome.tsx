@@ -31,12 +31,18 @@ import type { NavItemId } from "@/lib/prefs"
 import type { NavGroupId } from "@/nav/registry"
 import { cn } from "@/lib/utils"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { ImmersiveControls, ImmersiveProvider, useImmersive } from "@/components/ImmersiveMode"
 
 export const ShellChrome = memo(function ShellChrome({
   children,
 }: {
   children: React.ReactNode
 }) {
+  return <ImmersiveProvider><ChromeContent>{children}</ChromeContent></ImmersiveProvider>
+})
+
+function ChromeContent({ children }: { children: React.ReactNode }) {
+  const immersive = useImmersive()
   const nav = usePrefSection("nav")
   const [active, setActive] = useState<NavItemId | NavGroupId | null>(null)
   /** The action button that just fired, so it can flash. */
@@ -82,6 +88,10 @@ export const ShellChrome = memo(function ShellChrome({
 
   const close = useCallback(() => setActive(null), [])
 
+  useLayoutEffect(() => {
+    if (immersive.active && !immersive.navigation) setActive(null)
+  }, [immersive.active, immersive.navigation])
+
   /**
    * Entering arrange mode closes whatever panel opened it.
    *
@@ -126,7 +136,8 @@ export const ShellChrome = memo(function ShellChrome({
           full-screen app, and the one thing that must clear it, a docked
           keyboard's bottom row, pads itself (see InputDock). */}
       <div className={cn("pt-safe pl-safe pr-safe flex h-full w-full overflow-hidden bg-backdrop", shellDirection(edge))}>
-        <NavRail active={active} fired={fired} onSelect={select} />
+        <NavRail active={active} fired={fired} onSelect={select}
+          immersive={immersive.active} concealed={immersive.active && !immersive.navigation} />
         {/* A column, so a docked keyboard takes space from the desktop rather
             than covering the line being typed into. The gamepad positions
             itself absolutely inside this same box and takes none. */}
@@ -137,10 +148,11 @@ export const ShellChrome = memo(function ShellChrome({
         <PanelHost active={active} onClose={close} />
         <AlreadyRunning />
         <FileDialog />
+        <ImmersiveControls />
       </div>
     </TooltipProvider>
   )
-})
+}
 
 /** evdev `KEY_ESC`. */
 const ESCAPE = 1

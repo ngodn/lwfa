@@ -52,6 +52,8 @@ export interface NavRailProps {
    */
   fired: NavItemId | null
   onSelect: (target: NavTarget) => void
+  immersive?: boolean
+  concealed?: boolean
 }
 
 const SIZES = {
@@ -62,7 +64,7 @@ const SIZES = {
 
 const isVertical = (edge: NavEdge) => edge === "left" || edge === "right"
 
-export const NavRail = memo(function NavRail({ active, fired, onSelect }: NavRailProps) {
+export const NavRail = memo(function NavRail({ active, fired, onSelect, immersive = false, concealed = false }: NavRailProps) {
   const nav = usePrefSection("nav")
   const { order, hidden, anchored, centred, size } = nav
   const edge = resolveEdge(nav.edge, usePortrait())
@@ -115,7 +117,10 @@ export const NavRail = memo(function NavRail({ active, fired, onSelect }: NavRai
 
   return (
     <nav
+      id="shell-navigation"
       ref={railRef as React.Ref<HTMLElement>}
+      inert={concealed}
+      aria-hidden={concealed || undefined}
       aria-label="Shell navigation"
       data-shell-nav
       data-edge={edge}
@@ -133,7 +138,19 @@ export const NavRail = memo(function NavRail({ active, fired, onSelect }: NavRai
         edge === "right" && "border-r-0 border-l",
         edge === "bottom" && "border-b-0 border-t",
       )}
-      style={{ padding: metrics.pad, gap: metrics.gap }}
+      style={{ padding: metrics.pad, gap: metrics.gap,
+        ...(immersive ? {
+          position: "fixed",
+          visibility: concealed ? "hidden" : "visible",
+          ...(vertical ? {
+            [edge]: `env(safe-area-inset-${edge}, 0px)`,
+            top: "env(safe-area-inset-top, 0px)", bottom: 0, height: "auto",
+          } : {
+            [edge]: edge === "top" ? "env(safe-area-inset-top, 0px)" : 0,
+            left: "env(safe-area-inset-left, 0px)", right: "env(safe-area-inset-right, 0px)", width: "auto",
+          }),
+        } : {}),
+      }}
     >
       {start.map((slot) => (
         <RailButton

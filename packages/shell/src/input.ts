@@ -270,9 +270,9 @@ export function isTextEntry(target: EventTarget | null): boolean {
   return !["checkbox", "radio", "button", "submit", "reset", "range"].includes(type)
 }
 
-/** Dialog navigation and confirmation keys belong to the shell. */
+/** Dialogs and explicitly local controls keep their keyboard input in the shell. */
 export function isDialogControl(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && target.closest('[role="dialog"], [role="alertdialog"]') !== null
+  return target instanceof HTMLElement && target.closest('[role="dialog"], [role="alertdialog"], [data-shell-control]') !== null
 }
 
 /**

@@ -38,6 +38,7 @@ running compositor:
 node scripts/e2e-window-input.mjs
 node scripts/e2e-opus-decoder.mjs
 node scripts/e2e-codec-fallback.mjs
+node scripts/e2e-immersive.mjs       # build the shell first; fullscreen and floating navigation
 ```
 
 Set `PLAYWRIGHT_MODULE` to the installed Playwright module path and

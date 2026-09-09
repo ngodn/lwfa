@@ -219,6 +219,54 @@
 }
 
 @layer components {
+  .immersive-fab-area {
+    position: fixed;
+    inset: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    z-index: 40;
+    pointer-events: none;
+  }
+
+  .immersive-fab {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border: 1px solid rgb(255 255 255 / 12%);
+    border-radius: 50%;
+    background: rgb(12 13 16 / 65%);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 18%);
+    opacity: 0.45;
+    pointer-events: auto;
+    touch-action: none;
+    cursor: grab;
+    transition: opacity 160ms ease, background-color 160ms ease;
+  }
+
+  .immersive-fab:hover,
+  .immersive-fab:focus-visible,
+  .immersive-fab[aria-expanded="true"] {
+    opacity: 1;
+  }
+
+  .immersive-fab:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+  .immersive-fab:active { cursor: grabbing; opacity: 1; }
+
+  .immersive-exit {
+    position: fixed;
+    z-index: 40;
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    min-height: 44px;
+    gap: 8px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .immersive-fab { transition: none; }
+  }
+
   /*
    * The panel sheet is non-modal: see PanelHost.
    *
