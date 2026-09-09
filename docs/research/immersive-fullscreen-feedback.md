@@ -83,7 +83,7 @@ The synthetic app deliberately keeps requesting conflicting rectangles. Native
 client sizes still vary by eight pixels and X11 requests still arrive, so its
 broader native-size stability check remains false. The fix stops those requests
 from changing shell placement. It does not claim to fix every app-side resize
-or frame-generation problem. Actual RE9 verification remains pending.
+or frame-generation problem. After installing 1.5.7, the user reported that the issue was fixed on 9 September 2026.
 
 The engine capture, encoder, monitor sizing, and Wine patch code were not
 changed by this fix. Tests used disposable sessions; the production service,
@@ -95,3 +95,18 @@ baseline `run-htensggg`, first candidate `run-j1eskiyw`, final candidate
 The committed browser regression can be run after `pnpm build` with
 `node scripts/e2e-immersive.mjs`; `PLAYWRIGHT_MODULE` and `CHROMIUM_EXECUTABLE`
 select existing test tools.
+
+## Published package provenance
+
+The release uses the installer tested before publication, built from annotated
+tag `v1.5.7` at `ad3fa99480e60f137302ad752082cde4c8eb1db5`.
+Its SHA-256 is
+`75aff692ede61da85540c5dc670a2e532fdc28d5df20af5e7ae6f88df3c875ab`.
+All 736 unit tests, four browser scenarios, type checking, package extraction,
+installer entry and cleanup checks passed. Libraries resolved on Debian 13
+with its `libdrm2` package; the engine requires glibc 2.30.
+
+The Wine artifact is byte-for-byte unchanged from 1.5.5. Its matching source
+archive retains the name recorded in the artifact,
+`lwfa-1.5.5-wine-source.tar.gz`, and accompanies this release too.
+The release notes also cover Immersive Mode because 1.5.6 was not published.
