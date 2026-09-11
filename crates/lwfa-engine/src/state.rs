@@ -1455,6 +1455,11 @@ impl Lwfa {
     /// local socket, and nothing at all until Xwayland is up and an X11
     /// window is focused.
     pub fn guard_x_focus(&mut self) {
+        // Respect the same popup handshake as delayed layout focus repair.
+        // A new menu can briefly leave focus empty before acquiring its grab.
+        if self.x11_popup_open() {
+            return;
+        }
         let Some(guardian) = self.xfocus.as_mut() else {
             return;
         };

@@ -2,9 +2,10 @@
 //!
 //! # The failure this exists for
 //!
-//! Wine decides whether a game is the foreground window from X focus, and a
-//! Windows game that believes it is backgrounded ignores the controller
-//! entirely. During window churn (a launcher spawning and killing windows, a
+//! X keyboard focus and the XWM's active-window property both matter to Wine
+//! foreground handling. This fallback repairs only missing keyboard focus;
+//! the XWM publishes the active application from focus events. During window
+//! churn (a launcher spawning and killing windows, a
 //! session reconnecting), the X server's input focus can end up on the void:
 //! `GetInputFocus` returns `None`, no window anywhere is focused, and the
 //! compositor's own bookkeeping still names a focused window it believes is
@@ -112,7 +113,9 @@ fn is_void(focus: u32) -> bool {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
+    use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
     use x11rb::connection::Connection;
     use x11rb::protocol::Event;
     use x11rb::protocol::xproto::{CreateWindowAux, EventMask, WindowClass};
@@ -126,9 +129,176 @@ mod tests {
         }
     }
 
+    fn namespace(name: &str) -> PathBuf {
+        std::fs::read_link(format!("/proc/self/ns/{name}")).unwrap()
+    }
+
+    fn xvfb_binary() -> PathBuf {
+        let binary = std::env::var_os("LWFA_TEST_XVFB").unwrap_or_else(|| "Xvfb".into());
+        let path = Path::new(&binary);
+        if path.components().count() > 1 {
+            return path.canonicalize().expect("resolve LWFA_TEST_XVFB");
+        }
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join(path))
+            .find(|path| path.is_file())
+            .expect("install Xvfb or set LWFA_TEST_XVFB")
+            .canonicalize()
+            .unwrap()
+    }
+
+    fn run_sandbox(test: &str) {
+        // Xvfb -displayfd bypasses lock files and can replace a live host's
+        // filesystem socket when that host has no abstract X socket. Isolate
+        // both namespaces before starting any X server, including on failure.
+        let mut child = Server(
+            Command::new("bwrap")
+                .args([
+                    "--unshare-all",
+                    "--die-with-parent",
+                    "--new-session",
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--tmpfs",
+                    "/tmp",
+                    "--tmpfs",
+                    "/run",
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--ro-bind",
+                ])
+                .arg(std::env::current_exe().unwrap())
+                .arg("/run/lwfa-x11-test")
+                .arg("--ro-bind")
+                .arg(xvfb_binary())
+                .arg("/run/lwfa-Xvfb")
+                .args([
+                    "--chdir",
+                    "/tmp",
+                    "--unsetenv",
+                    "DISPLAY",
+                    "--unsetenv",
+                    "WAYLAND_DISPLAY",
+                    "--unsetenv",
+                    "XAUTHORITY",
+                    "--unsetenv",
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "--unsetenv",
+                    "XDG_RUNTIME_DIR",
+                    "--setenv",
+                    "LWFA_TEST_XVFB",
+                    "/run/lwfa-Xvfb",
+                    "--setenv",
+                    "LWFA_X11_TEST_PARENT_MNT",
+                ])
+                .arg(namespace("mnt"))
+                .args(["--setenv", "LWFA_X11_TEST_PARENT_NET"])
+                .arg(namespace("net"))
+                .args([
+                    "--",
+                    "/run/lwfa-x11-test",
+                    "--exact",
+                    test,
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .spawn()
+                .expect("X11 tests require bubblewrap (bwrap); refusing an unsandboxed run"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                assert!(status.success(), "isolated X11 test failed: {status}");
+                return;
+            }
+            assert!(Instant::now() < deadline, "isolated X11 test timed out");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn enter_sandbox(test: &str) -> bool {
+        match (
+            std::env::var_os("LWFA_X11_TEST_PARENT_MNT"),
+            std::env::var_os("LWFA_X11_TEST_PARENT_NET"),
+        ) {
+            (None, None) => {
+                run_sandbox(test);
+                true
+            }
+            (Some(mnt), Some(net)) => {
+                assert_ne!(
+                    namespace("mnt"),
+                    PathBuf::from(mnt),
+                    "mount namespace is shared"
+                );
+                assert_ne!(
+                    namespace("net"),
+                    PathBuf::from(net),
+                    "network namespace is shared"
+                );
+                false
+            }
+            _ => panic!("incomplete X11 test sandbox environment"),
+        }
+    }
+
     #[test]
-    #[ignore = "requires Xvfb; creates its own isolated display"]
+    #[ignore = "requires Xvfb and bubblewrap; checks display isolation"]
+    fn preserves_existing_x11_server() {
+        use std::os::unix::fs::MetadataExt;
+        if enter_sandbox("xfocus::tests::preserves_existing_x11_server") {
+            return;
+        }
+        // Reproduce Hyprland's filesystem-only listener inside an outer
+        // sandbox. The focus test must leave this server and its socket alive.
+        let mut host = Server(
+            Command::new(xvfb_binary())
+                .args([
+                    ":0",
+                    "-displayfd",
+                    "1",
+                    "-screen",
+                    "0",
+                    "320x240x24",
+                    "-nolisten",
+                    "tcp",
+                    "-nolisten",
+                    "local",
+                    "-extension",
+                    "GLX",
+                ])
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut display = String::new();
+        BufReader::new(host.0.stdout.take().unwrap())
+            .read_line(&mut display)
+            .unwrap();
+        assert_eq!(display.trim(), "0");
+        let path = "/tmp/.X11-unix/X0";
+        let inode = std::fs::metadata(path).unwrap().ino();
+        let (conn, _) = RustConnection::connect(Some(":0")).unwrap();
+        let before = conn.get_input_focus().unwrap().reply().unwrap().focus;
+        run_sandbox("xfocus::tests::repairs_void_focus_without_disturbing_real_windows");
+        assert_eq!(std::fs::metadata(path).unwrap().ino(), inode);
+        assert!(host.0.try_wait().unwrap().is_none());
+        let (fresh, _) = RustConnection::connect(Some(":0")).unwrap();
+        assert_eq!(
+            fresh.get_input_focus().unwrap().reply().unwrap().focus,
+            before
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Xvfb and bubblewrap; creates its own isolated display"]
     fn repairs_void_focus_without_disturbing_real_windows() {
+        if enter_sandbox("xfocus::tests::repairs_void_focus_without_disturbing_real_windows") {
+            return;
+        }
         // Never connect to DISPLAY: this test changes focus only on its own
         // headless X server, including when run from an active game session.
         let binary = std::env::var_os("LWFA_TEST_XVFB").unwrap_or_else(|| "Xvfb".into());
@@ -142,6 +312,8 @@ mod tests {
                     "320x240x24",
                     "-nolisten",
                     "tcp",
+                    "-extension",
+                    "GLX",
                 ])
                 .stdout(Stdio::piped())
                 .spawn()
@@ -260,6 +432,43 @@ mod tests {
         state.reassert_focus();
         assert!(keyboard.current_focus().is_some());
         assert_eq!(conn.get_input_focus().unwrap().reply().unwrap().focus, game);
+
+        // The one-second guardian must respect the same menu handshake as
+        // delayed layout repair, even before the menu has acquired focus.
+        let popup_surface = smithay::xwayland::X11Surface::new(
+            None,
+            popup,
+            true,
+            std::sync::Arc::downgrade(&conn),
+            atoms,
+            smithay::utils::Rectangle::from_size((100, 100).into()),
+        );
+        let popup_window = smithay::desktop::Window::new_x11_window(popup_surface.clone());
+        state.space.map_element(popup_window.clone(), (0, 0), true);
+        state.note_popup_mapped(&popup_surface);
+        conn.set_input_focus(InputFocus::NONE, FOCUS_NONE, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .unwrap();
+        state.guard_x_focus();
+        assert_eq!(
+            conn.get_input_focus().unwrap().reply().unwrap().focus,
+            FOCUS_NONE,
+            "periodic guardian interrupted a new popup's focus handshake"
+        );
+        std::thread::sleep(Duration::from_millis(5100));
+        state.guard_x_focus();
+        assert_eq!(conn.get_input_focus().unwrap().reply().unwrap().focus, game);
+        conn.set_input_focus(InputFocus::NONE, popup, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .unwrap();
+        state.guard_x_focus();
+        assert_eq!(
+            conn.get_input_focus().unwrap().reply().unwrap().focus,
+            popup
+        );
+        state.space.unmap_elem(&popup_window);
 
         // The server rejects focus on an unmapped window. A queued request
         // must not be reported as a successful repair, and retry must work.

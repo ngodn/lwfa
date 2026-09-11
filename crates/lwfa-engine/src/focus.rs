@@ -3,14 +3,14 @@
 //! A `wl_surface` is enough for every native client, and it was all this used
 //! to be. X11 is not: giving an X11 window's `wl_surface` keyboard focus makes
 //! Xwayland deliver the events, but nothing tells the *X server* which window
-//! is focused, so `_NET_ACTIVE_WINDOW` stays `0x0` and the client discards
-//! every key as being for somebody else. The window looks focused and answers
-//! nothing.
+//! is focused. A window can then look focused while ignoring keyboard input.
 //!
 //! Smithay implements `KeyboardTarget` for `X11Surface` precisely to close
 //! that gap: entering it issues `SetInputFocus`, sends `WM_TAKE_FOCUS` to
 //! clients that ask for it, and *then* forwards to the `wl_surface`. This enum
 //! exists so the seat can hold that implementation instead of the bare surface.
+//! The XWM separately publishes `_NET_ACTIVE_WINDOW` from the resulting X11
+//! focus events. Wine also uses that property to determine its foreground app.
 //!
 //! Pointer and touch focus stay on `WlSurface`. Xwayland resolves those from
 //! the surface itself, so there is nothing extra to tell the X server.

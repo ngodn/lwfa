@@ -204,17 +204,22 @@ Regression evidence:
 Browser scripts: `scripts/e2e-focus-restoration.mjs` and
 `scripts/e2e-follower-focus.mjs`. They use loopback fixture servers and do not
 connect to production. PLAYWRIGHT_MODULE and CHROMIUM_EXECUTABLE may point to
-existing installations. The X11 test is ignored by default and can run with:
+existing installations. The X11 tests require bubblewrap (`bwrap`) and Xvfb,
+are ignored by default, and can run with:
 
 ```sh
 LWFA_TEST_XVFB=/path/to/Xvfb cargo test -p lwfa-engine xfocus::tests -- --ignored
 ```
 
-The test starts its own headless X server rather than using DISPLAY. This run
-used a distro Xvfb package extracted under ignored target/, without installing
-system software. Temporary browsers, fixture servers and X server children are
-closed after their tests. None of this establishes an iPad-native reproduction
-of the original missing LB/RB taps.
+Correction (2026-09-08): starting a separate Xvfb process did not isolate its
+socket paths. The September 6 run replaced the host's X11 socket, even though
+the focus assertions passed. See [the incident and repair](host-x11-test-isolation.md).
+The tests now re-execute inside private mount and network namespaces before
+starting Xvfb, and fail if bubblewrap cannot establish isolation. A regression
+test verifies that an existing filesystem-only X server keeps its socket and
+accepts new connections after the focus test exits. The Xvfb package remains
+under ignored target/, without installing system software. None of this
+establishes an iPad-native reproduction of the original missing LB/RB taps.
 
 
 Final validation: 657 JavaScript tests and 317 Rust workspace tests passed;

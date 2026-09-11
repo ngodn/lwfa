@@ -140,6 +140,8 @@ for doc in "$ROOT"/docs/*.md; do
   cp "$doc" "$STAGE/docs/"
 done
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
+mkdir -p "$STAGE/share/lwfa/licenses"
+cp "$ROOT/vendor/smithay/LICENSE.txt" "$STAGE/share/lwfa/licenses/smithay.txt"
 
 # Wine is a separate compatibility tool. Only a complete, pinned artifact may
 # travel with the installer; the ordinary engine package needs no Wine runtime.

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor/smithay"]
+
+[patch.crates-io]
+# Keep X11 activation coherent for Wine; see vendor/smithay/LWFA-PATCHES.md.
+smithay = { path = "vendor/smithay" }
 
 [workspace.package]
 edition = "2024"
