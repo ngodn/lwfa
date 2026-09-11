@@ -55,7 +55,7 @@ LWFA_TEST_XVFB=/path/to/Xvfb node scripts/test-xwm-focus.mjs
 LWFA_TEST_XVFB=/path/to/Xvfb cargo test -p lwfa-engine xfocus::tests:: -- --ignored --nocapture
 ```
 
-All X-server tests follow docs/research/host-x11-test-isolation.md. The installed service was not restarted or replaced during validation. After upgrading lwfa, controller-only and pointer-driven Big Picture launches still need a real-game confirmation against the new binary. The live property correction alone lasts only until another window-manager update changes it.
+All X-server tests follow docs/research/host-x11-test-isolation.md. The installed service was not restarted or replaced during validation. After upgrading to the 1.5.8 test package, the user reported that the fix works and approved release. The earlier live property correction alone lasted only until another window-manager update changed it.
 
 ## Evidence and references
 
