@@ -261,7 +261,7 @@ struct ImmersiveControls: View {
         GeometryReader { area in
             let stored = prefs.state.immersivePosition
             let origin = FloatingControlPosition(x: stored[0], y: stored[1])
-            let live = origin.translated(x: dragTranslation?.width ?? 0, y: dragTranslation?.height ?? 0,
+            let live = origin.translated(x: Double(dragTranslation?.width ?? 0), y: Double(dragTranslation?.height ?? 0),
                                          width: area.size.width, height: area.size.height)
             let center = live.center(width: area.size.width, height: area.size.height)
             // No clear fill here: `Color.clear` is hit-testable and would swallow every
