@@ -1,0 +1,21 @@
+{
+  "appVersion": "0.2.0",
+  "appBuild": "2",
+  "binaryUUID": "4c4c4437-5555-3144-a148-9eef788aed6a",
+  "exception": "EXC_CRASH",
+  "signal": "SIGABRT",
+  "queue": "lwfa.audio.playback",
+  "exceptionStack": [
+    "__exceptionPreprocess",
+    "objc_exception_throw",
+    "-[NSException initWithCoder:]",
+    "_AVAE_CheckSuccessAndNoNSError(char const*, int, char const*, char const*, bool, NSError*)",
+    "AUInterfaceBaseV3::SetFormat(bool, unsigned int, AVAudioFormat*)",
+    "AVAudioEngineGraph::_Connect(AVAudioNodeImplBase*, AVAudioNodeImplBase*, unsigned int, unsigned int, AVAudioFormat*)",
+    "AVAudioEngineImpl::Connect(AVAudioNode*, AVAudioNode*, unsigned long, unsigned long, AVAudioFormat*)",
+    "-[AVAudioEngine connect:to:format:]",
+    "AudioPlaybackWorker.start()",
+    "closure #1 in closure #1 in AudioPlaybackWorker.decoder.getter"
+  ],
+  "reportCountWithSameFailure": 4
+}

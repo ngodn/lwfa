@@ -1,0 +1,5 @@
+version: 1
+bundleID: io.github.ngodn.lwfa
+product: LWFA
+infoPath: Info.plist
+iconPath: ../../packages/shell/public/brand/png/app-icon-1024.png
