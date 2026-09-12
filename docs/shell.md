@@ -59,12 +59,16 @@ engines cannot restart a different installed instance.
 
 ## Input
 
-The keyboard and gamepad are **input devices, not settings screens**, so they
-dock across the bottom rather than opening in a side panel. The keyboard takes
-space from the desktop, because typing while the keyboard covers the line you
-are editing is the failure it exists to prevent. The gamepad floats over the
-game at reduced opacity: a game wants every pixel, and its interesting parts
-are not under your thumbs.
+The **Gamepad** navigation button opens its settings panel. **Show the gamepad**
+in the Controller tab shows or hides the on-screen pad. Opening or closing the
+panel leaves the pad unchanged, so Proton, LSFG and Framegen settings are
+accessible without displaying it. The pad's settings button opens the same panel.
+The switch follows the toolbar's Hide button, and hiding the controller exits
+layout editing.
+
+The keyboard docks below the desktop, reserving space so the line you are
+editing stays visible. The gamepad floats over the game at reduced opacity.
+Their settings panels configure these separate input surfaces.
 
 - **Keyboard**: Escape and the function row are always on screen; the
   full-size tail (Insert, Home, Page Up…) is behind a toggle. Modifiers latch

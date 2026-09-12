@@ -50,6 +50,8 @@ try {
  const scripts=await page.evaluate(()=>[...document.scripts].map(s=>new URL(s.src).pathname));
  assert(scripts.some(src=>builtIndex.includes(src)), 'dev engine must serve this checkout build');
  await page.getByRole('button',{name:'Gamepad',exact:true}).click();
+ await page.getByRole('switch',{name:'Show the gamepad',exact:true}).click();
+ await page.getByRole('button',{name:'Close',exact:true}).click();
  await page.getByRole('button',{name:'Let taps through to the window',exact:true}).waitFor();
  wire.length=0;drain();events.length=0;
  await page.evaluate(()=>{
@@ -115,7 +117,6 @@ try {
  assert(events.some(e=>e.type===1&&e.code===304&&e.value===0), 'physical A release still reaches kernel after dock closure');
  console.log('PASS: manual dock closure preserves physical held input');
  await page.getByRole('button',{name:'Gamepad',exact:true}).click();
- await page.locator('main').getByRole('button',{name:'Settings',exact:true}).click();
  await page.getByRole('button',{name:'Record controller input',exact:true}).click();
  await page.evaluate(()=>{testPads[1].buttons[0]={pressed:true,value:1}});
  await page.waitForTimeout(100);

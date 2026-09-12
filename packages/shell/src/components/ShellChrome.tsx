@@ -60,9 +60,8 @@ function ChromeContent({ children }: { children: React.ReactNode }) {
       const kind = target.kind === "item" ? NAV_ITEMS[target.id].kind : "panel"
 
       if (kind === "dock" && target.kind === "item") {
-        // Input devices go on screen rather than opening a panel about
-        // themselves; their settings live behind the gear in the dock.
-        toggleDock(target.id as "keyboard" | "gamepad" | "mouse")
+        // Keyboard and mouse shortcuts toggle their input surfaces.
+        toggleDock(target.id as "keyboard" | "mouse")
         return
       }
 

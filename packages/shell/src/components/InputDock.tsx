@@ -145,9 +145,10 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
     }
   }, [padOpen, controllerMode, actions, session])
 
-  // Leaving the mouse surface ends its edit mode.
+  // Hidden input surfaces must not retain an active editor.
   useEffect(() => {
     if (dock !== "mouse") setMouseEditing(false)
+    if (dock !== "gamepad") setGamepad({ editing: false })
   }, [dock])
 
   // Straight to the DOM. The alternative re-renders the whole keyboard on every
@@ -354,6 +355,7 @@ export const InputDock = memo(function InputDock({ onOpenSettings }: InputDockPr
           variant="ghost"
           className={cn(isGamepad ? GAMEPAD_BUTTON : cn(HIT_AREA, floats ? "size-8 text-white/90" : "size-8"))}
           aria-label="Settings"
+          data-shell-panel-trigger
           onClick={() => onOpenSettings(dock)}
         >
           <Settings2 className="size-4" aria-hidden />

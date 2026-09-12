@@ -29,6 +29,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { PlacementChoice, hapticHintProp } from "@/panels/placement"
 import { CustomKeys } from "@/panels/CustomKeys"
+import { setDock, useDock } from "@/lib/dock"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GamingPanel } from "@/panels/GamingPanel"
 
@@ -40,7 +41,8 @@ const SKINS: { value: GamepadSkin; label: string; sample: string }[] = [
 
 function ControllerControls() {
   const prefs = usePrefs()
-  const { visible, editing } = useGamepad()
+  const { editing } = useGamepad()
+  const visible = useDock() === "gamepad"
   const hapticHint = hapticHintProp().hint
 
   return (
@@ -50,7 +52,10 @@ function ControllerControls() {
           <Field label="Show the gamepad" />
           <Switch
             checked={visible}
-            onCheckedChange={(v) => setGamepad({ visible: v, editing: v ? editing : false })}
+            onCheckedChange={(show) => {
+              if (!show) setGamepad({ editing: false })
+              setDock(show ? "gamepad" : "none")
+            }}
             aria-label="Show the gamepad"
           />
         </FieldRow>

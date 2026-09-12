@@ -28,6 +28,7 @@ import { useSessionState } from "@/session"
 import type { Status } from "@/connection"
 import { useDock } from "@/lib/dock"
 import {
+  NAV_ITEMS,
   NAV_GROUPS,
   TIER_COUNT,
   expandGroups,
@@ -110,10 +111,8 @@ export const NavRail = memo(function NavRail({ active, fired, onSelect, immersiv
   const centre = slots.filter((slot) => zoneOf(slot, anchored, centred) === "centre")
   const end = slots.filter((slot) => zoneOf(slot, anchored, centred) === "end")
 
-  // The keyboard and gamepad buttons dock a surface rather than open a panel,
-  // so "active" for them means "on screen", not "its panel is open". Without
-  // this the only way to tell whether the keyboard is up is to look for it.
-  const isActive = (id: string) => id === active || id === dock
+  // Panel buttons reflect the open panel; dock buttons reflect their surface.
+  const isActive = (id: NavItemId | NavGroupId) => id === active || (id === dock && NAV_ITEMS[id].kind === "dock")
 
   return (
     <nav

@@ -132,18 +132,18 @@ export const PanelHost = memo(function PanelHost({ active, onClose }: PanelHostP
         style={geometry}
         onOpenAutoFocus={focusReturn.onOpenAutoFocus}
         onCloseAutoFocus={focusReturn.onCloseAutoFocus}
-        // A press on the rail is a *switch*, not a dismissal. Without this the
+        // Navigation and toolbar settings buttons select panels. Without this the
         // sheet closes on the pointer-down and the button's click then reopens
         // it, and the two race: the panel you asked for ends up selected in the
         // rail with nothing on screen.
         onPointerDownOutside={(event) => {
-          if ((event.target as Element | null)?.closest?.("[data-shell-nav]")) {
+          if ((event.target as Element | null)?.closest?.("[data-shell-nav], [data-shell-panel-trigger]")) {
             event.preventDefault()
           }
         }}
         // Same reasoning for the focus that follows it.
         onInteractOutside={(event) => {
-          if ((event.target as Element | null)?.closest?.("[data-shell-nav]")) {
+          if ((event.target as Element | null)?.closest?.("[data-shell-nav], [data-shell-panel-trigger]")) {
             event.preventDefault()
           }
           focusReturn.onInteractOutside(event)

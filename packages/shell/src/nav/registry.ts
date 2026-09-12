@@ -106,9 +106,9 @@ export const NAV_ITEMS: Record<NavItemId, NavItem> = {
   gamepad: {
     id: "gamepad",
     label: "Gamepad",
-    hint: "Show controller",
+    hint: "Controller and gaming settings",
     icon: Gamepad2,
-    kind: "dock",
+    kind: "panel",
   },
   mouse: {
     id: "mouse",
@@ -249,9 +249,9 @@ const EMPTY_EXPANDED: ReadonlySet<NavGroupId> = new Set<NavGroupId>()
  * The tiers are coarse by design, so the rail routinely lands on one that fits
  * with a hundred pixels going begging: a phone in portrait has room for seven
  * buttons and tier 2 draws five. Merging a control nobody asked to merge is not
- * free either. `keyboard` and `gamepad` put their surface on screen with one
+ * free either. `keyboard` and `mouse` put their surface on screen with one
  * tap, and folding them into `input` turns that tap into "open a settings panel
- * and find the switch" — the cost is much higher than it is for `more`, whose
+ * and find the switch". The cost is much higher than it is for `more`, whose
  * members open panels regardless.
  *
  * So: hardest-to-lose first, and the rail expands while the buttons still fit.

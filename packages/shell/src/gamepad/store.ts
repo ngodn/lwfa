@@ -1,12 +1,12 @@
 /**
- * Gamepad visibility, edit mode, and the saved layout.
+ * Gamepad control visibility, edit mode, and the saved layout.
  *
  * An external store rather than context for the same reason preferences are:
  * the overlay sits on top of live video, and the panel that configures it must
  * not be able to re-render the desktop. Only the overlay and the panel
  * subscribe.
  *
- * The layout persists; visibility and edit mode do not. Reopening the shell
+ * The layout persists; control visibility and edit mode do not. Reopening the shell
  * with a controller stuck over the screen, or in edit mode, would be a puzzle
  * rather than a convenience.
  */
@@ -15,7 +15,6 @@ import { useCallback, useSyncExternalStore } from "react"
 import { DEFAULT_LAYOUT, type Pad } from "@/gamepad/model"
 
 export interface GamepadStore {
-  visible: boolean
   /** Hide only the touch controls, keeping the dock and controller enabled. */
   padsHidden: boolean
   editing: boolean
@@ -101,7 +100,7 @@ function withPadsAddedSince(stored: Pad[]): Pad[] {
   return missing.length === 0 ? stored : [...stored, ...missing]
 }
 
-let current: GamepadStore = { visible: false, padsHidden: false, editing: false, pads: readPads() }
+let current: GamepadStore = { padsHidden: false, editing: false, pads: readPads() }
 const listeners = new Set<() => void>()
 
 export function setGamepad(patch: Partial<GamepadStore>): void {
@@ -109,7 +108,6 @@ export function setGamepad(patch: Partial<GamepadStore>): void {
   // Editing from either the toolbar or Settings always reveals the layout.
   if (next.editing) next.padsHidden = false
   if (
-    next.visible === current.visible &&
     next.padsHidden === current.padsHidden &&
     next.editing === current.editing &&
     next.pads === current.pads

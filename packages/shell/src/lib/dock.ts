@@ -14,9 +14,9 @@
  * typing into hidden behind the overlay. Unusable for the exact job it exists
  * to do.
  *
- * So the rail's keyboard and gamepad buttons toggle this instead of opening a
- * panel, and the panels those buttons used to open now hold only settings,
- * reachable from the gear inside the dock.
+ * Keyboard and mouse navigation shortcuts toggle their surfaces directly.
+ * Gamepad navigation opens its settings panel, where Show gamepad controls
+ * this same dock state. The surface's gear also opens its settings panel.
  */
 
 import { useSyncExternalStore } from "react"
