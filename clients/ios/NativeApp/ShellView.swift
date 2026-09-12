@@ -255,16 +255,15 @@ struct ImmersiveControls: View {
     @Bindable var prefs: NativePreferences
     @Binding var revealed: Bool
     var exit: () -> Void
-    @State private var dragOrigin: CGPoint?
-    @State private var dragging = false
+    @GestureState private var dragTranslation: CGSize? = nil
 
     var body: some View {
         GeometryReader { area in
-            let inset = CGFloat(12)
-            let bounds = CGRect(x: inset, y: inset, width: max(1, area.size.width - inset * 2 - 48), height: max(1, area.size.height - inset * 2 - 48))
             let stored = prefs.state.immersivePosition
-            let position = CGPoint(x: bounds.minX + CGFloat(stored[0]) * bounds.width + 24,
-                                   y: bounds.minY + CGFloat(stored[1]) * bounds.height + 24)
+            let origin = FloatingControlPosition(x: stored[0], y: stored[1])
+            let live = origin.translated(x: dragTranslation?.width ?? 0, y: dragTranslation?.height ?? 0,
+                                         width: area.size.width, height: area.size.height)
+            let center = live.center(width: area.size.width, height: area.size.height)
             // No clear fill here: `Color.clear` is hit-testable and would swallow every
             // touch on the desktop while immersive. Only the button and the exit
             // control take input; the rest passes through.
@@ -277,23 +276,26 @@ struct ImmersiveControls: View {
                         .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
                 }
                 .buttonStyle(.plain)
-                .opacity(revealed || dragging ? 1 : 0.45)
+                .opacity(revealed || dragTranslation != nil ? 1 : 0.45)
+                .allowsHitTesting(true)
                 .hoverEffect(.lift)
                 .accessibilityLabel(revealed ? "Hide navigation" : "Show navigation")
                 .accessibilityHint("Tap to toggle navigation. Drag to move.")
-                .highPriorityGesture(DragGesture(minimumDistance: 6)
-                    .onChanged { value in
-                        if dragOrigin == nil { dragOrigin = position }
-                        dragging = true
-                        guard let dragOrigin else { return }
-                        let next = CGPoint(x: dragOrigin.x + value.translation.width, y: dragOrigin.y + value.translation.height)
-                        prefs.state.immersivePosition = [
-                            Double(min(1, max(0, (next.x - 24 - bounds.minX) / bounds.width))),
-                            Double(min(1, max(0, (next.y - 24 - bounds.minY) / bounds.height))),
-                        ]
+                .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .named("lwfaImmersiveArea"))
+                    .updating($dragTranslation) { value, translation, transaction in
+                        // The coordinate space belongs to the stationary overlay.
+                        // Keep live motion local; shared preferences trigger saves
+                        // and session reconfiguration, so commit only on release.
+                        transaction.animation = nil
+                        translation = value.translation
                     }
-                    .onEnded { _ in dragOrigin = nil; dragging = false })
-                .position(position)
+                    .onEnded { value in
+                        let final = origin.translated(x: value.translation.width, y: value.translation.height,
+                                                      width: area.size.width, height: area.size.height)
+                        prefs.state.immersivePosition = [final.x, final.y]
+                    })
+                .position(x: center.x, y: center.y)
+                .transaction { $0.animation = nil }
                 if revealed {
                     Button(action: exit) { Label("Exit immersive mode", systemImage: "rectangle.portrait.and.arrow.right") }
                         .buttonStyle(.glass)
@@ -302,6 +304,7 @@ struct ImmersiveControls: View {
                 }
             }
             .frame(width: area.size.width, height: area.size.height, alignment: .topLeading)
+            .coordinateSpace(name: "lwfaImmersiveArea")
         }
         .ignoresSafeArea(.keyboard)
     }
