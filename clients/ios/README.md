@@ -1,6 +1,6 @@
 # lwfa for iPad
 
-Native SwiftUI client for iPadOS 26 and later, built locally on Linux with Swift 6.3.3 and xtool. Current app version: 0.2.0 (2). It connects to the existing lwfa 1.5.10 engine. No server upgrade is required.
+Native SwiftUI client for iPadOS 26 and later, built locally on Linux with Swift 6.3.3 and xtool. Current app version: 0.2.12 (12). It connects to lwfa 1.5.10 and later. The 1.5.11 release includes this IPA and the matching browser layout update.
 
 The native client includes SwiftUI navigation and settings, column/workspace layouts, app launching, immersive view, physical and virtual controllers, on-screen keyboard and mouse controls, clipboard and file transfers, accounts/devices, and managed Proton/LSFG/Framegen settings. H.264/HEVC use VideoToolbox and Metal; audio uses AVAudioEngine. The feature inventory and remaining device checks are in [the parity audit](../../docs/research/ios-feature-parity.md).
 

@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key><string>lwfa</string>
-    <key>CFBundleShortVersionString</key><string>0.2.10</string>
-    <key>CFBundleVersion</key><string>10</string>
+    <key>CFBundleShortVersionString</key><string>0.2.12</string>
+    <key>CFBundleVersion</key><string>12</string>
     <key>UIDeviceFamily</key><array><integer>2</integer></array>
     <key>UILaunchScreen</key><dict/>
     <key>UIApplicationSupportsIndirectInputEvents</key><true/>
