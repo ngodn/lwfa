@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { gamingReply, resetGaming } from "./lib/gaming";
 import { loadArrangement, restoreArrangement, saveArrangement, type Arrangement } from "./lib/arrangement.js";
 import type {
   DecodedFrame,
@@ -588,6 +589,7 @@ export function App(): React.ReactElement {
     const handleMessage = (message: ToShell) => {
       switch (message.type) {
         case "hello": {
+          resetGaming();
           resolvePending("restartEngine");
           restoringLayout.current = message.primary;
           pendingTransitions.current = [];
@@ -916,6 +918,10 @@ export function App(): React.ReactElement {
           fileDialogDescribed(message);
           break;
 
+        case "gaming":
+          gamingReply(message);
+          break;
+
         case "error":
           // Routing by the request name keeps this from becoming a global
           // error bus that every panel has to filter.
@@ -1027,6 +1033,7 @@ export function App(): React.ReactElement {
         );
       },
       onStatus: (s, detail) => {
+        if (s !== "connected") resetGaming();
         // A socket that has just come up may have delivered its backlog in one
         // burst, and both audio players absorb a burst as permanent delay
         // rather than as a moment of catching up. Dropping what is held costs

@@ -244,6 +244,8 @@ pub enum ClipOrigin {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ToShell {
+    /// Completion of an owner-only gaming component operation.
+    Gaming { request: u32, data: serde_json::Value, error: Option<String> },
     /// First message on every connection. The shell should check
     /// `protocolVersion` against [`PROTOCOL_VERSION`] before driving anything.
     ///
@@ -993,10 +995,26 @@ pub type ButtonCode = u32;
 /// would get nonsense.
 pub type KeyCode = u32;
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GamingAction { Status, Install, SaveProfile }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GamingComponent { Proton, Lsfg, Framegen }
+
 /// Shell to engine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ToEngine {
+    /// Manage installed gaming components without blocking rendering.
+    Gaming {
+        request: u32,
+        action: GamingAction,
+        component: Option<GamingComponent>,
+        appid: Option<String>,
+        profile: Option<serde_json::Value>,
+    },
     /// The complete desired layout. Windows absent from `windows` are hidden.
     ///
     /// Declarative and total rather than incremental: the shell sends what it

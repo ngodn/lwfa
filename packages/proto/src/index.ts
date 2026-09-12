@@ -93,6 +93,7 @@ export interface Modifiers {
 }
 
 export type ToShell =
+  | { type: "gaming"; request: number; data: unknown; error: string | null }
   | {
       type: "hello"
       protocolVersion: number
@@ -583,6 +584,7 @@ export type ToEngine =
   | { type: "takeControl" }
   /** Restart the installed lwfa user service. Owner only. */
   | { type: "restartEngine" }
+  | { type: "gaming"; request: number; action: "status" | "install" | "saveProfile"; component: "proton" | "lsfg" | "framegen" | null; appid: string | null; profile: unknown }
   /**
    * The shell hit an error it could not continue from and is reloading.
    *
@@ -1127,6 +1129,12 @@ export function decodeToShell(text: string): ToShell {
         accounts: list.map((a, i) => decodeAccount(a, `${where}.accounts[${i}]`)),
       }
     }
+    case "gaming": {
+      const where = `${at}.gaming`
+      noExtraKeys(o, ["type", "request", "data", "error"], where)
+      if (!("data" in o)) throw new ProtocolError(`${where}.data: required`)
+      return { type: "gaming", request: int(o, "request", where), data: o["data"], error: nullableStr(o, "error", where) }
+    }
     case "error": {
       const where = `${at}.error`
       noExtraKeys(o, ["type", "request", "message"], where)
@@ -1641,6 +1649,16 @@ export function decodeToEngine(text: string): ToEngine {
     case "restartEngine": {
       noExtraKeys(o, ["type"], `${at}.${t}`)
       return { type: t }
+    }
+    case "gaming": {
+      const where = `${at}.gaming`
+      noExtraKeys(o, ["type", "request", "action", "component", "appid", "profile"], where)
+      const action = str(o, "action", where)
+      const component = nullableStr(o, "component", where)
+      if (action !== "status" && action !== "install" && action !== "saveProfile") throw new ProtocolError(`${where}.action: invalid`)
+      if (component !== null && component !== "proton" && component !== "lsfg" && component !== "framegen") throw new ProtocolError(`${where}.component: invalid`)
+      if (!("profile" in o)) throw new ProtocolError(`${where}.profile: required`)
+      return { type: "gaming", request: int(o, "request", where), action, component, appid: nullableStr(o, "appid", where), profile: o["profile"] }
     }
     case "setGamepad": {
       const where = `${at}.setGamepad`

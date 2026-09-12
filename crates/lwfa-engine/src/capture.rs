@@ -1,8 +1,8 @@
 //! Per-surface capture.
 //!
-//! Renders each window into its own offscreen buffer and reads it back, so a
-//! window can be transported to a remote shell independently of everything
-//! else on screen.
+//! Renders each window into its own offscreen buffer, then transfers it to a
+//! CUDA frame or reads it back for encoding. Windows can be transported to a
+//! remote shell independently of everything else on screen.
 //!
 //! # Why per-surface and not one screen capture
 //!
@@ -14,8 +14,8 @@
 //!
 //! # Cost, and why damage tracking is load-bearing
 //!
-//! Capturing is a GPU render plus a read-back per window per frame. Read-back
-//! is the expensive part, so a window whose content has not changed must not be
+//! Capturing is a GPU render plus a transfer per window per frame. CPU read-back
+//! is the expensive fallback, so a window whose content has not changed must not be
 //! captured at all. [`SurfaceCapture`] tracks each surface's commit counter and
 //! skips anything that has not committed since it was last captured. Most
 //! windows are static most of the time, which is what makes this affordable.
@@ -35,6 +35,7 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ffmpeg_next as ff;
 use lwfa_proto::WindowId;
@@ -224,9 +225,70 @@ struct Target {
     gpu: Option<crate::cuda::GpuTarget>,
 }
 
+const CAPTURE_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+struct CaptureCounts {
+    polls: u64,
+    source_snapshots: u64,
+    rendered: u64,
+    delivered: u64,
+    gpu_direct: u64,
+    cpu_readbacks: u64,
+    cpu_copies: u64,
+    cpu_copy_bytes: u64,
+    gpu_unavailable: u64,
+    gpu_failures: u64,
+}
+
+struct CaptureDiagnostics {
+    since: Instant,
+    // These are observed surface-tree snapshots, not game simulation frames
+    // or a count of generated frames. Keep this separate from damage state,
+    // which can be invalidated to resend an unchanged image.
+    observed_commits: Option<Vec<CommitCounter>>,
+    counts: CaptureCounts,
+}
+
+impl CaptureDiagnostics {
+    fn new(now: Instant) -> Self {
+        Self {
+            since: now,
+            observed_commits: None,
+            counts: CaptureCounts::default(),
+        }
+    }
+
+    fn observe_source(&mut self, commits: &[CommitCounter]) {
+        if self.observed_commits.as_deref() == Some(commits) {
+            return;
+        }
+        self.counts.source_snapshots += 1;
+        let previous = self.observed_commits.get_or_insert_with(Vec::new);
+        previous.clear();
+        previous.extend_from_slice(commits);
+    }
+
+    fn report(&mut self, now: Instant) -> Option<(Duration, CaptureCounts)> {
+        let elapsed = now.saturating_duration_since(self.since);
+        if elapsed < CAPTURE_REPORT_INTERVAL {
+            return None;
+        }
+        self.since = now;
+        let counts = std::mem::take(&mut self.counts);
+        // Static windows are polled too. Do not write a periodic idle log for
+        // each one; still reset its interval so the next FPS sample is honest.
+        if counts.source_snapshots == 0 && counts.rendered == 0 && counts.delivered == 0 {
+            return None;
+        }
+        Some((elapsed, counts))
+    }
+}
+
 pub struct SurfaceCapture {
     targets: HashMap<WindowId, Target>,
     pool: Arc<FramePool>,
+    diagnostics: HashMap<WindowId, CaptureDiagnostics>,
 }
 
 impl Default for SurfaceCapture {
@@ -234,6 +296,7 @@ impl Default for SurfaceCapture {
         Self {
             targets: HashMap::new(),
             pool: FramePool::new(),
+            diagnostics: HashMap::new(),
         }
     }
 }
@@ -241,6 +304,7 @@ impl Default for SurfaceCapture {
 impl SurfaceCapture {
     pub fn forget(&mut self, id: WindowId) {
         self.targets.remove(&id);
+        self.diagnostics.remove(&id);
     }
 
     /// Force the next capture of every window, ignoring damage.
@@ -300,21 +364,58 @@ impl SurfaceCapture {
         if self.targets.get(&id).is_some_and(|target| target.size != size || target.density != density) {
             self.forget(id);
         }
+        self.diagnostics
+            .entry(id)
+            .or_insert_with(|| CaptureDiagnostics::new(Instant::now()))
+            .counts
+            .polls += 1;
         let harvested = self.harvest(renderer, id, prefetch);
         if !prefetch && harvested.is_some() {
-            return harvested;
+            return self.finish_capture(id, size, harvested);
         }
         if let Some(direct) = self.issue(renderer, id, window, size, density, overlays, gpu_direct) {
             // The zero-copy path produced this pass's frame. Anything still
             // parked from before the path switched is older than it.
-            return Some(direct);
+            return self.finish_capture(id, size, Some(direct));
         }
         if harvested.is_some() {
             if let Some(pending) = self.targets.get_mut(&id).and_then(|target| target.pending.as_mut()) {
                 pending.prefetched = true;
             }
         }
-        harvested
+        self.finish_capture(id, size, harvested)
+    }
+
+    fn finish_capture(
+        &mut self,
+        id: WindowId,
+        size: Size<i32, Physical>,
+        frame: Option<CapturedFrame>,
+    ) -> Option<CapturedFrame> {
+        if let Some(diagnostics) = self.diagnostics.get_mut(&id) {
+            diagnostics.counts.delivered += u64::from(frame.is_some());
+            if let Some((elapsed, counts)) = diagnostics.report(Instant::now()) {
+                tracing::info!(
+                    window = %id,
+                    width = size.w,
+                    height = size.h,
+                    interval_s = elapsed.as_secs_f64(),
+                    polls = counts.polls,
+                    source_snapshots = counts.source_snapshots,
+                    rendered = counts.rendered,
+                    captured = counts.delivered,
+                    capture_fps = counts.delivered as f64 / elapsed.as_secs_f64(),
+                    gpu_direct = counts.gpu_direct,
+                    cpu_readbacks = counts.cpu_readbacks,
+                    cpu_copies = counts.cpu_copies,
+                    cpu_copy_bytes = counts.cpu_copy_bytes,
+                    gpu_unavailable = counts.gpu_unavailable,
+                    gpu_failures = counts.gpu_failures,
+                    "window capture paths"
+                );
+            }
+        }
+        frame
     }
 
     /// Map the readback issued last pass, if there is one, into a pooled frame.
@@ -342,6 +443,10 @@ impl SurfaceCapture {
         // straight into the frame the encoder will read.
         let mut frame = self.pool.get(width, height);
         copy_rows(&bytes[..expected], &mut frame, width, height);
+        if let Some(diagnostics) = self.diagnostics.get_mut(&id) {
+            diagnostics.counts.cpu_copies += 1;
+            diagnostics.counts.cpu_copy_bytes += expected as u64;
+        }
 
         Some(CapturedFrame {
             id,
@@ -425,6 +530,9 @@ impl SurfaceCapture {
         tree_commits(&surface, &mut commits);
         for (overlay, _) in overlays {
             tree_commits(overlay, &mut commits);
+        }
+        if let Some(diagnostics) = self.diagnostics.get_mut(&id) {
+            diagnostics.observe_source(&commits);
         }
 
         // Recreate the buffer when the window resizes; reuse it otherwise, so
@@ -545,6 +653,12 @@ impl SurfaceCapture {
             }
         }
         drop(framebuffer);
+        let counts = &mut self
+            .diagnostics
+            .entry(id)
+            .or_insert_with(|| CaptureDiagnostics::new(Instant::now()))
+            .counts;
+        counts.rendered += 1;
 
         // The zero-copy path: hand the rendered texture to CUDA and return
         // the frame now. If the bridge cannot be built or fails, fall through
@@ -557,6 +671,7 @@ impl SurfaceCapture {
                 target.gpu = crate::cuda::GpuTarget::new(tex, width, height);
             }
             if let Some(frame) = target.gpu.as_mut().and_then(crate::cuda::GpuTarget::frame) {
+                counts.gpu_direct += 1;
                 return Some(CapturedFrame {
                     id,
                     width,
@@ -565,6 +680,9 @@ impl SurfaceCapture {
                 });
             }
             target.gpu = None;
+            counts.gpu_failures += 1;
+        } else if gpu_direct {
+            counts.gpu_unavailable += 1;
         }
 
         let Ok(mut framebuffer) = renderer
@@ -604,6 +722,7 @@ impl SurfaceCapture {
         // back in. `unpainted_right` and its tests are kept for whichever of
         // those comes next.
         target.pending = Some(Pending { mapping, size, prefetched: false });
+        counts.cpu_readbacks += 1;
         None
     }
 }
@@ -830,6 +949,55 @@ fn rows(frame: &ff::frame::Video, width: u32, height: u32) -> impl Iterator<Item
 #[cfg(test)]
 mod pipeline_tests {
     use super::*;
+
+    #[test]
+    fn capture_reports_observed_snapshots_without_inventing_source_frames() {
+        let now = Instant::now();
+        let mut diagnostics = CaptureDiagnostics::new(now);
+        diagnostics.observe_source(&[10.into(), 20.into()]);
+        diagnostics.observe_source(&[10.into(), 20.into()]);
+        // Many commits between capture polls are still one observed snapshot.
+        diagnostics.observe_source(&[99.into(), 30.into()]);
+        // Adding/removing a popup changes the tree length and must be safe.
+        diagnostics.observe_source(&[99.into(), 30.into(), 1.into()]);
+        diagnostics.observe_source(&[99.into()]);
+        let (_, counts) = diagnostics.report(now + CAPTURE_REPORT_INTERVAL).unwrap();
+        assert_eq!(counts.source_snapshots, 4);
+        assert_eq!(counts.delivered, 0);
+        // Reporting resets the interval, not the observed source baseline.
+        diagnostics.observe_source(&[99.into()]);
+        assert!(diagnostics.report(now + CAPTURE_REPORT_INTERVAL * 2).is_none());
+    }
+
+    #[test]
+    fn capture_report_keeps_partial_intervals_and_resets_idle_time() {
+        let now = Instant::now();
+        let mut diagnostics = CaptureDiagnostics::new(now);
+        diagnostics.counts.polls = 600;
+        assert!(diagnostics.report(now + CAPTURE_REPORT_INTERVAL).is_none());
+        diagnostics.counts.polls = 60;
+        diagnostics.counts.delivered = 30;
+        assert!(diagnostics.report(now + Duration::from_secs(6)).is_none());
+        let (elapsed, counts) = diagnostics.report(now + Duration::from_secs(11)).unwrap();
+        assert_eq!(elapsed, Duration::from_secs(6));
+        assert_eq!(counts.polls, 60);
+        assert_eq!(counts.delivered, 30);
+        assert_eq!(diagnostics.counts, CaptureCounts::default());
+    }
+
+    #[test]
+    fn capture_accounting_only_counts_frames_returned_to_the_caller() {
+        let id = WindowId(1);
+        let mut capture = SurfaceCapture::default();
+        capture.diagnostics.insert(id, CaptureDiagnostics::new(Instant::now()));
+        assert!(capture.finish_capture(id, (1, 1).into(), None).is_none());
+        let frame = CapturedFrame::for_tests(id, 1, 1, &[10, 20, 30, 255]);
+        let returned = capture.finish_capture(id, (1, 1).into(), Some(frame)).unwrap();
+        assert_eq!(returned.packed_rgba().unwrap(), vec![10, 20, 30, 255]);
+        assert_eq!(capture.diagnostics[&id].counts.delivered, 1);
+        capture.forget(id);
+        assert!(!capture.diagnostics.contains_key(&id));
+    }
 
     fn gradient(width: u32, height: u32) -> Vec<u8> {
         (0..width as usize * height as usize)

@@ -96,10 +96,18 @@ fi
 
 # Reject host-built Wine components before spending time on the engine build.
 CANVAS_ARGS=()
+if [ -n "${LWFA_GE_BASE_ARCHIVE:-}" ]; then
+  GE_BASE_ARCHIVE="$(realpath "$LWFA_GE_BASE_ARCHIVE")"
+  [ -f "$GE_BASE_ARCHIVE" ] || { echo "original GE archive not found" >&2; exit 1; }
+  if [ -z "${LWFA_WINE_CANVAS_ARTIFACT:-}" ]; then
+    LWFA_WINE_CANVAS_ARTIFACT="$(python3 "$ROOT/compat/gaming/proton.py" --root "${XDG_CACHE_HOME:-$HOME/.cache}/lwfa/package")"
+  fi
+  CANVAS_ARGS+=(-v "$GE_BASE_ARCHIVE:/lwfa-ge-base.tar.gz:ro" -e LWFA_GE_BASE_ARCHIVE=/lwfa-ge-base.tar.gz)
+fi
 if [ -n "${LWFA_WINE_CANVAS_ARTIFACT:-}" ]; then
   CANVAS_ARTIFACT="$(cd "$LWFA_WINE_CANVAS_ARTIFACT" && pwd)"
   python3 "$ROOT/compat/wine-canvas/manage.py" validate --bundle "$CANVAS_ARTIFACT" --portable
-  CANVAS_ARGS=(-v "$CANVAS_ARTIFACT:/lwfa-wine-canvas-artifact:ro" -e LWFA_WINE_CANVAS_ARTIFACT=/lwfa-wine-canvas-artifact)
+  CANVAS_ARGS+=(-v "$CANVAS_ARTIFACT:/lwfa-wine-canvas-artifact:ro" -e LWFA_WINE_CANVAS_ARTIFACT=/lwfa-wine-canvas-artifact)
 fi
 
 echo "building the shell on the host"

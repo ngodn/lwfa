@@ -1,0 +1,8 @@
+{
+  "type": "gaming",
+  "request": 8,
+  "action": "install",
+  "component": "proton",
+  "appid": null,
+  "profile": null
+}

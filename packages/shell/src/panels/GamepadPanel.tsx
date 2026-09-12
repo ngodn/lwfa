@@ -29,6 +29,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Field, FieldRow, PanelGroup, PanelSection } from "@/panels/parts"
 import { PlacementChoice, hapticHintProp } from "@/panels/placement"
 import { CustomKeys } from "@/panels/CustomKeys"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { GamingPanel } from "@/panels/GamingPanel"
 
 const SKINS: { value: GamepadSkin; label: string; sample: string }[] = [
   { value: "playstation", label: "PlayStation", sample: "△ ✕ ○ □" },
@@ -36,7 +38,7 @@ const SKINS: { value: GamepadSkin; label: string; sample: string }[] = [
   { value: "neutral", label: "Neutral", sample: "N S E W" },
 ]
 
-function GamepadPanel() {
+function ControllerControls() {
   const prefs = usePrefs()
   const { visible, editing } = useGamepad()
   const hapticHint = hapticHintProp().hint
@@ -387,5 +389,22 @@ const Backup = memo(function Backup() {
     </>
   )
 })
+
+function GamepadPanel() {
+  return (
+    <Tabs defaultValue="controller" className="gap-[15px]">
+      <TabsList className="sticky top-0 z-10 w-full">
+        <TabsTrigger value="controller" className="flex-1 px-2">Controller</TabsTrigger>
+        <TabsTrigger value="proton" className="flex-1 px-2">Proton</TabsTrigger>
+        <TabsTrigger value="lsfg" className="flex-1 px-2">LSFG</TabsTrigger>
+        <TabsTrigger value="framegen" className="flex-1 px-2">Framegen</TabsTrigger>
+      </TabsList>
+      <TabsContent value="controller"><ControllerControls /></TabsContent>
+      <TabsContent value="proton"><GamingPanel component="proton" /></TabsContent>
+      <TabsContent value="lsfg"><GamingPanel component="lsfg" /></TabsContent>
+      <TabsContent value="framegen"><GamingPanel component="framegen" /></TabsContent>
+    </Tabs>
+  )
+}
 
 export default memo(GamepadPanel)

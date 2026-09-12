@@ -1,0 +1,9 @@
+{
+  "type": "gaming",
+  "request": 7,
+  "data": {
+    "games": [],
+    "profiles": {}
+  },
+  "error": null
+}

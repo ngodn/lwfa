@@ -119,6 +119,45 @@ compatibility tool (`lwfa-GE-Proton11-6-x86_64-canvas` directory). Restart Steam
 games that should use it. Installation does not edit Steam's per-game choices.
 The original GE tool remains available and is used by this tool for host launches.
 
+### Install without a separate GE installation
+
+The manager can assemble a self-contained tool from the exact reviewed original
+archive and the packaged patch artifact:
+
+```sh
+python3 manage.py install --bundle artifact --steam-root "$HOME/.local/share/Steam" --download-base
+```
+
+For an offline installation, replace `--download-base` with
+`--base-archive /path/to/GE-Proton11-6-x86_64.tar.gz`. Both paths check the pinned
+archive size and SHA-256. Download URLs are built into the manager, not accepted
+from callers. `--cache /path` selects the download cache.
+
+Each managed tool keeps its original GE tree in `.original/` and its patched
+tree in `.runtime/`. Host launches use that original snapshot; existing external
+GE tools are untouched. The tool name includes a fingerprint of the archive,
+patch artifact and launcher. Reinstalling the same verified artifact reuses it;
+a changed artifact registers beside the previous version. The installer never
+switches Steam's per-game selection or restarts Steam.
+
+The old install command without either archive option retains external-GE
+routing for compatibility with existing installations. No legacy registration
+is migrated or replaced automatically. Source distribution requirements still
+apply to a full offline bundle; the existing prepared Wine source archive does
+not cover every component of GE's complete runtime.
+
+`status --steam-root PATH --json` returns a `tools` array with the tool `path`,
+`name`, `baseTool`, `selfContained` and `activePids`. Install supports `--json`
+with `path` and `name`; remove supports it with `removed`. Errors go to stderr
+with a nonzero exit status. Status does not verify all runtime files; installation
+and nested launch perform the manifest checks.
+
+Removal refuses tools observed in use through executable, command-line or
+mapped-library paths. This is a process snapshot, not an exclusion lock shared
+with arbitrary Wine launches. Stop using a tool before removing it. Non-dumpable
+unrelated user services may hide their memory maps, so status is not a complete
+inventory of every process on the machine.
+
 A registered tool keeps its own artifact/runtime snapshot and survives lwfa
 uninstallation. Before replacing that snapshot, close applications using it,
 remove its registration with `manage.py remove --tool ...`, then register the

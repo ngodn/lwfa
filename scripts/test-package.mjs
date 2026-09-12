@@ -2,7 +2,7 @@
 // Exercise the real packaging script in disposable repositories. No builds or installs.
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -45,6 +45,8 @@ async function fixture() {
   await file(path.join(root, "docs/setup.md"), "fixture documentation\n")
   await file(path.join(root, "README.md"), "fixture README\n")
   await file(path.join(root, "LICENSE"), "fixture license\n")
+  await file(path.join(root, "vendor/smithay/LICENSE.txt"), "fixture Smithay license\n")
+  await cp(fileURLToPath(new URL("../compat", import.meta.url)), path.join(root, "compat"), { recursive: true })
   const library = path.join(work, `fixture-library-${sequence}/libfixture.so.1`)
   await file(library, "fixture library bytes\n")
   const bin = path.join(root, "fixture-bin")
@@ -102,6 +104,8 @@ exec "$LWFA_REAL_CAT" "$@"
     LWFA_INSTALL_EXIT: "0",
     LWFA_PACKAGE_FAIL: "",
     LWFA_PACKAGE_OWNER: "",
+    LWFA_WINE_CANVAS_ARTIFACT: "",
+    LWFA_GE_BASE_ARCHIVE: "",
   }
   const run = (args, extra = {}, timeout = 10000) => spawnSync("bash", args, {
     cwd: root, env: { ...env, ...extra }, encoding: "utf8", timeout, maxBuffer: 128 * 1024,

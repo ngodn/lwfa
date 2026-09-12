@@ -543,21 +543,32 @@ if [ "$PAYLOAD" = 1 ]; then
   # Register a separate optional tool. Existing GE runtimes and Steam's game
   # selections are untouched, and Steam is never restarted by this step.
   CANVAS_DIR="$INSTALL_DIR/share/lwfa/compat/wine-canvas"
+  if [ -f "$INSTALL_DIR/share/lwfa/compat/gaming/manage.py" ]; then
+    if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1; then
+      warn "Gaming component settings need Python 3.11 or newer; lwfa itself can still run"
+    fi
+  fi
   if [ -f "$CANVAS_DIR/artifact/manifest.json" ]; then
     CANVAS_STEAM_ROOT="${LWFA_STEAM_ROOT:-}"
     if [ -z "$CANVAS_STEAM_ROOT" ]; then
       for candidate in "$HOME/.steam/root" "${XDG_DATA_HOME:-$HOME/.local/share}/Steam"; do
-        if [ -d "$candidate/compatibilitytools.d" ]; then
+        if [ -d "$candidate/steamapps" ]; then
           CANVAS_STEAM_ROOT="$candidate"
           break
         fi
       done
     fi
+    CANVAS_BASE_ARGS=()
+    if [ -f "$CANVAS_DIR/base.tar.gz" ]; then
+      CANVAS_BASE_ARGS=(--base-archive "$CANVAS_DIR/base.tar.gz")
+    fi
     if ! command -v python3 >/dev/null 2>&1; then
       warn "Wine canvas tool needs Python 3; its files were installed but registration was skipped"
     elif [ -z "$CANVAS_STEAM_ROOT" ]; then
       warn "Steam was not found; Wine canvas files were installed but no compatibility tool was registered"
-    elif python3 "$CANVAS_DIR/manage.py" install --bundle "$CANVAS_DIR/artifact" --steam-root "$CANVAS_STEAM_ROOT"; then
+    elif [ "${#CANVAS_BASE_ARGS[@]}" -gt 0 ] && ! python3 -c 'import sys, tarfile; sys.exit(sys.version_info < (3, 11) or not hasattr(tarfile, "data_filter"))' >/dev/null 2>&1; then
+      warn "Offline Proton installation needs Python 3.11 or newer with tar extraction filters; registration was skipped"
+    elif python3 "$CANVAS_DIR/manage.py" install --bundle "$CANVAS_DIR/artifact" --steam-root "$CANVAS_STEAM_ROOT" "${CANVAS_BASE_ARGS[@]}"; then
       ok "registered the separate lwfa Wine tool"
       note "Select the lwfa compatibility tool for the game after restarting Steam yourself"
     else

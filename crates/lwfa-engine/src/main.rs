@@ -30,6 +30,7 @@ mod encode;
 mod focus;
 mod bitrate;
 mod gamepad;
+mod gaming;
 mod files;
 mod outside;
 mod portal;
@@ -961,6 +962,9 @@ fn handle_shell_event(state: &mut Lwfa, event: ShellEvent) {
             // through, rather than at each handler. A permission checked in
             // nine places is a permission that will be missing from the tenth.
             if !permitted(state, session, &message) {
+                if let ToEngine::Gaming { request, .. } = &message {
+                    state.send_to_session(session, ToShell::Gaming { request: *request, data: serde_json::Value::Null, error: Some("Only the owner can manage gaming components.".into()) });
+                }
                 if matches!(message, ToEngine::RestartEngine) {
                     state.send_to_session(session, ToShell::Error {
                         request: "restartEngine".into(), message: "Only the owner can restart lwfa.".into(),
@@ -1083,7 +1087,7 @@ fn allowed(who: &state::Session, is_primary: bool, message: &ToEngine) -> bool {
         // gated on interact: a named account with full interact rights still
         // must not be able to kick the owner off their own machine.
         ToEngine::EndSession { .. } | ToEngine::SetSessionMode { .. }
-        | ToEngine::RestartEngine => who.account == "owner",
+        | ToEngine::RestartEngine | ToEngine::Gaming { .. } => who.account == "owner",
 
         // Administering accounts is the owner's alone, and is refused out loud
         // rather than dropped: the UI is waiting on a reply. See
@@ -1138,6 +1142,8 @@ fn kind_of(message: &ToEngine) -> &'static str {
 
 fn handle_shell_message(state: &mut Lwfa, session: lwfa_proto::SessionId, message: ToEngine) {
     match message {
+        ToEngine::Gaming { request, action, component, appid, profile } => gaming::request(state, session, request, action,
+            serde_json::json!({"action": action, "component": component, "appid": appid, "profile": profile})),
         ToEngine::ClipList {
             request,
             before,
@@ -1990,6 +1996,13 @@ mod tests {
         assert!(allowed(&owner, false, &ToEngine::RestartEngine));
         guest.permissions.mode = SessionMode::View;
         assert!(!allowed(&guest, true, &ToEngine::RestartEngine));
+        for action in [lwfa_proto::GamingAction::Status, lwfa_proto::GamingAction::Install, lwfa_proto::GamingAction::SaveProfile] {
+            let request = ToEngine::Gaming { request: 1, action, component: None, appid: None, profile: None };
+            assert!(!allowed(&guest, true, &request));
+            assert!(allowed(&owner, false, &request));
+            guest.permissions.mode = SessionMode::Interact;
+            assert!(!allowed(&guest, true, &request));
+        }
     }
 
     /// A `Lwfa` is far too heavy to build in a unit test, so the format rule

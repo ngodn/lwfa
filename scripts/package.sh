@@ -143,20 +143,47 @@ cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 mkdir -p "$STAGE/share/lwfa/licenses"
 cp "$ROOT/vendor/smithay/LICENSE.txt" "$STAGE/share/lwfa/licenses/smithay.txt"
 
+mkdir -p "$STAGE/share/lwfa/compat/gaming" "$STAGE/share/lwfa/compat/wine-canvas"
+cp "$ROOT"/compat/gaming/*.py "$ROOT/compat/gaming/lwfa-game" "$STAGE/share/lwfa/compat/gaming/"
+cp "$ROOT/LICENSE" "$STAGE/share/lwfa/compat/gaming/LICENSE"
+for doc in "$ROOT"/compat/gaming/*.md; do
+  cp "$doc" "$STAGE/share/lwfa/compat/gaming/"
+done
+cp -a "$ROOT/compat/wine-canvas/." "$STAGE/share/lwfa/compat/wine-canvas/"
+rm -rf "$STAGE/share/lwfa/compat/wine-canvas/__pycache__"
+"${CC:-cc}" -O2 -std=c11 -Wall -Wextra -Werror "$ROOT/compat/wine-canvas/launcher.c" -o "$STAGE/share/lwfa/compat/wine-canvas/launcher"
+
 # Wine is a separate compatibility tool. Only a complete, pinned artifact may
 # travel with the installer; the ordinary engine package needs no Wine runtime.
+if [ -n "${LWFA_GE_BASE_ARCHIVE:-}" ] && [ -z "${LWFA_WINE_CANVAS_ARTIFACT:-}" ]; then
+  LWFA_WINE_CANVAS_ARTIFACT="$(python3 "$ROOT/compat/gaming/proton.py" --root "${XDG_CACHE_HOME:-$HOME/.cache}/lwfa/package")"
+fi
 if [ -n "${LWFA_WINE_CANVAS_ARTIFACT:-}" ]; then
   CANVAS_ARTIFACT="$(cd "$LWFA_WINE_CANVAS_ARTIFACT" && pwd)"
   CANVAS_CHECK=()
   [ "${LWFA_PORTABLE_BUILD:-0}" != 1 ] || CANVAS_CHECK+=(--portable)
   python3 "$ROOT/compat/wine-canvas/manage.py" validate --bundle "$CANVAS_ARTIFACT" "${CANVAS_CHECK[@]}"
   CANVAS_STAGE="$STAGE/share/lwfa/compat/wine-canvas"
-  mkdir -p "$CANVAS_STAGE"
-  cp -a "$ROOT/compat/wine-canvas/." "$CANVAS_STAGE/"
-  rm -rf "$CANVAS_STAGE/__pycache__"
-  "${CC:-cc}" -O2 -std=c11 -Wall -Wextra -Werror "$ROOT/compat/wine-canvas/launcher.c" -o "$CANVAS_STAGE/launcher"
   cp -a "$CANVAS_ARTIFACT" "$CANVAS_STAGE/artifact"
   say "  bundled the verified Wine canvas compatibility tool"
+fi
+if [ -n "${LWFA_GE_BASE_ARCHIVE:-}" ]; then
+  python3 - "$ROOT/compat/wine-canvas" "$LWFA_GE_BASE_ARCHIVE" <<'PY'
+import hashlib, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import base_archive
+release = base_archive.release_for("GE-Proton11-6-x86_64")
+archive = Path(sys.argv[2])
+digest = hashlib.sha256()
+with archive.open("rb") as source:
+    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+        digest.update(chunk)
+if archive.stat().st_size != release["size"] or digest.hexdigest() != release["sha256"]:
+    sys.exit("Original GE archive does not match the reviewed release")
+PY
+  cp "$LWFA_GE_BASE_ARCHIVE" "$STAGE/share/lwfa/compat/wine-canvas/base.tar.gz"
+  say "  bundled the verified original GE archive for offline installation"
 fi
 
 say "collecting libraries"

@@ -1,0 +1,15 @@
+{
+  "type": "gaming",
+  "request": 9,
+  "action": "saveProfile",
+  "component": null,
+  "appid": "123",
+  "profile": {
+    "lsfg": {
+      "flow_scale": 0.75,
+      "multiplier": 2,
+      "performance_mode": false
+    },
+    "provider": "lsfg"
+  }
+}

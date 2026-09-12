@@ -53,6 +53,8 @@ fn expected_to_shell() -> Vec<(&'static str, ToShell)> {
         scale: 1.0,
     };
     vec![
+        ("gaming-status", ToShell::Gaming { request: 7, data: serde_json::json!({"games": [], "profiles": {}}), error: None }),
+        ("gaming-error", ToShell::Gaming { request: 8, data: serde_json::Value::Null, error: Some("Install failed".into()) }),
         (
             "hello",
             ToShell::Hello {
@@ -558,6 +560,9 @@ fn expected_to_engine() -> Vec<(&'static str, ToEngine)> {
         ),
         ("take-control", ToEngine::TakeControl),
         ("restart-engine", ToEngine::RestartEngine),
+        ("gaming-status", ToEngine::Gaming { request: 7, action: GamingAction::Status, component: None, appid: None, profile: None }),
+        ("gaming-install", ToEngine::Gaming { request: 8, action: GamingAction::Install, component: Some(GamingComponent::Proton), appid: None, profile: None }),
+        ("gaming-save", ToEngine::Gaming { request: 9, action: GamingAction::SaveProfile, component: None, appid: Some("123".into()), profile: Some(serde_json::json!({"provider": "lsfg", "lsfg": {"multiplier": 2, "flow_scale": 0.75, "performance_mode": false}})) }),
         (
             "crashed",
             ToEngine::Crashed {
