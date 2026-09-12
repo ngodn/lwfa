@@ -8,6 +8,7 @@ xtool_bin="${LWFA_XTOOL:-$HOME/.local/bin/lwfa-xtool}"
   exit 1
 }
 command -v swift >/dev/null || { echo 'Run this script through mise exec to select Swift 6.3.' >&2; exit 1; }
+node "$repo_dir/scripts/gen-config.mjs"
 node "$repo_dir/scripts/build-ios-layout.mjs"
 cd -- "$repo_dir/clients/ios"
 "$xtool_bin" dev build --configuration release --ipa
