@@ -30,7 +30,7 @@ export function ImmersiveButton() {
           <Scan aria-hidden />
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>{label}: {active ? "restore browser controls" : "hide navigation and browser controls"}</TooltipContent>
     </Tooltip>
   )
 }

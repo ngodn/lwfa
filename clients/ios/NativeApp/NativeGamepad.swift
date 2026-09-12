@@ -346,6 +346,13 @@ struct NativeGamepadOverlay: View {
     }
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            if model.editing || (model.shield && model.placement == "overlay") {
+                // Absorb the initial touch over the entire canvas, including the
+                // space above the controller band in portrait orientation.
+                NativeControlTouch(ended: { cancelled in
+                    if model.editing && !cancelled { model.selectedPad = nil }
+                })
+            }
             GeometryReader { geometry in
                 // Never taller than 16:9, anchored to the bottom: a portrait
                 // tablet gets a controller-shaped band holding the landscape arrangement.
@@ -355,10 +362,7 @@ struct NativeGamepadOverlay: View {
                 // unless the shield is on (`pointer-events-none` in GamepadOverlay.tsx).
                 ZStack(alignment: .bottom) {
                     ZStack {
-                        if model.editing { editorBackground }
-                        else if model.shield && model.placement == "overlay" {
-                            Color.black.opacity(0.001).contentShape(Rectangle()).onTapGesture {}
-                        }
+                        if model.editing { editorBackground.allowsHitTesting(false) }
                         if !model.hidden {
                             ForEach(model.pads) { pad in
                                 GamepadPadView(session: session, model: model, pad: pad, canvas: area)
@@ -370,9 +374,11 @@ struct NativeGamepadOverlay: View {
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottom)
             }
-            toolbar
             if model.editing { editorHint }
+            // Keep actions above both the pad hit targets and editor controls.
+            toolbar
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .onChange(of: session.acceptsInput) { _, enabled in if !enabled { model.releasePads(session) } }
         .onChange(of: model.editing) { _, _ in model.releasePads(session) }
         .onDisappear { model.releasePads(session) }
@@ -392,22 +398,14 @@ struct NativeGamepadOverlay: View {
         }
         .padding(2)
         .background(.black.opacity(0.45))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.2)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.2)).allowsHitTesting(false))
         .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 8))
-        .opacity(model.opacity)
+        // Pad transparency must not hide the actions needed to show them again.
+        .opacity(max(0.75, model.opacity))
     }
     private func dockButton(_ label: String, icon: String?, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Group {
-                if let icon { Image(systemName: icon).font(.system(size: 15, weight: .medium)) }
-                else { Text(label).font(LWFATheme.control) }
-            }
-            .foregroundStyle(.white.opacity(0.9))
-            .frame(minWidth: 56, minHeight: LWFATheme.hit).padding(.horizontal, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
+        NativeControlButton(label: label, icon: icon, action: action)
+            .frame(width: 64, height: LWFATheme.hit)
     }
 
     private var editorBackground: some View {
@@ -424,8 +422,6 @@ struct NativeGamepadOverlay: View {
             }
         }
         .background(.black.opacity(0.3))
-        .contentShape(Rectangle())
-        .onTapGesture { model.selectedPad = nil }
     }
 
     private var editorHint: some View {
@@ -434,8 +430,10 @@ struct NativeGamepadOverlay: View {
             if let id = model.selectedPad, let pad = model.pads.first(where: { $0.id == id }) {
                 HStack(spacing: 8) {
                     Text(pad.id).font(LWFATheme.control).padding(.horizontal, 6)
-                    Button { resize(pad, by: -2) } label: { Image(systemName: "minus").frame(width: 32, height: 32) }
-                    Button { resize(pad, by: 2) } label: { Image(systemName: "plus").frame(width: 32, height: 32) }
+                    NativeControlButton(label: "Smaller control", icon: "minus") { resize(pad, by: -2) }
+                        .frame(width: 44, height: 44)
+                    NativeControlButton(label: "Larger control", icon: "plus") { resize(pad, by: 2) }
+                        .frame(width: 44, height: 44)
                 }
                 .padding(4)
                 .background(LWFATheme.card.opacity(0.95), in: RoundedRectangle(cornerRadius: LWFATheme.radiusLarge, style: .continuous))
@@ -488,34 +486,40 @@ private struct GamepadPadView: View {
         .frame(width: side, height: side)
         .opacity(model.editing ? 1 : model.opacity)
         .contentShape(Rectangle())
-        .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("lwfaGamepadCanvas"))
-            .onChanged { value in
-                if model.editing {
-                    if dragStart == nil { dragStart = CGPoint(x: pad.x, y: pad.y); moved = false }
-                    if hypot(value.translation.width, value.translation.height) > 6 { moved = true }
-                    if moved, let dragStart, canvas.width > 0, canvas.height > 0 {
-                        var next = pad
-                        next.x = dragStart.x + value.translation.width / canvas.width * 100
-                        next.y = dragStart.y + value.translation.height / canvas.height * 100
-                        model.update(next)
+        .overlay {
+            NativeControlTouch(
+                enabled: model.editing || session.acceptsInput,
+                generation: session.inputGeneration,
+                interaction: model.editing ? "edit" : model.mode,
+                changed: { location, translation in
+                    if model.editing {
+                        if dragStart == nil { dragStart = CGPoint(x: pad.x, y: pad.y); moved = false }
+                        if hypot(translation.width, translation.height) > 6 { moved = true }
+                        if moved, let dragStart, canvas.width > 0, canvas.height > 0 {
+                            var next = pad
+                            next.x = dragStart.x + translation.width / canvas.width * 100
+                            next.y = dragStart.y + translation.height / canvas.height * 100
+                            model.update(next)
+                        }
+                    } else if session.acceptsInput {
+                        if !pressed, model.haptics { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+                        pressed = true
+                        let radius = side * 0.45
+                        let x = (location.x - side / 2) / radius
+                        let y = (location.y - side / 2) / radius
+                        let magnitude = max(1, hypot(x, y))
+                        stick = CGSize(width: x / magnitude, height: y / magnitude)
+                        emit(true, x: x, y: y)
                     }
-                } else if session.acceptsInput {
-                    if !pressed, model.haptics { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-                    pressed = true
-                    let radius = side * 0.45
-                    let x = (value.location.x - center.x) / radius
-                    let y = (value.location.y - center.y) / radius
-                    let magnitude = max(1, hypot(x, y))
-                    stick = CGSize(width: x / magnitude * min(1, hypot(x, y)), height: y / magnitude * min(1, hypot(x, y)))
-                    emit(true, x: x, y: y)
+                },
+                ended: { cancelled in
+                    if model.editing {
+                        if !cancelled && !moved { model.selectedPad = model.selectedPad == pad.id ? nil : pad.id }
+                        dragStart = nil; moved = false
+                    } else { finish() }
                 }
-            }
-            .onEnded { _ in
-                if model.editing {
-                    if !moved { model.selectedPad = model.selectedPad == pad.id ? nil : pad.id }
-                    dragStart = nil; moved = false
-                } else { finish() }
-            })
+            )
+        }
         .accessibilityLabel(GamepadLayout.label(pad, skin: model.skin))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction {
@@ -524,6 +528,7 @@ private struct GamepadPadView: View {
         }
         .onChange(of: session.acceptsInput) { _, enabled in if !enabled { finish() } }
         .onChange(of: session.inputGeneration) { _, _ in finish() }
+        .onChange(of: model.editing) { _, _ in finish() }
         .onChange(of: model.mode) { _, _ in finish() }
         .onDisappear { finish() }
         .position(center)

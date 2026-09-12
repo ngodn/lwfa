@@ -227,11 +227,14 @@ struct NativeWindowsPanel: View {
 
     private var immersiveButton: some View {
         Button { session.immersive.toggle() } label: {
-            Image(systemName: session.immersive ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+            Image(systemName: "viewfinder")
                 .font(.system(size: 16)).frame(width: LWFATheme.hit, height: LWFATheme.hit)
         }
         .panelButton(.outline)
         .accessibilityLabel(session.immersive ? "Exit immersive mode" : "Enter immersive mode")
+        .accessibilityValue(session.immersive ? "On" : "Off")
+        .accessibilityHint("Hide navigation and use the full iPad display.")
+        .help(session.immersive ? "Exit immersive mode" : "Immersive mode: hide navigation")
     }
 
     private var workspaceChips: some View {
@@ -360,7 +363,7 @@ struct NativeWindowsPanel: View {
                     HStack(spacing: 8) {
                         immersiveButton
                         iconAction(layout.fullscreen && focused ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                                   layout.fullscreen && focused ? "Exit fullscreen" : "Fullscreen") { act("focus", [.uint(id)]); act("fullscreen") }
+                                   layout.fullscreen && focused ? "Exit window fullscreen" : "Fill canvas with this window") { act("focus", [.uint(id)]); act("fullscreen") }
                         iconAction("arrow.left.to.line", "Stack onto the column to the left") { act("focus", [.uint(id)]); act("stack") }
                             .disabled(column == 0)
                         iconAction("arrow.right.to.line", "Move into its own column") { act("focus", [.uint(id)]); act("unstack") }

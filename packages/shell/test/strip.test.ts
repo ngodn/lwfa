@@ -140,11 +140,53 @@ describe("column sizing", () => {
  * This used to be equal horizontal slices, which is right only for a tall
  * narrow column. Four windows in a wide one became full-width bands a quarter
  * tall, so a video fitted itself to the height and threw away most of the
- * width as black. The rule is Hyprland's dwindle rule instead: split whichever
- * axis is longer, and recurse.
+ * width as black. Balanced rows adapt to the group's shape without giving
+ * odd subgroups a larger share of the available area.
  */
 describe("tile", () => {
   const gap = 12
+
+  it.each([6, 8])("balances %i windows into two landscape rows", (count) => {
+    const cells = tile({ x: 0, y: 0, width: 1200, height: 800 }, count, gap)
+    const rows = [...new Set(cells.map((cell) => cell.y))]
+    expect(rows).toHaveLength(2)
+    for (const y of rows) expect(cells.filter((cell) => cell.y === y)).toHaveLength(count / 2)
+    expect(Math.max(...cells.map((cell) => cell.width)) - Math.min(...cells.map((cell) => cell.width))).toBeLessThanOrEqual(1)
+    expect(Math.max(...cells.map((cell) => cell.height)) - Math.min(...cells.map((cell) => cell.height))).toBeLessThanOrEqual(1)
+  })
+
+  it("transposes balanced groups for portrait", () => {
+    const landscape = tile({ x: 7, y: 11, width: 1200, height: 800 }, 6, gap)
+    const portrait = tile({ x: 11, y: 7, width: 800, height: 1200 }, 6, gap)
+    expect(portrait).toEqual(landscape.map(({ x, y, width, height }) => ({ x: y, y: x, width: height, height: width })))
+  })
+
+  it.each([799, 800, 801])("keeps all eight cells balanced near a square (%i wide)", (width) => {
+    const cells = tile({ x: 0, y: 0, width, height: 800 }, 8, gap)
+    expect(Math.max(...cells.map((cell) => cell.width)) - Math.min(...cells.map((cell) => cell.width))).toBeLessThanOrEqual(1)
+    expect(Math.max(...cells.map((cell) => cell.height)) - Math.min(...cells.map((cell) => cell.height))).toBeLessThanOrEqual(1)
+  })
+
+  it("keeps gaps and every cell inside even a small viewport", () => {
+    for (const [width, height] of [[1201, 799], [300, 900], [5, 4]]) {
+      for (let count = 2; count <= 24; count++) {
+        const cells = tile({ x: 7, y: 9, width: width!, height: height! }, count, gap)
+        expect(cells).toHaveLength(count)
+        for (const cell of cells) {
+          expect(cell.width).toBeGreaterThan(0)
+          expect(cell.height).toBeGreaterThan(0)
+          expect(cell.x).toBeGreaterThanOrEqual(7)
+          expect(cell.y).toBeGreaterThanOrEqual(9)
+          expect(cell.x + cell.width).toBeLessThanOrEqual(7 + width! + 1e-9)
+          expect(cell.y + cell.height).toBeLessThanOrEqual(9 + height! + 1e-9)
+        }
+        for (let i = 0; i < cells.length; i++) for (let j = i + 1; j < cells.length; j++) {
+          const a = cells[i]!, b = cells[j]!
+          expect(a.x + a.width <= b.x + 1e-9 || b.x + b.width <= a.x + 1e-9 || a.y + a.height <= b.y + 1e-9 || b.y + b.height <= a.y + 1e-9).toBe(true)
+        }
+      }
+    }
+  })
 
   it("gives one window the whole box", () => {
     const box = { x: 10, y: 20, width: 400, height: 300 }
@@ -222,12 +264,7 @@ describe("tile", () => {
     }
   })
 
-  it("is the same picture however the group was assembled", () => {
-    // Balanced rather than dwindle's spiral, which depends on focus history.
-    // A group is deliberate; it should look the same tomorrow.
-    const box = { x: 0, y: 0, width: 1200, height: 800 }
-    expect(tile(box, 4, gap)).toEqual(tile(box, 4, gap))
-  })
+
 })
 
 describe("stacking within a column", () => {

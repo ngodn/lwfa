@@ -325,64 +325,60 @@ export function columnHeight(output: Output, config: StripConfig): number {
 }
 
 /**
- * Divide a column's rectangle among the windows sharing it.
- *
- * # Why this is not a stack of equal slices
- *
- * It was, and that is only ever right when a column is tall and narrow. Give
- * four windows a wide column and equal slices make four full-width bands a
- * quarter tall each, so anything with an aspect ratio (a video, a photo, a
- * document) fits itself to the height and wastes most of the width as black.
- * On a landscape tablet that is roughly two thirds of the picture thrown away,
- * and it is what a group of four videos actually looked like.
- *
- * # The rule, which is Hyprland's
- *
- * Split along whichever axis is longer, and recurse. Hyprland's dwindle
- * documents it as "the split is determined dynamically with the W/H ratio of
- * the parent node. If W > H, it's side-by-side. If H > W, it's top-and-bottom",
- * which is what keeps every cell roughly square instead of letting one
- * dimension collapse. Four windows in a wide column become quadrants; two
- * windows in a tall one still stack, because there the long axis is vertical.
- *
- * # Balanced rather than a spiral
- *
- * Dwindle splits whichever window has *focus*, so opening four in a row gives
- * a spiral and the arrangement depends on the order you built it in. Here the
- * window set is halved at each split instead, so a group of four is always
- * quadrants no matter how it was assembled. A group is a thing the user put
- * together deliberately; it should look the same tomorrow.
- *
- * The first half takes the near side, so window order reads down-then-across
- * in a wide column, matching the order the panel lists them in.
- *
- * Screen coordinates, not main/cross: the axis worth splitting is the longer
- * one on screen, and that is the same question in portrait and landscape.
+ * Balanced window groups, with the same policy in the browser and iPad.
+ * Choose rows using the worst cell aspect ratio and the difference in cell
+ * areas. Recursive half-splits gave odd subgroups unequal areas and could
+ * change a whole branch's orientation at a one-pixel aspect-ratio boundary.
+ * This is a grid for an existing group, not Hyprland's focus-driven BSP tree.
  */
 export function tile(box: Rect, count: number, gap: number): Rect[] {
   if (count <= 0) return []
   if (count <= 1) return [box]
 
-  const first = Math.floor(count / 2)
-  const rest = count - first
-
-  if (box.width >= box.height) {
-    // Floored, with the remainder going to the far side, so the halves add
-    // back up to the whole and no column drifts a pixel narrow.
-    const near = Math.max(Math.floor((box.width - gap) / 2), 1)
-    const far = Math.max(box.width - near - gap, 1)
-    return [
-      ...tile({ ...box, width: near }, first, gap),
-      ...tile({ ...box, x: box.x + near + gap, width: far }, rest, gap),
-    ]
+  // Solve in landscape, then transpose. One orientation decision applies to
+  // the entire group, so sibling cells cannot choose conflicting splits.
+  const portrait = box.height > box.width
+  const width = portrait ? box.height : box.width
+  const height = portrait ? box.width : box.height
+  const spacing = Math.max(0, gap)
+  const usable = (length: number, parts: number) => {
+    const gutter = parts <= 1 ? 0 : Math.min(spacing, Math.max(0, (length - parts) / (parts - 1)))
+    return { gutter, length: length - gutter * (parts - 1) }
+  }
+  let rows = 1
+  let best = Infinity
+  for (let candidate = 1; candidate <= count; candidate++) {
+    const small = Math.floor(count / candidate)
+    const large = Math.ceil(count / candidate)
+    const cellHeight = usable(height, candidate).length / candidate
+    const narrow = usable(width, large).length / large
+    const wide = usable(width, small).length / small
+    const shape = Math.max(Math.abs(Math.log(narrow / cellHeight)), Math.abs(Math.log(wide / cellHeight)))
+    const imbalance = Math.log(wide / narrow)
+    const score = shape + imbalance
+    if (score < best - 1e-9) { best = score; rows = candidate }
   }
 
-  const near = Math.max(Math.floor((box.height - gap) / 2), 1)
-  const far = Math.max(box.height - near - gap, 1)
-  return [
-    ...tile({ ...box, height: near }, first, gap),
-    ...tile({ ...box, y: box.y + near + gap, height: far }, rest, gap),
-  ]
+  const split = (length: number, parts: number) => {
+    const { gutter, length: available } = usable(length, parts)
+    // Round cumulative edges instead of cell sizes, preserving every pixel.
+    // Very small viewports can use fractional cells without spilling outside.
+    const edge = (index: number) => available >= parts ? Math.floor(available * index / parts) : available * index / parts
+    return Array.from({ length: parts }, (_, index) => ({
+      start: edge(index) + gutter * index,
+      size: edge(index + 1) - edge(index),
+    }))
+  }
+  const cells: Rect[] = []
+  for (const [row, vertical] of split(height, rows).entries()) {
+    const columns = Math.floor(count / rows) + (row < count % rows ? 1 : 0)
+    for (const horizontal of split(width, columns)) {
+      cells.push(portrait
+        ? { x: box.x + vertical.start, y: box.y + horizontal.start, width: vertical.size, height: horizontal.size }
+        : { x: box.x + horizontal.start, y: box.y + vertical.start, width: horizontal.size, height: vertical.size })
+    }
+  }
+  return cells
 }
 
 /**

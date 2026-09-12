@@ -615,7 +615,7 @@ const WindowItem = memo(function WindowItem({
           <div className="flex flex-wrap items-center gap-1.5">
             <ImmersiveButton />
             <IconAction
-              label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              label={fullscreen ? "Exit window fullscreen" : "Fill canvas with this window"}
               onClick={() => act(actions.toggleFullscreen)}
             >
               {fullscreen ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}

@@ -120,3 +120,23 @@ malformedSend({ type: 'reset', saved: { ...large.saved, aliases: [['1', 1], ['2'
 const recovered = malformedSend({ type: 'reconcile', windows, focused: '2', output, current: [] })
 assert.equal(recovered.focused, '2')
 console.log('Native layout parity passed: canonical geometry, resize drift, fullscreen request loop, stacks, fit, workspaces, streams, orientation, UInt64 aliases, validated persistence.')
+
+// Group geometry must match the canonical policy for odd/even counts and
+// near-square/portrait viewports, including after changing the group width.
+for (const count of [3, 5, 6, 8, 9]) {
+  for (const dimensions of [{ width: 1200, height: 800 }, { width: 799, height: 800 }, { width: 800, height: 1200 }]) {
+    const bridge = make()
+    const ids = Array.from({ length: count }, (_, i) => i + 1)
+    bridge({ type: 'reconcile', windows: ids.map(id => ({ id: String(id), fullscreen: false })), focused: '1', output: dimensions, current: [] })
+    let grouped = ids.reduce((s, id) => strip.addWindow(s, id, dimensions, config), strip.EMPTY)
+    grouped = strip.focusWindow(grouped, 1, dimensions, config)
+    for (const id of ids.slice(1)) {
+      bridge({ type: 'action', name: 'move', args: [String(id), { kind: 'column', index: 0 }] })
+      grouped = strip.moveWindow(grouped, id, { kind: 'column', index: 0 }, dimensions, config)
+    }
+    const actual = bridge({ type: 'action', name: 'width', args: ['1', 4] })
+    grouped = strip.setColumnWidth(grouped, 1, 4, dimensions, config)
+    assert.deepEqual(actual.placed, strip.layout(grouped, dimensions, config).map(w => ({ ...w, id: String(w.id) })))
+  }
+}
+console.log('Balanced window group bridge parity passed.')

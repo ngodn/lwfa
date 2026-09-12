@@ -17,7 +17,7 @@ struct NativeDesktop: View {
         GeometryReader { geometry in
             let transform = sceneTransform(in: geometry.size)
             let ready = session.displayOutput.width > 1 && session.displayOutput.height > 1
-            let motion: Animation? = preferences.state.animate && !reduceMotion && session.layoutAnimated && !session.arranging
+            let motion: Animation? = preferences.state.animate && !reduceMotion && session.layoutAnimated
                 ? LWFATheme.windowSpring : nil
             ZStack(alignment: .topLeading) {
                 LWFATheme.backdrop
@@ -34,6 +34,7 @@ struct NativeDesktop: View {
                 }
                 if session.arranging { arrangeBar }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             .clipped()
         }
     }
@@ -51,8 +52,8 @@ struct NativeDesktop: View {
         let ring: Color = focused ? LWFATheme.primary.opacity(0.7) : .white.opacity(0.10)
         let shadowOpacity: Double = card ? (focused ? 0.35 : 0.25) : 0
         let shadowRadius: CGFloat = card ? (focused ? 14 : 8) : 0
-        let x = transform.x + placed.rect.x * transform.scale + width / 2
-        let y = transform.y + placed.rect.y * transform.scale + height / 2
+        let x = transform.x + placed.rect.x * transform.scale
+        let y = transform.y + placed.rect.y * transform.scale
         NativeWindowSurface(session: session, id: placed.id, size: CGSize(width: width, height: height))
             .frame(width: width, height: height)
             .clipShape(shape)
@@ -65,9 +66,11 @@ struct NativeDesktop: View {
                     .overlay { if card && !session.arranging { shape.strokeBorder(ring, lineWidth: 1).allowsHitTesting(false) } }
                     .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, y: shadowRadius * 0.7)
             }
-            // Position springs; size snaps. A window's pixels arrive at the size the
-            // client asked for, so animating the box only stretches the last frame.
-            .animation(motion) { $0.position(x: x, y: y) }
+            // Keep the video, input view and decoration in one moving group.
+            // As in lib/motion.ts, spring the top-left corner, not the center:
+            // resizing a stationary window must not invent a positional move.
+            .geometryGroup()
+            .animation(motion) { $0.offset(x: x, y: y) }
             .zIndex(Double(placed.z) + (carrying == placed.id ? 100 : 0))
     }
 
